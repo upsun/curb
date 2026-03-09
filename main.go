@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/platformsh/curb/cmd"
-	"github.com/platformsh/curb/sandbox"
+	"github.com/upsun/curb/cmd"
+	"github.com/upsun/curb/sandbox"
 )
 
 func main() {

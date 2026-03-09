@@ -1,4 +1,4 @@
-module github.com/platformsh/curb
+module github.com/upsun/curb
 
 go 1.25.0
 

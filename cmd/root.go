@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/platformsh/curb/config"
-	"github.com/platformsh/curb/sandbox"
+	"github.com/upsun/curb/config"
+	"github.com/upsun/curb/sandbox"
 	"github.com/spf13/cobra"
 )
 

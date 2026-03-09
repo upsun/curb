@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/platformsh/curb/config"
+	"github.com/upsun/curb/config"
 )
 
 const (

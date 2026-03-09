@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/platformsh/curb/config"
+	"github.com/upsun/curb/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
