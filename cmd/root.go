@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/platformsh/curb/config"
+	"github.com/platformsh/curb/sandbox"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +34,20 @@ The target command must follow a -- separator.`,
 			}
 			config.MergeEnv(cfg, cmd)
 			cfg.Command = args
+
+			caps := sandbox.ProbeAll()
+			plan, err := sandbox.BuildPlan(cfg, caps)
+			if err != nil {
+				// Print capabilities before the fatal error for context.
+				fmt.Fprintln(os.Stderr, "curb: "+err.Error())
+				return err
+			}
+			defer plan.Cleanup()
+
+			if cfg.DryRun {
+				plan.PrintDryRun(os.Stderr)
+				return nil
+			}
 
 			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "curb: sandbox not yet implemented")
 			return nil

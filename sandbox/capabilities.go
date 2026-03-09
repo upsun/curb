@@ -1,0 +1,56 @@
+package sandbox
+
+// Capabilities holds the results of probing system capabilities.
+type Capabilities struct {
+	UserNS      error  // nil = ok, non-nil = fatal.
+	MountNS     error  // nil = ok, non-nil = warn (degrade).
+	NetNS       error  // nil = ok, non-nil = fatal if --allow used.
+	TUN         error  // nil = ok, non-nil = fatal if --allow used.
+	LandlockABI int    // 0 = unavailable, 1-5 = version.
+	KernelInfo  string // e.g., "6.8.0-100-generic".
+}
+
+// userNSFixMessage returns an actionable fix message for user namespace errors.
+func userNSFixMessage() string {
+	return `User namespaces are required but not available.
+
+  To fix (temporarily):
+    sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+  To fix (permanently):
+    echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.conf
+    sudo sysctl --system`
+}
+
+// mountNSWarnMessage returns a warning message for mount namespace unavailability.
+func mountNSWarnMessage() string {
+	return "Mount namespaces unavailable; filesystem hiding uses reduced enforcement."
+}
+
+// netNSFixMessage returns an actionable fix message for network namespace errors.
+func netNSFixMessage() string {
+	return `Network namespaces are required for --allow but not available.
+
+  To fix (temporarily):
+    sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+  Remove --allow flags to run without network filtering.`
+}
+
+// tunFixMessage returns an actionable fix message for TUN device errors.
+func tunFixMessage() string {
+	return `/dev/net/tun is required for --allow but not available.
+
+  To fix:
+    sudo mkdir -p /dev/net
+    sudo mknod /dev/net/tun c 10 200
+    sudo chmod 0666 /dev/net/tun
+
+  Remove --allow flags to run without network filtering.`
+}
+
+// landlockWarnMessage returns a warning for missing Landlock support.
+func landlockWarnMessage() string {
+	return `Landlock is not available (requires kernel 5.13+).
+  Filesystem restrictions will use mount namespace and seccomp-bpf only (weaker).`
+}
