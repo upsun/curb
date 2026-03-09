@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	httpMaxRead    = 8192
-	httpReadTimeout = 10 * time.Second
+	httpMaxRead      = 8192
+	httpReadTimeout  = 10 * time.Second
+	http403Response  = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
 )
 
 // parseHTTPHost extracts the Host header value from an HTTP request.
@@ -60,13 +61,13 @@ func handleHTTPConnection(local net.Conn, dst string, filter *FilterConfig) {
 	host, _, parseErr := parseHTTPHost(data)
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "curb: http blocked: %v to %s\n", parseErr, dst)
-		_, _ = local.Write([]byte("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"))
+		_, _ = local.Write([]byte(http403Response))
 		return
 	}
 
 	if !filter.Check(host) {
 		fmt.Fprintf(os.Stderr, "curb: http blocked: %s\n", host)
-		_, _ = local.Write([]byte("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"))
+		_, _ = local.Write([]byte(http403Response))
 		return
 	}
 
