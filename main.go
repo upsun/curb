@@ -5,14 +5,14 @@ import (
 	"os"
 
 	"github.com/platformsh/curb/cmd"
+	"github.com/platformsh/curb/sandbox"
 )
 
 func main() {
-	// If _CURB_INIT is set, this process is the re-exec'd child init.
-	// Stub: child init will be implemented in WP03.
+	// If _CURB_INIT is set, this process is the re-exec'd child inside new namespaces.
 	if os.Getenv("_CURB_INIT") != "" {
-		fmt.Fprintln(os.Stderr, "curb: child init not yet implemented")
-		os.Exit(111)
+		sandbox.ChildInit()
+		os.Exit(111) // Unreachable: ChildInit execs the target or exits on error.
 	}
 
 	if err := cmd.NewRootCmd().Execute(); err != nil {

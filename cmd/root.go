@@ -47,8 +47,14 @@ The target command must follow a -- separator.`,
 				return nil
 			}
 
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "curb: sandbox not yet implemented")
-			return nil
+			exitCode, err := sandbox.StartSandbox(plan)
+			plan.Cleanup()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "curb: %v\n", err)
+				os.Exit(111)
+			}
+			os.Exit(exitCode)
+			return nil // Unreachable.
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,

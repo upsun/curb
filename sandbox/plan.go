@@ -34,7 +34,22 @@ type SandboxPlan struct {
 	TempDir        string
 	CWD            string
 	CWDWritable    bool
+	Command        []string
 	Caps           *Capabilities
+}
+
+// ChildConfig is the serializable config sent from parent to child over a pipe.
+type ChildConfig struct {
+	Command        []string `json:"command"`
+	Env            []string `json:"env"`
+	ROPaths        []string `json:"ro_paths,omitempty"`
+	RWPaths        []string `json:"rw_paths,omitempty"`
+	HiddenPaths    []string `json:"hidden_paths,omitempty"`
+	ExecPaths      []string `json:"exec_paths,omitempty"`
+	NetEnabled     bool     `json:"net_enabled"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	TempDir        string   `json:"temp_dir"`
+	CWD            string   `json:"cwd,omitempty"`
 }
 
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
@@ -151,7 +166,55 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.EnvPassthrough = append(plan.EnvPassthrough, cfg.EnvPassthrough...)
 	}
 
+	plan.Command = cfg.Command
+
 	return plan, nil
+}
+
+// childConfig builds the ChildConfig from the plan, resolving the environment.
+func (p *SandboxPlan) childConfig() ChildConfig {
+	return ChildConfig{
+		Command:        p.Command,
+		Env:            p.resolveEnv(),
+		ROPaths:        p.ROPaths,
+		RWPaths:        p.RWPaths,
+		HiddenPaths:    p.HiddenPaths,
+		ExecPaths:      p.ExecPaths,
+		NetEnabled:     p.NetEnabled,
+		AllowedDomains: p.AllowedDomains,
+		TempDir:        p.TempDir,
+		CWD:            p.CWD,
+	}
+}
+
+// resolveEnv resolves the final environment from EnvSet and EnvPassthrough.
+func (p *SandboxPlan) resolveEnv() []string {
+	env := make(map[string]string, len(p.EnvSet))
+	for k, v := range p.EnvSet {
+		env[k] = v
+	}
+	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == "(all)" {
+		for _, e := range os.Environ() {
+			k, v, _ := strings.Cut(e, "=")
+			if _, ok := env[k]; !ok {
+				env[k] = v
+			}
+		}
+	} else {
+		for _, name := range p.EnvPassthrough {
+			if v, ok := os.LookupEnv(name); ok {
+				if _, set := env[name]; !set {
+					env[name] = v
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(env))
+	for k, v := range env {
+		result = append(result, k+"="+v)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // Cleanup removes temporary resources created by BuildPlan.
