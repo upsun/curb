@@ -42,7 +42,13 @@ func NewStack(tapFD int) (*Stack, error) {
 	}
 
 	s := stack.New(stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol},
+		NetworkProtocols: []stack.NetworkProtocolFactory{
+			// Allow loopback-destined traffic (e.g. 127.0.0.53 for systemd-resolved)
+			// to arrive via the TAP device. The child namespace uses route_localnet
+			// to send such traffic through the TAP instead of its own loopback.
+			ipv4.NewProtocolWithOptions(ipv4.Options{AllowExternalLoopbackTraffic: true}),
+			arp.NewProtocol,
+		},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
 

@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -45,43 +47,43 @@ func createTAP() (int, error) {
 }
 
 // configureInterfaces brings up lo and eth0, sets IP/netmask on eth0,
-// and adds a default route via the gateway.
-func configureInterfaces() error {
+// and adds a default route via the gateway. Returns the ifindex for eth0.
+func configureInterfaces() (int, error) {
 	// We need a socket for ioctl calls.
 	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {
-		return fmt.Errorf("socket for ioctl: %w", err)
+		return 0, fmt.Errorf("socket for ioctl: %w", err)
 	}
 	defer func() { _ = unix.Close(sock) }()
 
 	// Bring up loopback.
 	if err := setInterfaceUp(sock, "lo"); err != nil {
-		return fmt.Errorf("bringing up lo: %w", err)
+		return 0, fmt.Errorf("bringing up lo: %w", err)
 	}
 
 	// Set eth0 IP address and netmask.
 	if err := setInterfaceInet4(sock, tapName, childIP, unix.SIOCSIFADDR); err != nil {
-		return fmt.Errorf("setting %s IP: %w", tapName, err)
+		return 0, fmt.Errorf("setting %s IP: %w", tapName, err)
 	}
 	if err := setInterfaceInet4(sock, tapName, childNetmask, unix.SIOCSIFNETMASK); err != nil {
-		return fmt.Errorf("setting %s netmask: %w", tapName, err)
+		return 0, fmt.Errorf("setting %s netmask: %w", tapName, err)
 	}
 
 	// Bring up eth0.
 	if err := setInterfaceUp(sock, tapName); err != nil {
-		return fmt.Errorf("bringing up %s: %w", tapName, err)
+		return 0, fmt.Errorf("bringing up %s: %w", tapName, err)
 	}
 
 	// Add default route via gateway.
 	ifindex, err := getInterfaceIndex(sock, tapName)
 	if err != nil {
-		return fmt.Errorf("getting %s index: %w", tapName, err)
+		return 0, fmt.Errorf("getting %s index: %w", tapName, err)
 	}
-	if err := addDefaultRoute(gatewayIP, ifindex); err != nil {
-		return fmt.Errorf("adding default route: %w", err)
+	if err := addRoute(nil, gatewayIP, ifindex); err != nil {
+		return 0, fmt.Errorf("adding default route: %w", err)
 	}
 
-	return nil
+	return ifindex, nil
 }
 
 // setInterfaceUp brings a network interface up using ioctl SIOCSIFFLAGS.
@@ -134,8 +136,9 @@ func getInterfaceIndex(sock int, name string) (int, error) {
 	return int(ifr.Uint32()), nil
 }
 
-// addDefaultRoute adds a default route (0.0.0.0/0) via the given gateway using netlink.
-func addDefaultRoute(gw string, ifindex int) error {
+// addRoute adds a route via the given gateway using netlink.
+// If dst is nil, adds a default route (0.0.0.0/0). Otherwise adds a /32 host route.
+func addRoute(dst net.IP, gw string, ifindex int) error {
 	gwIP := net.ParseIP(gw).To4()
 	if gwIP == nil {
 		return fmt.Errorf("invalid gateway IP: %s", gw)
@@ -151,49 +154,42 @@ func addDefaultRoute(gw string, ifindex int) error {
 		return fmt.Errorf("netlink bind: %w", err)
 	}
 
-	// Build RTM_NEWROUTE message.
-	msg := unix.RtMsg{
-		Family:   unix.AF_INET,
-		Dst_len:  0, // default route
-		Table:    unix.RT_TABLE_MAIN,
-		Protocol: unix.RTPROT_BOOT,
-		Scope:    unix.RT_SCOPE_UNIVERSE,
-		Type:     unix.RTN_UNICAST,
+	var dstLen uint8
+	if dst != nil {
+		dstLen = 32
 	}
 
 	const rtMsgSize = int(unsafe.Sizeof(unix.RtMsg{}))
 	hdrLen := unix.NLMSG_HDRLEN + rtMsgSize
 
-	// RTA_GATEWAY attribute.
-	gwAttr := nlAttr(unix.RTA_GATEWAY, gwIP)
-	// RTA_OIF attribute.
+	// Build attributes.
+	var attrs []byte
+	if dst != nil {
+		attrs = append(attrs, nlAttr(unix.RTA_DST, dst.To4())...)
+	}
+	attrs = append(attrs, nlAttr(unix.RTA_GATEWAY, gwIP)...)
 	oifBuf := make([]byte, 4)
 	binary.NativeEndian.PutUint32(oifBuf, uint32(ifindex))
-	oifAttr := nlAttr(unix.RTA_OIF, oifBuf)
+	attrs = append(attrs, nlAttr(unix.RTA_OIF, oifBuf)...)
 
-	totalLen := hdrLen + len(gwAttr) + len(oifAttr)
-
+	totalLen := hdrLen + len(attrs)
 	buf := make([]byte, totalLen)
-	// NLMsgHdr.
-	binary.NativeEndian.PutUint32(buf[0:4], uint32(totalLen))         // nlmsg_len
-	binary.NativeEndian.PutUint16(buf[4:6], unix.RTM_NEWROUTE)        // nlmsg_type
-	binary.NativeEndian.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_CREATE|unix.NLM_F_EXCL|unix.NLM_F_ACK) // nlmsg_flags
-	binary.NativeEndian.PutUint32(buf[8:12], 1)                       // nlmsg_seq
+
+	// Netlink message header.
+	binary.NativeEndian.PutUint32(buf[0:4], uint32(totalLen))
+	binary.NativeEndian.PutUint16(buf[4:6], unix.RTM_NEWROUTE)
+	binary.NativeEndian.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_CREATE|unix.NLM_F_EXCL|unix.NLM_F_ACK)
+	binary.NativeEndian.PutUint32(buf[8:12], 1) // seq
+
 	// RtMsg payload.
 	rtBuf := buf[unix.NLMSG_HDRLEN:]
-	rtBuf[0] = msg.Family
-	rtBuf[1] = msg.Dst_len
-	rtBuf[2] = msg.Src_len
-	rtBuf[3] = msg.Tos
-	rtBuf[4] = msg.Table
-	rtBuf[5] = msg.Protocol
-	rtBuf[6] = msg.Scope
-	rtBuf[7] = msg.Type
-	// Attributes.
-	off := hdrLen
-	copy(buf[off:], gwAttr)
-	off += len(gwAttr)
-	copy(buf[off:], oifAttr)
+	rtBuf[0] = unix.AF_INET     // Family
+	rtBuf[1] = dstLen            // Dst_len
+	rtBuf[4] = unix.RT_TABLE_MAIN
+	rtBuf[5] = unix.RTPROT_BOOT
+	rtBuf[6] = unix.RT_SCOPE_UNIVERSE
+	rtBuf[7] = unix.RTN_UNICAST
+	copy(buf[hdrLen:], attrs)
 
 	if err := unix.Sendto(sock, buf, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("netlink send: %w", err)
@@ -214,8 +210,58 @@ func addDefaultRoute(gw string, ifindex int) error {
 			}
 		}
 	}
-
 	return nil
+}
+
+// routeLoopbackDNS enables route_localnet on the TAP device and adds host
+// routes for any loopback nameservers found in /etc/resolv.conf. This allows
+// DNS traffic destined for e.g. 127.0.0.53 (systemd-resolved) to flow through
+// the TAP to the parent's netstack, which forwards it to the real host resolver.
+// This avoids needing a mount namespace to bind-mount a custom resolv.conf.
+func routeLoopbackDNS(ifindex int) error {
+	nameservers := parseResolvConf("/etc/resolv.conf")
+	var loopback []net.IP
+	for _, ns := range nameservers {
+		ip := net.ParseIP(ns).To4()
+		if ip != nil && ip[0] == 127 {
+			loopback = append(loopback, ip)
+		}
+	}
+	if len(loopback) == 0 {
+		return nil
+	}
+
+	// Enable route_localnet so 127.0.0.0/8 can be routed through non-loopback interfaces.
+	// Safe: this is an isolated network namespace with nothing on its loopback.
+	sysctl := fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", tapName)
+	if err := os.WriteFile(sysctl, []byte("1"), 0o644); err != nil {
+		return fmt.Errorf("writing route_localnet: %w", err)
+	}
+
+	for _, ip := range loopback {
+		if err := addRoute(ip, gatewayIP, ifindex); err != nil {
+			return fmt.Errorf("adding route for %s: %w", ip, err)
+		}
+	}
+	return nil
+}
+
+// parseResolvConf extracts nameserver addresses from a resolv.conf file.
+func parseResolvConf(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var servers []string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "nameserver ") {
+			if addr := strings.TrimSpace(line[len("nameserver "):]); addr != "" {
+				servers = append(servers, addr)
+			}
+		}
+	}
+	return servers
 }
 
 // nlAttr builds a netlink attribute (NLA header + payload, padded to 4 bytes).
@@ -228,4 +274,3 @@ func nlAttr(typ uint16, data []byte) []byte {
 	copy(buf[4:], data)
 	return buf
 }
-

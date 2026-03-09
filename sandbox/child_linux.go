@@ -15,9 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// sandboxNameserver is the DNS resolver used inside the sandbox (QEMU-style host gateway).
-const sandboxNameserver = "10.0.2.2"
-
 // ChildInit is the entry point for the re-exec'd child process inside new namespaces.
 // It reads the sandbox config from fd 3, applies sandbox layers,
 // and execs the target command. It never returns on success.
@@ -61,9 +58,6 @@ func childInit() error {
 					return fmt.Errorf("protecting hooks dir: %w", err)
 				}
 			}
-			if err := setupResolvConf(cfg.TempDir); err != nil {
-				return fmt.Errorf("setting up resolv.conf: %w", err)
-			}
 		}
 		rules := policy.BuildLandlockRules(cfg.ROPaths, cfg.RWPaths, cfg.ExecPaths)
 		if len(rules) > 0 {
@@ -90,7 +84,7 @@ func childInit() error {
 func prepareMountNS() bool {
 	err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: warning: mount operations unavailable (%v); hiding/hooks/resolv.conf skipped\n", err)
+		fmt.Fprintf(os.Stderr, "curb: warning: mount operations unavailable (%v); hiding/hooks skipped\n", err)
 		return false
 	}
 	return true
@@ -126,20 +120,6 @@ func protectHooksDir(hooksPath string) error {
 	return nil
 }
 
-// setupResolvConf writes a custom resolv.conf and bind-mounts it over /etc/resolv.conf.
-func setupResolvConf(tmpDir string) error {
-	resolvPath := filepath.Join(tmpDir, "resolv.conf")
-	if err := os.WriteFile(resolvPath, []byte("nameserver "+sandboxNameserver+"\n"), 0o644); err != nil {
-		return fmt.Errorf("writing resolv.conf: %w", err)
-	}
-	if err := syscall.Mount(resolvPath, "/etc/resolv.conf", "", syscall.MS_BIND, ""); err != nil {
-		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOENT) {
-			return nil
-		}
-		return fmt.Errorf("bind mount resolv.conf: %w", err)
-	}
-	return nil
-}
 
 // setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
 // fd to the parent, and waits for a ready signal before continuing.
@@ -148,9 +128,13 @@ func setupChildNetwork(sockFile *os.File) error {
 	if err != nil {
 		return err
 	}
-	if err := configureInterfaces(); err != nil {
+	ifindex, err := configureInterfaces()
+	if err != nil {
 		_ = unix.Close(tapFD)
 		return err
+	}
+	if err := routeLoopbackDNS(ifindex); err != nil {
+		fmt.Fprintf(os.Stderr, "curb: warning: loopback DNS routing failed (%v); DNS may not work\n", err)
 	}
 	if err := SendFD(sockFile, tapFD); err != nil {
 		_ = unix.Close(tapFD)

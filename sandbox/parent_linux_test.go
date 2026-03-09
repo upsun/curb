@@ -497,15 +497,16 @@ func TestCurb_FS_WriteHomeBlocked(t *testing.T) {
 	assert.Contains(t, string(out), "Permission denied")
 }
 
-// TestCurb_FS_ResolvConfOverridden verifies /etc/resolv.conf is overridden.
-func TestCurb_FS_ResolvConfOverridden(t *testing.T) {
+// TestCurb_Net_LoopbackDNSRouted verifies DNS works inside the sandbox via
+// route_localnet (loopback nameservers are routed through the TAP to the netstack).
+func TestCurb_Net_LoopbackDNSRouted(t *testing.T) {
 	requireUserNS(t)
-	requireMountOps(t)
+	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--", "cat", "/etc/resolv.conf")
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*", "--", "getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected cat resolv.conf to succeed: %s", string(out))
-	assert.Contains(t, string(out), sandboxNameserver, "resolv.conf should contain sandbox nameserver")
+	require.NoError(t, err, "expected DNS resolution to succeed: %s", string(out))
+	assert.NotEmpty(t, strings.TrimSpace(string(out)), "getent should return at least one address")
 }
 
 // copyBinary copies an executable to a new path and preserves the execute bit.
