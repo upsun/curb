@@ -59,13 +59,11 @@ func configureInterfaces() error {
 		return fmt.Errorf("bringing up lo: %w", err)
 	}
 
-	// Set eth0 IP address.
-	if err := setInterfaceAddr(sock, tapName, childIP); err != nil {
+	// Set eth0 IP address and netmask.
+	if err := setInterfaceInet4(sock, tapName, childIP, unix.SIOCSIFADDR); err != nil {
 		return fmt.Errorf("setting %s IP: %w", tapName, err)
 	}
-
-	// Set eth0 netmask.
-	if err := setInterfaceNetmask(sock, tapName, childNetmask); err != nil {
+	if err := setInterfaceInet4(sock, tapName, childNetmask, unix.SIOCSIFNETMASK); err != nil {
 		return fmt.Errorf("setting %s netmask: %w", tapName, err)
 	}
 
@@ -104,40 +102,22 @@ func setInterfaceUp(sock int, name string) error {
 	return nil
 }
 
-// setInterfaceAddr sets the IPv4 address on an interface using ioctl SIOCSIFADDR.
-func setInterfaceAddr(sock int, name, addr string) error {
+// setInterfaceInet4 sets an IPv4 sockaddr field on an interface via ioctl.
+// Used for both SIOCSIFADDR and SIOCSIFNETMASK.
+func setInterfaceInet4(sock int, name, addr string, ioctlCmd uint) error {
 	ifr, err := unix.NewIfreq(name)
 	if err != nil {
 		return err
 	}
 	ip := net.ParseIP(addr).To4()
 	if ip == nil {
-		return fmt.Errorf("invalid IPv4 address: %s", addr)
+		return fmt.Errorf("invalid IPv4: %s", addr)
 	}
 	if err := ifr.SetInet4Addr(ip); err != nil {
 		return err
 	}
-	if err := unix.IoctlIfreq(sock, unix.SIOCSIFADDR, ifr); err != nil {
-		return fmt.Errorf("SIOCSIFADDR: %w", err)
-	}
-	return nil
-}
-
-// setInterfaceNetmask sets the IPv4 netmask on an interface using ioctl SIOCSIFNETMASK.
-func setInterfaceNetmask(sock int, name, mask string) error {
-	ifr, err := unix.NewIfreq(name)
-	if err != nil {
-		return err
-	}
-	ip := net.ParseIP(mask).To4()
-	if ip == nil {
-		return fmt.Errorf("invalid IPv4 netmask: %s", mask)
-	}
-	if err := ifr.SetInet4Addr(ip); err != nil {
-		return err
-	}
-	if err := unix.IoctlIfreq(sock, unix.SIOCSIFNETMASK, ifr); err != nil {
-		return fmt.Errorf("SIOCSIFNETMASK: %w", err)
+	if err := unix.IoctlIfreq(sock, ioctlCmd, ifr); err != nil {
+		return fmt.Errorf("ioctl %#x: %w", ioctlCmd, err)
 	}
 	return nil
 }

@@ -60,7 +60,7 @@ func probeTUN() error {
 		return nil // Can't probe further; will fail at runtime.
 	}
 	cmd := exec.Command(self)
-	cmd.Env = []string{tunProbeEnvKey + "=1"}
+	cmd.Env = []string{TUNProbeEnvKey + "=1"}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
 		UidMappings: []syscall.SysProcIDMap{
@@ -80,7 +80,8 @@ func probeTUN() error {
 	return nil
 }
 
-const tunProbeEnvKey = "_CURB_TUN_PROBE"
+// TUNProbeEnvKey is the environment variable that triggers the TUN probe child.
+const TUNProbeEnvKey = "_CURB_TUN_PROBE"
 
 // RunTUNProbe is the entry point for the TUN probe child process.
 // It attempts to create and immediately destroy a TAP device.

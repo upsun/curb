@@ -92,29 +92,28 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// If network is enabled, receive TAP fd, start netstack, signal child.
 	var ns *netstack.Stack
 	if plan.NetEnabled {
-		tapFD, recvErr := RecvFD(sockParent)
-		if recvErr != nil {
+		abortNet := func() {
+			if ns != nil {
+				ns.Close()
+			}
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 			signal.Stop(sigCh)
 			_ = sockParent.Close()
+		}
+
+		tapFD, recvErr := RecvFD(sockParent)
+		if recvErr != nil {
+			abortNet()
 			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
 		}
 		ns, recvErr = netstack.NewStack(tapFD)
 		if recvErr != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			signal.Stop(sigCh)
-			_ = sockParent.Close()
+			abortNet()
 			return -1, fmt.Errorf("creating netstack: %w", recvErr)
 		}
-		// Signal the child that the netstack is ready.
 		if _, recvErr = sockParent.Write([]byte{0}); recvErr != nil {
-			ns.Close()
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			signal.Stop(sigCh)
-			_ = sockParent.Close()
+			abortNet()
 			return -1, fmt.Errorf("sending ready signal: %w", recvErr)
 		}
 	}

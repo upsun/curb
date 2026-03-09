@@ -16,7 +16,7 @@ func main() {
 	}
 
 	// TUN probe child: test TUNSETIFF inside a user+net namespace.
-	if os.Getenv("_CURB_TUN_PROBE") != "" {
+	if os.Getenv(sandbox.TUNProbeEnvKey) != "" {
 		sandbox.RunTUNProbe()
 		return
 	}

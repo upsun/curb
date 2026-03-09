@@ -28,7 +28,7 @@ func TestMain(m *testing.M) {
 		os.Exit(ExitSetupFailure)
 	}
 	// TUN probe child.
-	if os.Getenv("_CURB_TUN_PROBE") != "" {
+	if os.Getenv(TUNProbeEnvKey) != "" {
 		RunTUNProbe()
 		return
 	}
