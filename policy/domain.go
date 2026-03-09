@@ -20,7 +20,7 @@ func NewDomainMatcher(domains []string, exactOnly bool) *DomainMatcher {
 		exactOnly:    exactOnly,
 	}
 	for _, d := range domains {
-		d = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d)), ".")
+		d = normalizeDomain(d)
 		if d == "*" {
 			m.matchAll = true
 			return m
@@ -40,7 +40,7 @@ func (m *DomainMatcher) Match(domain string) bool {
 	if m.matchAll {
 		return true
 	}
-	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	domain = normalizeDomain(domain)
 	if domain == "" {
 		return false
 	}
@@ -68,4 +68,8 @@ func (m *DomainMatcher) Match(domain string) bool {
 	}
 
 	return false
+}
+
+func normalizeDomain(s string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
 }

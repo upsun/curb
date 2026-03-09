@@ -16,10 +16,13 @@ import (
 )
 
 const (
-	tcpDialTimeout   = 10 * time.Second
-	udpIdleTimeout   = 30 * time.Second
-	maxTCPInFlight   = 1024
-	udpMaxPacketSize = 65535
+	tcpDialTimeout     = 10 * time.Second
+	udpIdleTimeout     = 30 * time.Second
+	dnsForwardTimeout  = 5 * time.Second
+	maxTCPInFlight     = 1024
+	dnsPort            = 53
+	udpMaxPacketSize   = 65535
+	dnsMaxResponseSize = 4096 // EDNS0 max; avoids 64KB allocation per query.
 )
 
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
@@ -63,7 +66,7 @@ func setupUDPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 		local := gonet.NewUDPConn(&wq, ep)
 
 		// Route DNS traffic through the filter when active.
-		if dnsFilter != nil && id.LocalPort == 53 {
+		if dnsFilter != nil && id.LocalPort == dnsPort {
 			go dnsFilter.handleQuery(local, dst)
 			return true
 		}

@@ -71,23 +71,23 @@ func (f *DNSFilter) forward(packet []byte, upstream string) []byte {
 	// Ensure the upstream has a port.
 	_, _, err := net.SplitHostPort(upstream)
 	if err != nil {
-		upstream = net.JoinHostPort(upstream, "53")
+		upstream = net.JoinHostPort(upstream, fmt.Sprintf("%d", dnsPort))
 	}
 
-	conn, err := net.DialTimeout("udp", upstream, 5*time.Second)
+	conn, err := net.DialTimeout("udp", upstream, dnsForwardTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "curb: dns forward dial %s: %v\n", upstream, err)
 		return nil
 	}
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(dnsForwardTimeout))
 	if _, err := conn.Write(packet); err != nil {
 		fmt.Fprintf(os.Stderr, "curb: dns forward write: %v\n", err)
 		return nil
 	}
 
-	buf := make([]byte, udpMaxPacketSize)
+	buf := make([]byte, dnsMaxResponseSize)
 	n, err := conn.Read(buf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "curb: dns forward read: %v\n", err)
