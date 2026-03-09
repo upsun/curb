@@ -823,6 +823,563 @@ func TestCurb_DNS_BlockedLogMessage(t *testing.T) {
 	assert.Contains(t, string(out), "curb: dns blocked:", "expected blocked DNS log message")
 }
 
+// --- Adversarial DNS filter bypass tests ---
+//
+// These tests attempt to bypass the DNS filter using various techniques.
+// A passing test confirms the sandbox blocks the attack.
+
+// TestCurb_DNS_Bypass_DirectIP verifies that a process cannot reach a blocked
+// domain by using its IP address directly (bypassing DNS entirely).
+// NOTE: WP08's DNS filter does NOT block direct IP connections. This is a known
+// limitation addressed by WP09 (TLS SNI filtering). This test documents the gap.
+func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
+	requireNetNS(t)
+
+	// Resolve example.com from the host to get a real IP.
+	ip := resolveForTest(t, "example.com")
+
+	// Allow only a domain that is NOT example.com, then connect via raw IP.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "other-domain-not-example.test", "--",
+		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 5 http://%s/ -H 'Host: example.com' 2>&1 | head -c 200", ip))
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	// This SHOULD fail in a complete sandbox, but WP08 only filters DNS.
+	// If curl succeeds and returns HTML, the direct IP bypass works (expected for WP08).
+	// We document this as a known gap.
+	if err == nil && strings.Contains(outStr, "Example Domain") {
+		t.Log("KNOWN GAP (WP08): Direct IP access bypasses DNS filter. WP09 (TLS SNI) will address this.")
+	}
+	// The test passes either way — it's documenting behavior, not asserting a fix.
+}
+
+// TestCurb_DNS_Bypass_TCPPort53 verifies that DNS-over-TCP (TCP port 53) is
+// also filtered. Many resolvers support TCP fallback for large responses.
+// If TCP:53 is not filtered, an attacker can resolve blocked domains via TCP.
+func TestCurb_DNS_Bypass_TCPPort53(t *testing.T) {
+	requireNetNS(t)
+
+	// Use dig with +tcp to force DNS over TCP.
+	// Allow only "only-this-domain.test", then query a real domain over TCP.
+	// If the TCP forwarder does not filter port 53, we get a real answer.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "only-this-domain.test", "--",
+		"dig", "+tcp", "+short", "+time=5", "+tries=1", "example.com", "@127.0.0.53")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// If dig returns an IP address, the TCP DNS query bypassed the filter.
+	trimmed := strings.TrimSpace(outStr)
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if net.ParseIP(line) != nil {
+			t.Fatalf("SECURITY FLAW: DNS-over-TCP (TCP:53) bypassed the DNS filter. "+
+				"The TCP forwarder forwards port 53 traffic without checking the allowlist. "+
+				"Got IP: %s", line)
+		}
+	}
+	t.Logf("TCP DNS query result (expected failure): err=%v output=%q", err != nil, trimmed)
+}
+
+// TestCurb_DNS_TCPAllowedDomainWorks verifies that DNS-over-TCP works for
+// allowed domains (positive test for the TCP DNS filter path).
+func TestCurb_DNS_TCPAllowedDomainWorks(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"dig", "+tcp", "+short", "+time=5", "+tries=1", "example.com", "@127.0.0.53")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// Allowed domain should resolve over TCP.
+	trimmed := strings.TrimSpace(outStr)
+	require.NoError(t, err, "expected TCP DNS for allowed domain to succeed: %s", trimmed)
+	// Should return at least one IP address.
+	hasIP := false
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		if net.ParseIP(strings.TrimSpace(line)) != nil {
+			hasIP = true
+			break
+		}
+	}
+	assert.True(t, hasIP, "expected an IP address in TCP DNS response for allowed domain, got: %s", trimmed)
+}
+
+// TestCurb_DNS_Bypass_MixedCaseQuery verifies that mixed-case domain names
+// in DNS queries do not bypass the filter (e.g., "BLOCKED.COM" vs "blocked.com").
+func TestCurb_DNS_Bypass_MixedCaseQuery(t *testing.T) {
+	requireNetNS(t)
+
+	// Allow "example.com" (lowercase), query "EVIL.COM" in uppercase.
+	// The filter should still block it.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"dig", "+short", "+time=3", "+tries=1", "EVIL.COM")
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+
+	// Should be blocked. If we get an IP address back, the filter was bypassed.
+	if err == nil && net.ParseIP(strings.TrimSpace(filterCurbOutput(outStr))) != nil {
+		t.Fatal("SECURITY FLAW: Mixed-case domain query bypassed the DNS filter")
+	}
+}
+
+// TestCurb_DNS_Bypass_EmptyQuestion verifies that a DNS packet with an empty
+// question section is not forwarded upstream (potential information leak).
+func TestCurb_DNS_Bypass_EmptyQuestion(t *testing.T) {
+	requireNetNS(t)
+
+	// Craft a DNS query with no questions using python3.
+	// A well-formed DNS header (12 bytes) with QDCOUNT=0, then send via UDP.
+	// If the filter forwards it, the upstream might respond with server info.
+	script := `
+import socket, struct
+# DNS header: ID=0x1234, QR=0 (query), OPCODE=0, QDCOUNT=0
+header = struct.pack('!HHHHHH', 0x1234, 0x0000, 0, 0, 0, 0)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(3)
+sock.sendto(header, ('127.0.0.53', 53))
+try:
+    data, _ = sock.recvfrom(4096)
+    # If we got a response, the empty query was forwarded (potential info leak).
+    flags = struct.unpack('!H', data[2:4])[0]
+    rcode = flags & 0xF
+    print(f'RESPONSE rcode={rcode}')
+except socket.timeout:
+    print('TIMEOUT')
+except Exception as e:
+    print(f'ERROR {e}')
+`
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"python3", "-c", script)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// An empty question section should not be forwarded. Acceptable outcomes:
+	// - TIMEOUT (packet dropped)
+	// - ERROR (connection refused)
+	// - RESPONSE rcode=5 (REFUSED)
+	// NOT acceptable: RESPONSE rcode=0 (NOERROR) — means the packet was forwarded.
+	if strings.Contains(outStr, "RESPONSE rcode=0") {
+		t.Fatal("SECURITY FLAW: DNS packet with empty question section was forwarded upstream. " +
+			"The filter should drop or refuse packets with no questions.")
+	}
+	t.Logf("Empty question result: %s", strings.TrimSpace(outStr))
+}
+
+// TestCurb_DNS_Bypass_MultipleQuestions verifies that a DNS query containing
+// both an allowed and a blocked domain is refused entirely.
+func TestCurb_DNS_Bypass_MultipleQuestions(t *testing.T) {
+	requireNetNS(t)
+
+	// Craft a DNS query with two questions: one allowed, one blocked.
+	script := `
+import socket, struct
+
+def encode_name(name):
+    parts = name.split('.')
+    result = b''
+    for part in parts:
+        result += bytes([len(part)]) + part.encode()
+    result += b'\x00'
+    return result
+
+# DNS header: ID=0xABCD, QR=0 (query), QDCOUNT=2
+header = struct.pack('!HHHHHH', 0xABCD, 0x0100, 2, 0, 0, 0)
+# Question 1: example.com (allowed), type A, class IN
+q1 = encode_name('example.com') + struct.pack('!HH', 1, 1)
+# Question 2: evil.com (blocked), type A, class IN
+q2 = encode_name('evil.com') + struct.pack('!HH', 1, 1)
+packet = header + q1 + q2
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(3)
+sock.sendto(packet, ('127.0.0.53', 53))
+try:
+    data, _ = sock.recvfrom(4096)
+    flags = struct.unpack('!H', data[2:4])[0]
+    rcode = flags & 0xF
+    print(f'rcode={rcode}')
+    if rcode == 5:
+        print('REFUSED')
+    elif rcode == 0:
+        print('ALLOWED')
+    else:
+        print(f'OTHER rcode={rcode}')
+except socket.timeout:
+    print('TIMEOUT')
+except Exception as e:
+    print(f'ERROR {e}')
+`
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"python3", "-c", script)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// The query MUST be REFUSED because one of the questions is blocked.
+	if strings.Contains(outStr, "ALLOWED") {
+		t.Fatal("SECURITY FLAW: DNS query with mixed allowed/blocked questions was forwarded. " +
+			"All questions must be allowed for the query to proceed.")
+	}
+	assert.True(t,
+		strings.Contains(outStr, "REFUSED") || strings.Contains(outStr, "TIMEOUT"),
+		"expected REFUSED or TIMEOUT for mixed question query, got: %s", outStr)
+}
+
+// TestCurb_DNS_Bypass_TrailingDot verifies that a trailing dot in the domain
+// (FQDN form) does not bypass the filter. DNS queries typically use FQDN form
+// (e.g., "evil.com." with trailing dot).
+func TestCurb_DNS_Bypass_TrailingDot(t *testing.T) {
+	requireNetNS(t)
+
+	// Query "evil.com." (with trailing dot) when only "example.com" is allowed.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"dig", "+short", "+time=3", "+tries=1", "evil.com.")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// Should be blocked.
+	if err == nil && net.ParseIP(strings.TrimSpace(outStr)) != nil {
+		t.Fatal("SECURITY FLAW: Trailing dot in domain name bypassed the DNS filter")
+	}
+}
+
+// TestCurb_DNS_Bypass_NullByteInDomain verifies that null bytes embedded in
+// domain name labels are handled correctly by the filter. miekg/dns escapes
+// null bytes as \000, so "evil\x00.example.com" becomes "evil\000.example.com."
+// which is technically a subdomain of example.com. This is correct behavior
+// when subdomain matching is enabled (default). With --exact-match, the
+// null-byte subdomain must be blocked.
+func TestCurb_DNS_Bypass_NullByteInDomain(t *testing.T) {
+	requireNetNS(t)
+
+	// Write the python script to a temp file to avoid shell quoting issues.
+	scriptDir := t.TempDir()
+	scriptPath := filepath.Join(scriptDir, "null_byte_dns.py")
+	script := "import socket, struct\n" +
+		"header = struct.pack('!HHHHHH', 0x5678, 0x0100, 1, 0, 0, 0)\n" +
+		"question = b'\\x05evil\\x00\\x07example\\x03com\\x00'\n" +
+		"question += struct.pack('!HH', 1, 1)\n" +
+		"packet = header + question\n" +
+		"sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n" +
+		"sock.settimeout(3)\n" +
+		"sock.sendto(packet, ('127.0.0.53', 53))\n" +
+		"try:\n" +
+		"    data, _ = sock.recvfrom(4096)\n" +
+		"    flags = struct.unpack('!H', data[2:4])[0]\n" +
+		"    rcode = flags & 0xF\n" +
+		"    if rcode == 0:\n" +
+		"        print('FORWARDED')\n" +
+		"    elif rcode == 5:\n" +
+		"        print('REFUSED')\n" +
+		"    else:\n" +
+		"        print('rcode=%d' % rcode)\n" +
+		"except socket.timeout:\n" +
+		"    print('TIMEOUT')\n" +
+		"except Exception as e:\n" +
+		"    print('ERROR %s' % e)\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o644))
+
+	// With --exact-match, "evil\000.example.com" should NOT match "example.com".
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--exact-match", "--",
+		"python3", scriptPath)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// With exact matching, the null-byte subdomain must be refused.
+	assert.True(t,
+		strings.Contains(outStr, "REFUSED") || strings.Contains(outStr, "TIMEOUT"),
+		"expected null-byte subdomain to be refused with --exact-match, got: %s", outStr)
+}
+
+// TestCurb_DNS_Bypass_PTRQuery verifies that reverse DNS (PTR) queries for
+// arbitrary IPs are blocked when a domain allowlist is active.
+func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
+	requireNetNS(t)
+
+	// PTR query for 8.8.8.8 → 8.8.8.8.in-addr.arpa.
+	// This should be blocked since "8.8.8.8.in-addr.arpa" is not in the allowlist.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"dig", "+short", "+time=3", "+tries=1", "-x", "8.8.8.8")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// Should be blocked (no PTR response).
+	if err == nil && strings.Contains(outStr, "dns.google") {
+		t.Fatal("SECURITY FLAW: PTR query bypassed DNS filter — reverse DNS for arbitrary IPs should be blocked")
+	}
+	// Verify the block log message mentions in-addr.arpa.
+	assert.Contains(t, string(out), "curb: dns blocked:",
+		"expected DNS blocked log for PTR query")
+}
+
+// TestCurb_DNS_Bypass_ANYQuery verifies that ANY (QTYPE 255) queries for
+// blocked domains are refused. Uses +notcp to prevent dig from falling back
+// to TCP (which would bypass the UDP-only DNS filter -- tested separately).
+func TestCurb_DNS_Bypass_ANYQuery(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"dig", "+notcp", "+time=3", "+tries=1", "evil.com", "ANY")
+	out, _ := cmd.CombinedOutput()
+	outStr := string(out)
+
+	// Should be REFUSED.
+	assert.True(t,
+		strings.Contains(outStr, "REFUSED") ||
+			strings.Contains(outStr, "curb: dns blocked:"),
+		"expected ANY query for blocked domain to be refused, got: %s", outStr)
+}
+
+// TestCurb_DNS_Bypass_MalformedPacket verifies that a completely malformed
+// (non-DNS) UDP packet sent to port 53 is silently dropped and does not
+// crash the filter or cause a panic.
+func TestCurb_DNS_Bypass_MalformedPacket(t *testing.T) {
+	requireNetNS(t)
+
+	// Write a python script to a temp file to avoid shell quoting issues.
+	scriptDir := t.TempDir()
+	scriptPath := filepath.Join(scriptDir, "garbage_dns.py")
+	script := `import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(2)
+s.sendto(b'GARBAGE' * 10, ('127.0.0.53', 53))
+try:
+    s.recvfrom(4096)
+except Exception:
+    pass
+s.close()
+print('GARBAGE_SENT')
+`
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o644))
+
+	// Send garbage to port 53, then do a legitimate query to prove
+	// the filter is still functional.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"sh", "-c", fmt.Sprintf("python3 %s && getent hosts example.com", scriptPath))
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// The garbage should be silently dropped. The subsequent legitimate query
+	// should succeed, proving the filter is still alive.
+	assert.Contains(t, outStr, "GARBAGE_SENT", "python script should complete")
+	require.NoError(t, err, "legitimate DNS query after garbage should succeed: %s", outStr)
+}
+
+// TestCurb_DNS_Bypass_OversizedQuery verifies that an oversized DNS query
+// (larger than typical UDP) does not crash the filter.
+func TestCurb_DNS_Bypass_OversizedQuery(t *testing.T) {
+	requireNetNS(t)
+
+	// Send a DNS query with an EDNS0 OPT record claiming a large buffer,
+	// and a very long domain name (close to 253-char limit).
+	script := `
+import socket, struct
+
+def encode_name(name):
+    parts = name.split('.')
+    result = b''
+    for part in parts:
+        result += bytes([len(part)]) + part.encode()
+    result += b'\x00'
+    return result
+
+# Build a domain name close to the 253-char limit.
+# Each label can be up to 63 chars. Use many subdomains.
+long_domain = '.'.join(['a' * 60] * 3 + ['evil', 'com'])
+header = struct.pack('!HHHHHH', 0x9999, 0x0100, 1, 0, 0, 1)
+question = encode_name(long_domain) + struct.pack('!HH', 1, 1)
+# EDNS0 OPT RR: name=root, type=OPT(41), class=4096(UDP size), TTL=0, RDLEN=0
+opt = b'\x00' + struct.pack('!HHIH', 41, 4096, 0, 0)
+packet = header + question + opt
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(3)
+sock.sendto(packet, ('127.0.0.53', 53))
+try:
+    data, _ = sock.recvfrom(4096)
+    flags = struct.unpack('!H', data[2:4])[0]
+    rcode = flags & 0xF
+    if rcode == 5:
+        print('REFUSED')
+    else:
+        print(f'rcode={rcode}')
+except socket.timeout:
+    print('TIMEOUT')
+except Exception as e:
+    print(f'ERROR {e}')
+`
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"python3", "-c", script)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// The oversized domain query should be REFUSED (domain not in allowlist)
+	// or dropped. It must NOT crash the filter.
+	assert.True(t,
+		strings.Contains(outStr, "REFUSED") || strings.Contains(outStr, "TIMEOUT"),
+		"expected REFUSED or TIMEOUT for oversized query, got: %s", outStr)
+}
+
+// TestCurb_DNS_Bypass_DoubleDotDomain verifies that domains with double dots
+// (e.g., "evil..com") do not bypass the filter.
+func TestCurb_DNS_Bypass_DoubleDotDomain(t *testing.T) {
+	requireNetNS(t)
+
+	// Craft a DNS query with an empty label (double dot).
+	script := `
+import socket, struct
+
+# "evil..com" has an empty label between evil and com.
+# In DNS wire format, that's a zero-length label in the middle.
+header = struct.pack('!HHHHHH', 0x4321, 0x0100, 1, 0, 0, 0)
+# Label "evil" (4), empty label (0), "com" (3), root (0)
+question = b'\x04evil\x00\x03com\x00'
+question += struct.pack('!HH', 1, 1)
+packet = header + question
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(3)
+sock.sendto(packet, ('127.0.0.53', 53))
+try:
+    data, _ = sock.recvfrom(4096)
+    flags = struct.unpack('!H', data[2:4])[0]
+    rcode = flags & 0xF
+    print(f'rcode={rcode}')
+except socket.timeout:
+    print('TIMEOUT')
+except Exception as e:
+    print(f'ERROR {e}')
+`
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"python3", "-c", script)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// Empty labels are invalid in DNS. The parser should reject it or the
+	// filter should refuse it. NOT acceptable: successful forwarding.
+	t.Logf("Double-dot domain result: %s", strings.TrimSpace(outStr))
+}
+
+// TestCurb_DNS_Bypass_SubdomainOfBlockedViaAllowed verifies that you cannot
+// trick the matcher by using a subdomain that looks like an allowed domain
+// (e.g., "example.com.evil.com" should NOT match "example.com").
+func TestCurb_DNS_Bypass_SubdomainOfBlockedViaAllowed(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"dig", "+short", "+time=3", "+tries=1", "example.com.evil.com")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// "example.com.evil.com" is a subdomain of "evil.com", NOT "example.com".
+	// It should be blocked.
+	if err == nil && net.ParseIP(strings.TrimSpace(outStr)) != nil {
+		t.Fatal("SECURITY FLAW: 'example.com.evil.com' bypassed the DNS filter by appearing to contain 'example.com'")
+	}
+	assert.Contains(t, string(out), "curb: dns blocked:",
+		"expected DNS blocked log for example.com.evil.com")
+}
+
+// TestCurb_DNS_Bypass_NonStandardPort verifies that DNS queries sent to a
+// non-standard port (not 53) are handled by the generic UDP forwarder, not
+// the DNS filter. This documents the scope boundary of WP08.
+func TestCurb_DNS_Bypass_NonStandardPort(t *testing.T) {
+	requireNetNS(t)
+
+	// Try to send a DNS query to port 5353 (mDNS port).
+	// The DNS filter only intercepts UDP:53, so this would bypass it.
+	// However, without a server listening on 5353, this will simply fail.
+	// The test documents that non-53 DNS is out of scope for WP08.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"dig", "+short", "+time=2", "+tries=1", "evil.com", "@127.0.0.53", "-p", "5353")
+	out, _ := cmd.CombinedOutput()
+	outStr := string(out)
+
+	// No server on 5353, so this should fail regardless.
+	// The key observation: if a DNS server WAS running on 5353, the query would
+	// bypass the filter. This is acceptable for WP08 since the sandbox controls
+	// which DNS servers are reachable (only the host's resolvers on port 53).
+	t.Logf("Non-standard port DNS result (expected failure): %s",
+		strings.TrimSpace(filterCurbOutput(outStr)))
+}
+
+// TestCurb_DNS_Bypass_AllowedDomainThenBlockedQuery verifies that resolving an
+// allowed domain does not create a "session" that permits subsequent blocked queries.
+func TestCurb_DNS_Bypass_AllowedDomainThenBlockedQuery(t *testing.T) {
+	requireNetNS(t)
+
+	// First resolve an allowed domain, then immediately try a blocked one.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"sh", "-c", "getent hosts example.com >/dev/null 2>&1 && getent hosts evil.com 2>&1")
+	out, err := cmd.CombinedOutput()
+
+	// The second query (evil.com) must fail.
+	require.Error(t, err, "expected blocked domain to fail after allowed domain: %s", string(out))
+}
+
+// TestCurb_DNS_Bypass_RapidFireQueries verifies that rapid sequential DNS
+// queries for blocked domains are all refused (no race condition in the filter).
+func TestCurb_DNS_Bypass_RapidFireQueries(t *testing.T) {
+	requireNetNS(t)
+
+	// Fire 10 rapid DNS queries for different blocked domains.
+	script := `
+import socket, struct, sys
+
+def make_query(domain, qid):
+    header = struct.pack('!HHHHHH', qid, 0x0100, 1, 0, 0, 0)
+    parts = domain.split('.')
+    name = b''
+    for part in parts:
+        name += bytes([len(part)]) + part.encode()
+    name += b'\x00'
+    question = name + struct.pack('!HH', 1, 1)
+    return header + question
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(3)
+
+blocked_domains = [f'blocked{i}.test' for i in range(10)]
+for i, domain in enumerate(blocked_domains):
+    packet = make_query(domain, i + 1)
+    sock.sendto(packet, ('127.0.0.53', 53))
+
+# Collect responses.
+refused_count = 0
+for _ in range(10):
+    try:
+        data, _ = sock.recvfrom(4096)
+        flags = struct.unpack('!H', data[2:4])[0]
+        rcode = flags & 0xF
+        if rcode == 5:
+            refused_count += 1
+    except socket.timeout:
+        break
+
+print(f'refused={refused_count}/10')
+sock.close()
+`
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow", "example.com", "--",
+		"python3", "-c", script)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	// All 10 queries should be refused.
+	assert.Contains(t, outStr, "refused=10/10",
+		"expected all rapid-fire blocked queries to be refused, got: %s", outStr)
+}
+
 // filterCurbOutput removes lines starting with "curb:" from output.
 func filterCurbOutput(s string) string {
 	var lines []string

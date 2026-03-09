@@ -26,7 +26,8 @@ const (
 )
 
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
-func setupTCPForwarding(s *stack.Stack) {
+// If dnsFilter is non-nil, TCP port 53 traffic is routed through the DNS filter.
+func setupTCPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 	fwd := tcp.NewForwarder(s, 0, maxTCPInFlight, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
 		var wq waiter.Queue
@@ -38,14 +39,21 @@ func setupTCPForwarding(s *stack.Stack) {
 		r.Complete(false)
 
 		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
-		remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
-		if dialErr != nil {
-			fmt.Fprintf(os.Stderr, "curb: tcp forward %s: %v\n", dst, dialErr)
-			ep.Close()
+		local := gonet.NewTCPConn(&wq, ep)
+
+		// Route DNS traffic through the filter when active.
+		if dnsFilter != nil && id.LocalPort == dnsPort {
+			go dnsFilter.handleTCPQuery(local, dst)
 			return
 		}
 
-		local := gonet.NewTCPConn(&wq, ep)
+		remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
+		if dialErr != nil {
+			fmt.Fprintf(os.Stderr, "curb: tcp forward %s: %v\n", dst, dialErr)
+			_ = local.Close()
+			return
+		}
+
 		go relay(local, remote)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
