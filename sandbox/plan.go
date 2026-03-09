@@ -196,6 +196,12 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 	}
 }
 
+// isInternalEnvVar reports whether name is a curb-internal environment variable
+// that must never leak into the sandboxed process.
+func isInternalEnvVar(name string) bool {
+	return strings.HasPrefix(name, "_CURB_")
+}
+
 // resolveEnv resolves the final environment from EnvSet and EnvPassthrough.
 func (p *SandboxPlan) resolveEnv() []string {
 	env := make(map[string]string, len(p.EnvSet))
@@ -205,8 +211,8 @@ func (p *SandboxPlan) resolveEnv() []string {
 	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
 		for _, e := range os.Environ() {
 			k, v, _ := strings.Cut(e, "=")
-			if k == InitEnvKey || strings.HasPrefix(k, "_CURB_") {
-				continue // Never leak internal env vars.
+			if isInternalEnvVar(k) {
+				continue
 			}
 			if _, ok := env[k]; !ok {
 				env[k] = v
@@ -214,8 +220,8 @@ func (p *SandboxPlan) resolveEnv() []string {
 		}
 	} else {
 		for _, name := range p.EnvPassthrough {
-			if name == InitEnvKey || strings.HasPrefix(name, "_CURB_") {
-				continue // Never leak internal env vars.
+			if isInternalEnvVar(name) {
+				continue
 			}
 			if v, ok := os.LookupEnv(name); ok {
 				if _, set := env[name]; !set {

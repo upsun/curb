@@ -15,7 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var curbBin string
+var (
+	curbBin  string
+	testCaps *Capabilities
+)
 
 func TestMain(m *testing.M) {
 	// If _CURB_INIT is set, this is the re-exec'd child.
@@ -23,6 +26,9 @@ func TestMain(m *testing.M) {
 		ChildInit()
 		os.Exit(ExitSetupFailure)
 	}
+
+	// Probe capabilities once for all tests.
+	testCaps = ProbeAll()
 
 	// Build curb binary for integration tests.
 	dir, err := os.MkdirTemp("", "curb-test-")
@@ -47,9 +53,8 @@ func TestMain(m *testing.M) {
 
 func requireUserNS(t *testing.T) {
 	t.Helper()
-	caps := ProbeAll()
-	if caps.UserNS != nil {
-		t.Skipf("user namespaces unavailable: %v", caps.UserNS)
+	if testCaps.UserNS != nil {
+		t.Skipf("user namespaces unavailable: %v", testCaps.UserNS)
 	}
 }
 
