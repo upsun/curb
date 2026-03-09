@@ -126,6 +126,12 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		if realHome != "" {
 			plan.ROPaths = config.ExpandTildes(plan.ROPaths, realHome)
 			plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
+		} else if hasTildePaths(plan.HiddenPaths) {
+			plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+				Layer:  "filesystem",
+				Reason: "$HOME not set",
+				Impact: "Cannot expand ~/ paths; dotfile hiding may not work.",
+			})
 		}
 	}
 	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
@@ -142,8 +148,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			plan.CWDWritable = true
 			plan.RWPaths = append(plan.RWPaths, cwd)
 			if !cfg.NoFSRestrict {
-				hooksDir := filepath.Join(gitRoot, ".git", "hooks")
-				if info, statErr := os.Stat(hooksDir); statErr == nil && info.IsDir() {
+				if hooksDir := config.FindGitHooksDir(gitRoot); hooksDir != "" {
 					plan.GitHooksPath = hooksDir
 				}
 			}
@@ -361,6 +366,15 @@ func (p *SandboxPlan) capUserInfo() string {
 		return "kernel " + p.Caps.KernelInfo
 	}
 	return ""
+}
+
+func hasTildePaths(paths []string) bool {
+	for _, p := range paths {
+		if strings.HasPrefix(p, "~/") {
+			return true
+		}
+	}
+	return false
 }
 
 func printCap(w io.Writer, name string, err error, info string) {

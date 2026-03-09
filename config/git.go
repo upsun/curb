@@ -39,6 +39,42 @@ func FindGitRoot(dir string) (string, error) {
 	return "", nil
 }
 
+// FindGitHooksDir returns the hooks directory for a Git working tree rooted at gitRoot.
+// For regular repos, this is <gitRoot>/.git/hooks.
+// For worktrees (where .git is a file), it resolves the real git dir and returns <gitdir>/hooks.
+// Returns "" if no hooks directory exists.
+func FindGitHooksDir(gitRoot string) string {
+	gitPath := filepath.Join(gitRoot, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return ""
+	}
+	var gitDir string
+	if info.IsDir() {
+		gitDir = gitPath
+	} else {
+		// .git file: extract the gitdir path.
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return ""
+		}
+		line := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(line, "gitdir:") {
+			return ""
+		}
+		ref := strings.TrimSpace(line[len("gitdir:"):])
+		if !filepath.IsAbs(ref) {
+			ref = filepath.Join(gitRoot, ref)
+		}
+		gitDir = ref
+	}
+	hooksDir := filepath.Join(gitDir, "hooks")
+	if s, err := os.Stat(hooksDir); err == nil && s.IsDir() {
+		return hooksDir
+	}
+	return ""
+}
+
 // IsGitWorkTree reports whether dir is inside a Git working tree.
 func IsGitWorkTree(dir string) (bool, error) {
 	root, err := FindGitRoot(dir)

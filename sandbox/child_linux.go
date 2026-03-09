@@ -14,6 +14,9 @@ import (
 	"github.com/upsun/curb/policy"
 )
 
+// sandboxNameserver is the DNS resolver used inside the sandbox (QEMU-style host gateway).
+const sandboxNameserver = "10.0.2.2"
+
 // ChildInit is the entry point for the re-exec'd child process inside new namespaces.
 // It reads the sandbox config from fd 3, applies sandbox layers,
 // and execs the target command. It never returns on success.
@@ -91,10 +94,10 @@ func prepareMountNS() bool {
 // Non-existent paths are silently skipped.
 func hidePaths(paths []string) error {
 	for _, p := range paths {
-		if _, err := os.Stat(p); err != nil {
-			continue
-		}
 		if err := syscall.Mount("tmpfs", p, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "size=0"); err != nil {
+			if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR) {
+				continue
+			}
 			return fmt.Errorf("overmounting %s: %w", p, err)
 		}
 	}
@@ -103,11 +106,11 @@ func hidePaths(paths []string) error {
 
 // protectHooksDir bind-mounts a Git hooks directory as read-only.
 func protectHooksDir(hooksPath string) error {
-	if _, err := os.Stat(hooksPath); err != nil {
-		return nil
-	}
 	// Bind-mount the directory on itself.
 	if err := syscall.Mount(hooksPath, hooksPath, "", syscall.MS_BIND, ""); err != nil {
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR) {
+			return nil
+		}
 		return fmt.Errorf("bind mount %s: %w", hooksPath, err)
 	}
 	// Remount as read-only.
@@ -120,15 +123,11 @@ func protectHooksDir(hooksPath string) error {
 // setupResolvConf writes a custom resolv.conf and bind-mounts it over /etc/resolv.conf.
 func setupResolvConf(tmpDir string) error {
 	resolvPath := filepath.Join(tmpDir, "resolv.conf")
-	if err := os.WriteFile(resolvPath, []byte("nameserver 10.0.2.2\n"), 0o644); err != nil {
+	if err := os.WriteFile(resolvPath, []byte("nameserver "+sandboxNameserver+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing resolv.conf: %w", err)
 	}
-	target := "/etc/resolv.conf"
-	if _, err := os.Stat(target); err != nil {
-		return nil
-	}
-	if err := syscall.Mount(resolvPath, target, "", syscall.MS_BIND, ""); err != nil {
-		if errors.Is(err, syscall.EPERM) {
+	if err := syscall.Mount(resolvPath, "/etc/resolv.conf", "", syscall.MS_BIND, ""); err != nil {
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOENT) {
 			return nil
 		}
 		return fmt.Errorf("bind mount resolv.conf: %w", err)
