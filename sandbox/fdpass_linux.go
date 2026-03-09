@@ -5,6 +5,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"golang.org/x/sys/unix"
 )
@@ -24,7 +25,9 @@ func CreateSocketPair() (parent, child *os.File, err error) {
 // SendFD sends a file descriptor over a Unix socket using SCM_RIGHTS.
 func SendFD(conn *os.File, fd int) error {
 	rights := unix.UnixRights(fd)
-	return unix.Sendmsg(int(conn.Fd()), []byte{0}, rights, nil, 0)
+	err := unix.Sendmsg(int(conn.Fd()), []byte{0}, rights, nil, 0)
+	runtime.KeepAlive(conn)
+	return err
 }
 
 // RecvFD receives a file descriptor from a Unix socket using SCM_RIGHTS.
@@ -42,8 +45,14 @@ func RecvFD(conn *os.File) (int, error) {
 	for _, msg := range msgs {
 		fds, err := unix.ParseUnixRights(&msg)
 		if err == nil && len(fds) > 0 {
+			// Close any extra fds beyond the first to avoid leaks.
+			for _, extra := range fds[1:] {
+				unix.Close(extra)
+			}
+			runtime.KeepAlive(conn)
 			return fds[0], nil
 		}
 	}
+	runtime.KeepAlive(conn)
 	return -1, fmt.Errorf("no file descriptors received")
 }

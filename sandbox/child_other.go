@@ -10,5 +10,5 @@ import (
 // ChildInit is not supported on non-Linux platforms.
 func ChildInit() {
 	fmt.Fprintln(os.Stderr, "curb: child init not supported on this platform")
-	os.Exit(111)
+	os.Exit(ExitSetupFailure)
 }

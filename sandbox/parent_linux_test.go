@@ -18,9 +18,9 @@ var curbBin string
 
 func TestMain(m *testing.M) {
 	// If _CURB_INIT is set, this is the re-exec'd child.
-	if os.Getenv("_CURB_INIT") != "" {
+	if os.Getenv(InitEnvKey) != "" {
 		ChildInit()
-		os.Exit(111)
+		os.Exit(ExitSetupFailure)
 	}
 
 	// Build curb binary for integration tests.
@@ -144,5 +144,5 @@ func TestCurb_SetupFailureExits111(t *testing.T) {
 	require.Error(t, err)
 	exitErr, ok := err.(*exec.ExitError)
 	require.True(t, ok)
-	assert.Equal(t, 111, exitErr.ExitCode())
+	assert.Equal(t, ExitSetupFailure, exitErr.ExitCode())
 }

@@ -13,6 +13,23 @@ import (
 	"github.com/platformsh/curb/config"
 )
 
+const (
+	// InitEnvKey is the environment variable that triggers child init mode.
+	InitEnvKey = "_CURB_INIT"
+
+	// ExitSetupFailure is the exit code for curb's own setup failures.
+	ExitSetupFailure = 111
+
+	// childConfigFD is the fd for the config pipe in the child (ExtraFiles[0]).
+	childConfigFD = 3
+
+	// childSocketFD is the fd for the socketpair in the child (ExtraFiles[1]).
+	childSocketFD = 4
+
+	// envPassthroughAll is the sentinel value indicating all env vars pass through.
+	envPassthroughAll = "(all)"
+)
+
 // DegradedLayer records a sandbox layer that cannot be fully enforced.
 type DegradedLayer struct {
 	Layer  string
@@ -160,7 +177,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 
 	if cfg.EnvPassthroughAll {
-		plan.EnvPassthrough = []string{"(all)"}
+		plan.EnvPassthrough = []string{envPassthroughAll}
 	} else {
 		plan.EnvPassthrough = append(plan.EnvPassthrough, config.SafePassthroughVars...)
 		plan.EnvPassthrough = append(plan.EnvPassthrough, cfg.EnvPassthrough...)
@@ -193,7 +210,7 @@ func (p *SandboxPlan) resolveEnv() []string {
 	for k, v := range p.EnvSet {
 		env[k] = v
 	}
-	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == "(all)" {
+	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
 		for _, e := range os.Environ() {
 			k, v, _ := strings.Cut(e, "=")
 			if _, ok := env[k]; !ok {

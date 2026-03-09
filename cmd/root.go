@@ -51,7 +51,7 @@ The target command must follow a -- separator.`,
 			plan.Cleanup()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "curb: %v\n", err)
-				os.Exit(111)
+				os.Exit(sandbox.ExitSetupFailure)
 			}
 			os.Exit(exitCode)
 			return nil // Unreachable.

@@ -56,7 +56,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			{ContainerID: 0, HostID: os.Getgid(), Size: 1},
 		},
 	}
-	cmd.Env = []string{"_CURB_INIT=1"}
+	cmd.Env = []string{InitEnvKey + "=1"}
 	cmd.ExtraFiles = []*os.File{configR, sockChild}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

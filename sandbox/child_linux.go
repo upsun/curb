@@ -17,13 +17,13 @@ import (
 func ChildInit() {
 	if err := childInit(); err != nil {
 		fmt.Fprintf(os.Stderr, "curb: child init: %v\n", err)
-		os.Exit(111)
+		os.Exit(ExitSetupFailure)
 	}
 }
 
 func childInit() error {
-	configFile := os.NewFile(3, "config-pipe")
-	sockFile := os.NewFile(4, "socketpair")
+	configFile := os.NewFile(childConfigFD, "config-pipe")
+	sockFile := os.NewFile(childSocketFD, "socketpair")
 
 	var cfg ChildConfig
 	if err := json.NewDecoder(configFile).Decode(&cfg); err != nil {
@@ -51,6 +51,13 @@ func childInit() error {
 // findExecutable resolves a command name to an absolute path using the PATH from env.
 func findExecutable(name string, env []string) (string, error) {
 	if filepath.IsAbs(name) {
+		info, err := os.Stat(name)
+		if err != nil {
+			return "", fmt.Errorf("executable %q: %w", name, err)
+		}
+		if info.IsDir() || info.Mode()&0111 == 0 {
+			return "", fmt.Errorf("executable %q: not an executable file", name)
+		}
 		return name, nil
 	}
 	var pathEnv string
