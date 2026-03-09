@@ -26,8 +26,9 @@ type Stack struct {
 
 // NewStack creates a gvisor netstack backed by a TAP file descriptor.
 // The stack responds to ARP and forwards TCP/UDP traffic to the real network.
+// If dnsFilter is non-nil, UDP port 53 traffic is routed through it.
 // The caller must not close tapFD after calling this; the stack owns it.
-func NewStack(tapFD int) (*Stack, error) {
+func NewStack(tapFD int, dnsFilter *DNSFilter) (*Stack, error) {
 	// Static MAC for the gateway side of the TAP link.
 	gwMAC := tcpip.LinkAddress([]byte{0x52, 0x55, 0x0a, 0x00, 0x02, 0x02})
 
@@ -88,7 +89,7 @@ func NewStack(tapFD int) (*Stack, error) {
 
 	// Set up TCP and UDP forwarding.
 	setupTCPForwarding(s)
-	setupUDPForwarding(s)
+	setupUDPForwarding(s, dnsFilter)
 
 	return &Stack{s: s}, nil
 }

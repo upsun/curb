@@ -47,6 +47,8 @@ type SandboxPlan struct {
 	GitHooksPath   string
 	NetEnabled     bool
 	AllowedDomains []string
+	ExactMatch     bool
+	DNSUpstream    string
 	EnvSet         map[string]string
 	EnvPassthrough []string
 	DegradedLayers []DegradedLayer
@@ -198,6 +200,8 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	// Network policy.
 	plan.NetEnabled = len(cfg.AllowedDomains) > 0 || cfg.AllowFile != ""
 	plan.AllowedDomains = cfg.AllowedDomains
+	plan.ExactMatch = cfg.ExactMatch
+	plan.DNSUpstream = cfg.DNSUpstream
 
 	// Environment policy.
 	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)

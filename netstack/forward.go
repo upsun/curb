@@ -49,7 +49,8 @@ func setupTCPForwarding(s *stack.Stack) {
 }
 
 // setupUDPForwarding installs a UDP forwarder that proxies packets to the real network.
-func setupUDPForwarding(s *stack.Stack) {
+// If dnsFilter is non-nil, UDP port 53 traffic is routed through the DNS filter.
+func setupUDPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 	fwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		var wq waiter.Queue
@@ -59,6 +60,14 @@ func setupUDPForwarding(s *stack.Stack) {
 		}
 
 		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
+		local := gonet.NewUDPConn(&wq, ep)
+
+		// Route DNS traffic through the filter when active.
+		if dnsFilter != nil && id.LocalPort == 53 {
+			go dnsFilter.handleQuery(local, dst)
+			return true
+		}
+
 		remote, dialErr := net.Dial("udp", dst)
 		if dialErr != nil {
 			fmt.Fprintf(os.Stderr, "curb: udp forward %s: %v\n", dst, dialErr)
@@ -66,7 +75,6 @@ func setupUDPForwarding(s *stack.Stack) {
 			return true
 		}
 
-		local := gonet.NewUDPConn(&wq, ep)
 		go relayUDP(local, remote)
 		return true
 	})

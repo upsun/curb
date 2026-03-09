@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/upsun/curb/netstack"
+	"github.com/upsun/curb/policy"
 )
 
 // StartSandbox re-execs curb inside new namespaces, passes the sandbox config
@@ -107,7 +108,15 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			abortNet()
 			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
 		}
-		ns, recvErr = netstack.NewStack(tapFD)
+		var dnsFilter *netstack.DNSFilter
+		if len(plan.AllowedDomains) > 0 {
+			matcher := policy.NewDomainMatcher(plan.AllowedDomains, plan.ExactMatch)
+			dnsFilter = &netstack.DNSFilter{
+				Check:    matcher.Match,
+				Upstream: plan.DNSUpstream,
+			}
+		}
+		ns, recvErr = netstack.NewStack(tapFD, dnsFilter)
 		if recvErr != nil {
 			abortNet()
 			return -1, fmt.Errorf("creating netstack: %w", recvErr)

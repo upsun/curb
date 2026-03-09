@@ -735,6 +735,94 @@ func resolveForTest(t *testing.T, host string) string {
 	return ""
 }
 
+// TestCurb_DNS_AllowedDomainResolves verifies that DNS queries for allowed domains succeed.
+func TestCurb_DNS_AllowedDomainResolves(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"getent", "hosts", "example.com")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "expected allowed domain to resolve: %s", outStr)
+	assert.NotEmpty(t, strings.TrimSpace(outStr), "getent should return an address")
+}
+
+// TestCurb_DNS_BlockedDomainFails verifies that DNS queries for non-allowed domains are REFUSED.
+func TestCurb_DNS_BlockedDomainFails(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"getent", "hosts", "other.com")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected blocked domain DNS to fail: %s", string(out))
+}
+
+// TestCurb_DNS_SubdomainAllowed verifies that subdomains of allowed domains resolve (default behavior).
+func TestCurb_DNS_SubdomainAllowed(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"getent", "hosts", "www.example.com")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "expected subdomain to resolve: %s", outStr)
+	assert.NotEmpty(t, strings.TrimSpace(outStr))
+}
+
+// TestCurb_DNS_ExactMatchBlocksSubdomain verifies that --exact-match blocks subdomains.
+func TestCurb_DNS_ExactMatchBlocksSubdomain(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--exact-match", "--",
+		"getent", "hosts", "www.example.com")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected subdomain to be blocked with --exact-match: %s", string(out))
+}
+
+// TestCurb_DNS_WildcardAllows verifies that wildcard patterns work for DNS.
+func TestCurb_DNS_WildcardAllows(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*.example.com", "--",
+		"getent", "hosts", "www.example.com")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "expected wildcard subdomain to resolve: %s", outStr)
+	assert.NotEmpty(t, strings.TrimSpace(outStr))
+}
+
+// TestCurb_DNS_WildcardDoesNotMatchBare verifies that *.example.com does NOT match example.com.
+func TestCurb_DNS_WildcardDoesNotMatchBare(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*.example.com", "--",
+		"getent", "hosts", "example.com")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected bare domain to be blocked with wildcard: %s", string(out))
+}
+
+// TestCurb_DNS_StarAllowsEverything verifies that --allow '*' allows all DNS queries.
+func TestCurb_DNS_StarAllowsEverything(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*", "--",
+		"getent", "hosts", "example.com")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "expected * to allow all DNS: %s", outStr)
+	assert.NotEmpty(t, strings.TrimSpace(outStr))
+}
+
+// TestCurb_DNS_BlockedLogMessage verifies that blocked DNS queries produce a log message.
+func TestCurb_DNS_BlockedLogMessage(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+		"getent", "hosts", "blocked.test")
+	out, _ := cmd.CombinedOutput()
+	assert.Contains(t, string(out), "curb: dns blocked:", "expected blocked DNS log message")
+}
+
 // filterCurbOutput removes lines starting with "curb:" from output.
 func filterCurbOutput(s string) string {
 	var lines []string
