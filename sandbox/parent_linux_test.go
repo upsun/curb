@@ -5,6 +5,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv(InitEnvKey) != "" {
 		ChildInit()
 		os.Exit(ExitSetupFailure)
+	}
+	// TUN probe child.
+	if os.Getenv("_CURB_TUN_PROBE") != "" {
+		RunTUNProbe()
+		return
 	}
 
 	// Probe capabilities once for all tests.
@@ -617,4 +623,124 @@ func TestCurb_Exec_CWDNotExecutable(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected exec from writable CWD to be blocked: %s", string(out))
 	assert.Contains(t, string(out), "Permission denied")
+}
+
+// requireNetNS skips the test if network namespace or TUN/TAP is unavailable.
+func requireNetNS(t *testing.T) {
+	t.Helper()
+	requireUserNS(t)
+	if testCaps.NetNS != nil {
+		t.Skipf("network namespaces unavailable: %v", testCaps.NetNS)
+	}
+	if testCaps.TUN != nil {
+		t.Skipf("TUN/TAP unavailable: %v", testCaps.TUN)
+	}
+}
+
+// TestCurb_Net_NoNetworkByDefault verifies that without --allow, network is unreachable.
+func TestCurb_Net_NoNetworkByDefault(t *testing.T) {
+	requireUserNS(t)
+
+	// Use a direct IP to avoid DNS issues. Without --allow, the child is in
+	// an empty net namespace — no interfaces are configured.
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "--",
+		"sh", "-c", "curl -s --connect-timeout 3 http://93.184.215.14/ >/dev/null 2>&1")
+	err := cmd.Run()
+	require.Error(t, err, "expected curl to fail without --allow")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	// curl exit 6 = couldn't resolve, 7 = couldn't connect, 28 = timeout.
+	// Any of these indicate the network is blocked.
+	code := exitErr.ExitCode()
+	assert.True(t, code == 6 || code == 7 || code == 28,
+		"expected curl failure exit code (6/7/28), got %d", code)
+}
+
+// TestCurb_Net_LoopbackDown verifies that localhost is also unreachable without --allow.
+func TestCurb_Net_LoopbackDown(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "--",
+		"sh", "-c", "curl -s --connect-timeout 2 http://127.0.0.1/ >/dev/null 2>&1")
+	err := cmd.Run()
+	require.Error(t, err, "expected localhost to be unreachable without --allow")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	code := exitErr.ExitCode()
+	assert.True(t, code == 7 || code == 28,
+		"expected curl failure exit code (7/28), got %d", code)
+}
+
+// TestCurb_Net_TCPForwarding verifies that TCP connections work through the netstack.
+func TestCurb_Net_TCPForwarding(t *testing.T) {
+	requireNetNS(t)
+
+	// Use a well-known IP that serves HTTP. Resolve example.com from the host
+	// to get a working IP, since DNS inside the sandbox may not work without
+	// mount namespace support.
+	ip := resolveForTest(t, "example.com")
+
+	cmd := exec.Command(curbBin, "--allow", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
+		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "curl through netstack failed: %s", outStr)
+	assert.Contains(t, outStr, "Example Domain", "expected example.com HTML content")
+}
+
+// TestCurb_Net_TLSWorks verifies that HTTPS connections work through the netstack.
+func TestCurb_Net_TLSWorks(t *testing.T) {
+	requireNetNS(t)
+
+	// Use --resolve to avoid DNS but still validate the TLS certificate.
+	ip := resolveForTest(t, "example.com")
+
+	cmd := exec.Command(curbBin, "--allow", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
+		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "HTTPS through netstack failed: %s", outStr)
+	assert.Contains(t, outStr, "200", "expected HTTP 200 from HTTPS request")
+}
+
+// TestCurb_Net_NoRawSocketEscape verifies that the child cannot use raw sockets to bypass TAP.
+func TestCurb_Net_NoRawSocketEscape(t *testing.T) {
+	requireNetNS(t)
+
+	cmd := exec.Command(curbBin, "--allow", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
+		"sh", "-c", "python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)' 2>&1; echo exit=$?")
+	out, _ := cmd.CombinedOutput()
+	outStr := string(out)
+	// Raw sockets require CAP_NET_RAW which the child should not have
+	// (AppArmor denies it, or the process lacks it in its effective set).
+	// Even if the child is uid 0 in its namespace, raw sockets should fail.
+	assert.True(t,
+		strings.Contains(outStr, "Operation not permitted") ||
+			strings.Contains(outStr, "PermissionError"),
+		"expected raw socket creation to fail, got: %s", outStr)
+}
+
+// resolveForTest resolves a hostname to an IPv4 address on the host side.
+func resolveForTest(t *testing.T, host string) string {
+	t.Helper()
+	addrs, err := net.LookupHost(host)
+	require.NoError(t, err, "resolving %s from host", host)
+	for _, addr := range addrs {
+		if net.ParseIP(addr).To4() != nil {
+			return addr
+		}
+	}
+	t.Fatalf("no IPv4 address found for %s", host)
+	return ""
+}
+
+// filterCurbOutput removes lines starting with "curb:" from output.
+func filterCurbOutput(s string) string {
+	var lines []string
+	for line := range strings.SplitSeq(s, "\n") {
+		if !strings.HasPrefix(line, "curb:") {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }

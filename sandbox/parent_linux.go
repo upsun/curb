@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+
+	"github.com/upsun/curb/netstack"
 )
 
 // StartSandbox re-execs curb inside new namespaces, passes the sandbox config
@@ -87,6 +89,37 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	}
 	_ = configW.Close()
 
+	// If network is enabled, receive TAP fd, start netstack, signal child.
+	var ns *netstack.Stack
+	if plan.NetEnabled {
+		tapFD, recvErr := RecvFD(sockParent)
+		if recvErr != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			signal.Stop(sigCh)
+			_ = sockParent.Close()
+			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
+		}
+		ns, recvErr = netstack.NewStack(tapFD)
+		if recvErr != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			signal.Stop(sigCh)
+			_ = sockParent.Close()
+			return -1, fmt.Errorf("creating netstack: %w", recvErr)
+		}
+		// Signal the child that the netstack is ready.
+		if _, recvErr = sockParent.Write([]byte{0}); recvErr != nil {
+			ns.Close()
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			signal.Stop(sigCh)
+			_ = sockParent.Close()
+			return -1, fmt.Errorf("sending ready signal: %w", recvErr)
+		}
+	}
+	_ = sockParent.Close()
+
 	// Forward signals to the child.
 	go func() {
 		for sig := range sigCh {
@@ -98,7 +131,9 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	waitErr := cmd.Wait()
 	signal.Stop(sigCh)
 	close(sigCh)
-	_ = sockParent.Close()
+	if ns != nil {
+		ns.Close()
+	}
 
 	if waitErr == nil {
 		return 0, nil

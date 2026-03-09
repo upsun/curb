@@ -41,10 +41,16 @@ func netNSFixMessage() string {
 func tunFixMessage() string {
 	return `/dev/net/tun is required for --allow but not available.
 
-  To fix:
+  To fix (device missing):
     sudo mkdir -p /dev/net
     sudo mknod /dev/net/tun c 10 200
     sudo chmod 0666 /dev/net/tun
+
+  If AppArmor blocks TUN/TAP creation (TUNSETIFF: operation not permitted):
+    1. Comment out 'audit deny capability,' in /etc/apparmor.d/unprivileged_userns
+    2. echo 'capability net_admin,' | sudo tee /etc/apparmor.d/local/unprivileged_userns
+       For full DNS support, also add: capability sys_admin,
+    3. sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
 
   Remove --allow flags to run without network filtering.`
 }

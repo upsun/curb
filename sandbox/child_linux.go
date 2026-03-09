@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/upsun/curb/policy"
+	"golang.org/x/sys/unix"
 )
 
 // sandboxNameserver is the DNS resolver used inside the sandbox (QEMU-style host gateway).
@@ -37,7 +38,14 @@ func childInit() error {
 	}
 	_ = configFile.Close()
 
-	// TODO(WP07): Use sockFile for TAP fd passing.
+	// Network setup: create TAP and send fd to parent before Landlock
+	// (Landlock would block /dev/net/tun access).
+	if cfg.NetEnabled {
+		if err := setupChildNetwork(sockFile); err != nil {
+			_ = sockFile.Close()
+			return fmt.Errorf("network setup: %w", err)
+		}
+	}
 	_ = sockFile.Close()
 
 	// Filesystem enforcement: mounts first, then Landlock.
@@ -129,6 +137,31 @@ func setupResolvConf(tmpDir string) error {
 			return nil
 		}
 		return fmt.Errorf("bind mount resolv.conf: %w", err)
+	}
+	return nil
+}
+
+// setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
+// fd to the parent, and waits for a ready signal before continuing.
+func setupChildNetwork(sockFile *os.File) error {
+	tapFD, err := createTAP()
+	if err != nil {
+		return err
+	}
+	if err := configureInterfaces(); err != nil {
+		_ = unix.Close(tapFD)
+		return err
+	}
+	if err := SendFD(sockFile, tapFD); err != nil {
+		_ = unix.Close(tapFD)
+		return fmt.Errorf("sending TAP fd: %w", err)
+	}
+	_ = unix.Close(tapFD)
+
+	// Wait for parent to signal that the netstack is ready.
+	readyBuf := make([]byte, 1)
+	if _, err := sockFile.Read(readyBuf); err != nil {
+		return fmt.Errorf("waiting for netstack ready: %w", err)
 	}
 	return nil
 }
