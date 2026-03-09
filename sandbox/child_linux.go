@@ -57,15 +57,13 @@ func childInit() error {
 				return fmt.Errorf("setting up resolv.conf: %w", err)
 			}
 		}
-		rules := policy.BuildLandlockRules(cfg.ROPaths, cfg.RWPaths)
+		rules := policy.BuildLandlockRules(cfg.ROPaths, cfg.RWPaths, cfg.ExecPaths)
 		if len(rules) > 0 {
 			if err := policy.EnforceLandlock(rules); err != nil {
 				return fmt.Errorf("enforcing landlock: %w", err)
 			}
 		}
 	}
-
-	// TODO(WP06): Apply exec restrictions.
 
 	if len(cfg.Command) == 0 {
 		return fmt.Errorf("no command specified")

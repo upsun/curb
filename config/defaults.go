@@ -35,12 +35,16 @@ var SafePassthroughVars = []string{
 }
 
 // SystemExecPaths are directories from which executables are allowed by default.
+// Includes lib directories because the kernel checks Landlock EXECUTE when
+// loading the ELF interpreter (dynamic linker) via open_exec().
 var SystemExecPaths = []string{
 	"/usr/bin",
 	"/bin",
 	"/usr/local/bin",
 	"/usr/sbin",
 	"/sbin",
+	"/lib",
+	"/lib64",
 }
 
 // DefaultPath is the default PATH value for sandboxed processes.

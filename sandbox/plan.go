@@ -182,7 +182,15 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
 				plan.ExecPaths = append(plan.ExecPaths, abs)
 			} else {
-				plan.ExecPaths = append(plan.ExecPaths, name+" (not found)")
+				return nil, fmt.Errorf("--exec %s: not found in PATH", name)
+			}
+		}
+		if len(cfg.Command) > 0 {
+			cmd0 := cfg.Command[0]
+			if filepath.IsAbs(cmd0) {
+				plan.ExecPaths = append(plan.ExecPaths, cmd0)
+			} else if abs, lookErr := exec.LookPath(cmd0); lookErr == nil {
+				plan.ExecPaths = append(plan.ExecPaths, abs)
 			}
 		}
 	}

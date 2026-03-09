@@ -51,6 +51,10 @@ The target command must follow a -- separator.`,
 				return nil
 			}
 
+			if cfg.NoExecRestrict {
+				fmt.Fprintln(os.Stderr, "curb: info: executable restrictions disabled")
+			}
+
 			exitCode, err := sandbox.StartSandbox(plan)
 			plan.Cleanup()
 			if err != nil {

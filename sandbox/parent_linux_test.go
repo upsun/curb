@@ -501,3 +501,120 @@ func TestCurb_FS_ResolvConfOverridden(t *testing.T) {
 	require.NoError(t, err, "expected cat resolv.conf to succeed: %s", string(out))
 	assert.Contains(t, string(out), sandboxNameserver, "resolv.conf should contain sandbox nameserver")
 }
+
+// copyBinary copies an executable to a new path and preserves the execute bit.
+func copyBinary(t *testing.T, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	require.NoError(t, err, "reading %s", src)
+	require.NoError(t, os.WriteFile(dst, data, 0o755))
+}
+
+// TestCurb_Exec_SystemBinarySucceeds verifies that system binaries execute under exec restriction.
+func TestCurb_Exec_SystemBinarySucceeds(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	cmd := exec.Command(curbBin, "--", "/usr/bin/ls", "/usr")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected /usr/bin/ls to succeed: %s", string(out))
+}
+
+// TestCurb_Exec_DynamicLinkingWorks verifies that dynamically linked binaries work.
+// The dynamic linker needs EXECUTE (loaded via open_exec), but shared libraries
+// only need READ (loaded via mmap).
+func TestCurb_Exec_DynamicLinkingWorks(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	cmd := exec.Command(curbBin, "--", "ls", "/usr")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected dynamically linked ls to work: %s", string(out))
+}
+
+// TestCurb_Exec_NonSystemBinaryBlocked verifies that binaries outside exec paths are blocked.
+func TestCurb_Exec_NonSystemBinaryBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "true")
+	copyBinary(t, "/bin/true", bin)
+
+	// Use --rw so the binary is readable, but exec restrictions should block execve().
+	cmd := exec.Command(curbBin, "--rw", dir, "--", "sh", "-c", bin)
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected non-system binary to be blocked: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_Exec_ExecFlagAllows verifies that --exec allows a specific binary.
+func TestCurb_Exec_ExecFlagAllows(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "true")
+	copyBinary(t, "/bin/true", bin)
+
+	cmd := exec.Command(curbBin, "--rw", dir, "--exec", bin, "--", "sh", "-c", bin)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected --exec to allow binary: %s", string(out))
+}
+
+// TestCurb_Exec_NoExecRestrict verifies that --no-exec-restrict allows any binary.
+func TestCurb_Exec_NoExecRestrict(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "true")
+	copyBinary(t, "/bin/true", bin)
+
+	cmd := exec.Command(curbBin, "--rw", dir, "--no-exec-restrict", "--", "sh", "-c", bin)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected --no-exec-restrict to allow binary: %s", string(out))
+	assert.Contains(t, string(out), "curb: info: executable restrictions disabled")
+}
+
+// TestCurb_Exec_NotFoundErrors verifies that --exec with an unknown name errors.
+func TestCurb_Exec_NotFoundErrors(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--exec", "nonexistent_tool_xyz", "--", "echo", "hello")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected --exec with nonexistent tool to error: %s", string(out))
+	assert.Contains(t, string(out), "not found in PATH")
+}
+
+// TestCurb_Exec_WritableDirNotExecutable verifies that a writable temp dir is not executable.
+func TestCurb_Exec_WritableDirNotExecutable(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	// The sandbox's TMPDIR is writable. Verify that writing a binary there
+	// and trying to execute it is blocked.
+	cmd := exec.Command(curbBin, "--", "sh", "-c",
+		"cp /bin/true $TMPDIR/escape && chmod +x $TMPDIR/escape && $TMPDIR/escape")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected exec from writable TMPDIR to be blocked: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_Exec_CWDNotExecutable verifies that binaries in a writable CWD are not executable.
+func TestCurb_Exec_CWDNotExecutable(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	gitDir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(gitDir, ".git"), 0o755))
+	bin := filepath.Join(gitDir, "evil")
+	copyBinary(t, "/bin/true", bin)
+
+	// CWD is writable (git dir), but should not have execute permission.
+	cmd := exec.Command(curbBin, "--", "sh", "-c", bin)
+	cmd.Dir = gitDir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected exec from writable CWD to be blocked: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
