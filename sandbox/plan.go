@@ -202,6 +202,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 	// Network policy.
 	plan.NetEnabled = len(cfg.AllowedDomains) > 0 || cfg.AllowFile != ""
+	if plan.NetEnabled && !cfg.NoFSRestrict {
+		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
+		// On systemd systems, /etc/resolv.conf is a symlink to /run/systemd/resolve/,
+		// which Landlock would otherwise block.
+		if dir := resolvConfDir(); dir != "" {
+			plan.ROPaths = append(plan.ROPaths, dir)
+		}
+	}
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.ExactMatch = cfg.ExactMatch
 	plan.DNSUpstream = cfg.DNSUpstream
@@ -399,6 +407,20 @@ func (p *SandboxPlan) capUserInfo() string {
 		return "kernel " + p.Caps.KernelInfo
 	}
 	return ""
+}
+
+// resolvConfDir returns the parent directory of /etc/resolv.conf's real path,
+// or "" if it's already under /etc or can't be resolved.
+func resolvConfDir() string {
+	real, err := filepath.EvalSymlinks("/etc/resolv.conf")
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(real)
+	if strings.HasPrefix(dir, "/etc") {
+		return "" // Already covered by default RO paths.
+	}
+	return dir
 }
 
 func hasTildePaths(paths []string) bool {
