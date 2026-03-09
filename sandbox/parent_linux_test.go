@@ -299,3 +299,205 @@ func TestCurb_EnvOnlyExpectedVars(t *testing.T) {
 		assert.True(t, allowed[name], "unexpected env var in default mode: %s", name)
 	}
 }
+
+func requireLandlock(t *testing.T) {
+	t.Helper()
+	if testCaps.LandlockABI == 0 {
+		t.Skip("Landlock not available")
+	}
+}
+
+func requireMountOps(t *testing.T) {
+	t.Helper()
+	// Test if mount operations work inside a user+mount namespace.
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "cat /etc/resolv.conf")
+	out, _ := cmd.CombinedOutput()
+	if strings.Contains(string(out), "mount operations unavailable") {
+		t.Skip("mount operations unavailable (AppArmor or similar restriction)")
+	}
+}
+
+// TestCurb_FS_WriteSysPathBlocked verifies that writing to a system path is blocked by Landlock.
+func TestCurb_FS_WriteSysPathBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "touch /usr/bin/curb-escape-test")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected write to /usr/bin to fail: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_FS_WriteTmpDirAllowed verifies that the sandbox TMPDIR is writable.
+func TestCurb_FS_WriteTmpDirAllowed(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "touch $TMPDIR/curb-test-write && rm $TMPDIR/curb-test-write")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected TMPDIR write to succeed: %s", string(out))
+}
+
+// TestCurb_FS_WriteGitCWDAllowed verifies that CWD is writable in a git directory.
+func TestCurb_FS_WriteGitCWDAllowed(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	// Create a temp dir with a .git directory to simulate a git repo.
+	gitDir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(gitDir, ".git"), 0o755))
+	testFile := filepath.Join(gitDir, "curb-test-write")
+
+	cmd := exec.Command(curbBin, "--", "touch", testFile)
+	cmd.Dir = gitDir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected CWD write in git dir to succeed: %s", string(out))
+	os.Remove(testFile)
+}
+
+// TestCurb_FS_WriteNonGitCWDBlocked verifies that CWD is read-only in a non-git directory.
+func TestCurb_FS_WriteNonGitCWDBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	nonGitDir := t.TempDir()
+	testFile := filepath.Join(nonGitDir, "curb-escape-test")
+
+	cmd := exec.Command(curbBin, "--", "touch", testFile)
+	cmd.Dir = nonGitDir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected CWD write in non-git dir to fail: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_FS_WriteHooksBlocked verifies that .git/hooks is read-only.
+func TestCurb_FS_WriteHooksBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+	requireMountOps(t)
+
+	gitDir := t.TempDir()
+	hooksDir := filepath.Join(gitDir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+	hookFile := filepath.Join(hooksDir, "pre-commit")
+
+	cmd := exec.Command(curbBin, "--", "touch", hookFile)
+	cmd.Dir = gitDir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected hooks write to fail: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_FS_NoFSRestrict verifies that --no-fs-restrict disables filesystem enforcement.
+func TestCurb_FS_NoFSRestrict(t *testing.T) {
+	requireUserNS(t)
+
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "curb-nofsr-test")
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--", "touch", testFile)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected --no-fs-restrict to allow writes: %s", string(out))
+	os.Remove(testFile)
+}
+
+// TestCurb_FS_HiddenPath verifies that hidden paths are overmounted with empty tmpfs.
+func TestCurb_FS_HiddenPath(t *testing.T) {
+	requireUserNS(t)
+	requireMountOps(t)
+
+	// Create a directory to hide with content inside.
+	hideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(hideDir, "secret"), []byte("sensitive"), 0o644))
+
+	cmd := exec.Command(curbBin, "--hide", hideDir, "--", "ls", hideDir)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ls on hidden path should succeed (shows empty tmpfs): %s", string(out))
+	outStr := strings.TrimSpace(string(out))
+	// Filter out warning lines.
+	var lines []string
+	for _, line := range strings.Split(outStr, "\n") {
+		if !strings.HasPrefix(line, "curb:") {
+			lines = append(lines, line)
+		}
+	}
+	assert.Empty(t, lines, "hidden path should appear empty, got: %v", lines)
+}
+
+// TestCurb_FS_ReadSysPathAllowed verifies that system paths are readable.
+func TestCurb_FS_ReadSysPathAllowed(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	cmd := exec.Command(curbBin, "--", "cat", "/etc/hostname")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected read of /etc/hostname to succeed: %s", string(out))
+}
+
+// TestCurb_FS_PathTraversalBlocked tries to escape via symlink traversal.
+func TestCurb_FS_PathTraversalBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	// Landlock follows symlinks to the real path, so a symlink pointing outside
+	// an allowed path should be blocked.
+	dir := t.TempDir()
+	symlink := filepath.Join(dir, "escape")
+	require.NoError(t, os.Symlink("/etc/shadow", symlink))
+
+	cmd := exec.Command(curbBin, "--rw", dir, "--", "cat", symlink)
+	out, err := cmd.CombinedOutput()
+	// /etc/shadow is only in RO paths, so reading through a symlink should still work
+	// (it resolves to /etc/shadow which is under /etc, a default RO path).
+	// But WRITING through a symlink to an RO path should fail.
+	_ = out
+	_ = err
+
+	// Try writing through a symlink that points outside RW paths.
+	writeTarget := filepath.Join(dir, "write-escape")
+	tmpFile := filepath.Join(t.TempDir(), "target")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("original"), 0o644))
+	require.NoError(t, os.Symlink(tmpFile, writeTarget))
+
+	cmd = exec.Command(curbBin, "--rw", dir, "--", "sh", "-c", fmt.Sprintf("echo pwned > %s", writeTarget))
+	out, err = cmd.CombinedOutput()
+	require.Error(t, err, "expected write via symlink to non-RW path to fail: %s", string(out))
+}
+
+// TestCurb_FS_WriteEtcBlocked verifies /etc is read-only.
+func TestCurb_FS_WriteEtcBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "echo pwned >> /etc/passwd")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected write to /etc/passwd to fail: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_FS_WriteHomeBlocked verifies the real home directory is not writable.
+func TestCurb_FS_WriteHomeBlocked(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	testFile := filepath.Join(home, "curb-escape-test-DO-NOT-CREATE")
+
+	cmd := exec.Command(curbBin, "--", "touch", testFile)
+	out, runErr := cmd.CombinedOutput()
+	require.Error(t, runErr, "expected write to real home to fail: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_FS_ResolvConfOverridden verifies /etc/resolv.conf is overridden.
+func TestCurb_FS_ResolvConfOverridden(t *testing.T) {
+	requireUserNS(t)
+	requireMountOps(t)
+
+	cmd := exec.Command(curbBin, "--", "cat", "/etc/resolv.conf")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected cat resolv.conf to succeed: %s", string(out))
+	assert.Contains(t, string(out), sandboxNameserver, "resolv.conf should contain sandbox nameserver")
+}

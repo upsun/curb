@@ -9,19 +9,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsGitWorkTree_Directory(t *testing.T) {
+func TestFindGitRoot_Directory(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
-	ok, err := IsGitWorkTree(dir)
+	root, err := FindGitRoot(dir)
 	require.NoError(t, err)
-	assert.True(t, ok)
+	assert.Equal(t, dir, root)
 }
 
-func TestIsGitWorkTree_File(t *testing.T) {
+func TestFindGitRoot_File(t *testing.T) {
 	dir := t.TempDir()
 	err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /some/path/.git/worktrees/foo\n"), 0o644)
 	require.NoError(t, err)
+
+	root, err := FindGitRoot(dir)
+	require.NoError(t, err)
+	assert.Equal(t, dir, root)
+}
+
+func TestFindGitRoot_NonGit(t *testing.T) {
+	dir := t.TempDir()
+
+	root, err := FindGitRoot(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "", root)
+}
+
+func TestFindGitRoot_Nested(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	nested := filepath.Join(dir, "sub", "deep")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+
+	root, err := FindGitRoot(nested)
+	require.NoError(t, err)
+	assert.Equal(t, dir, root)
+}
+
+func TestIsGitWorkTree_Directory(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
 	ok, err := IsGitWorkTree(dir)
 	require.NoError(t, err)
@@ -34,15 +62,4 @@ func TestIsGitWorkTree_NonGit(t *testing.T) {
 	ok, err := IsGitWorkTree(dir)
 	require.NoError(t, err)
 	assert.False(t, ok)
-}
-
-func TestIsGitWorkTree_Nested(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
-	nested := filepath.Join(dir, "sub", "deep")
-	require.NoError(t, os.MkdirAll(nested, 0o755))
-
-	ok, err := IsGitWorkTree(nested)
-	require.NoError(t, err)
-	assert.True(t, ok)
 }

@@ -4,15 +4,18 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/upsun/curb/policy"
 )
 
 // ChildInit is the entry point for the re-exec'd child process inside new namespaces.
-// It reads the sandbox config from fd 3, applies sandbox layers (stubs for now),
+// It reads the sandbox config from fd 3, applies sandbox layers,
 // and execs the target command. It never returns on success.
 func ChildInit() {
 	if err := childInit(); err != nil {
@@ -34,7 +37,32 @@ func childInit() error {
 	// TODO(WP07): Use sockFile for TAP fd passing.
 	sockFile.Close()
 
-	// TODO(WP04-WP06): Apply sandbox layers (filesystem, exec, network).
+	// Filesystem enforcement: mounts first, then Landlock.
+	// Landlock would block mount syscalls if enforced first.
+	if !cfg.NoFSRestrict {
+		mountsOK := prepareMountNS()
+		if mountsOK {
+			if err := hidePaths(cfg.HiddenPaths); err != nil {
+				return fmt.Errorf("hiding paths: %w", err)
+			}
+			if cfg.GitHooksPath != "" {
+				if err := protectHooksDir(cfg.GitHooksPath); err != nil {
+					return fmt.Errorf("protecting hooks dir: %w", err)
+				}
+			}
+			if err := setupResolvConf(cfg.TempDir); err != nil {
+				return fmt.Errorf("setting up resolv.conf: %w", err)
+			}
+		}
+		rules := policy.BuildLandlockRules(cfg.ROPaths, cfg.RWPaths)
+		if len(rules) > 0 {
+			if err := policy.EnforceLandlock(rules); err != nil {
+				return fmt.Errorf("enforcing landlock: %w", err)
+			}
+		}
+	}
+
+	// TODO(WP06): Apply exec restrictions.
 
 	if len(cfg.Command) == 0 {
 		return fmt.Errorf("no command specified")
@@ -46,6 +74,66 @@ func childInit() error {
 	}
 
 	return syscall.Exec(exe, cfg.Command, cfg.Env)
+}
+
+// prepareMountNS makes mount propagation slave so overmounts don't propagate to host.
+// Returns false if mount operations are not available (e.g. AppArmor restrictions).
+func prepareMountNS() bool {
+	err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "curb: warning: mount operations unavailable (%v); hiding/hooks/resolv.conf skipped\n", err)
+		return false
+	}
+	return true
+}
+
+// hidePaths overmounts each path with an empty tmpfs, making the original content invisible.
+// Non-existent paths are silently skipped.
+func hidePaths(paths []string) error {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		if err := syscall.Mount("tmpfs", p, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "size=0"); err != nil {
+			return fmt.Errorf("overmounting %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// protectHooksDir bind-mounts a Git hooks directory as read-only.
+func protectHooksDir(hooksPath string) error {
+	if _, err := os.Stat(hooksPath); err != nil {
+		return nil
+	}
+	// Bind-mount the directory on itself.
+	if err := syscall.Mount(hooksPath, hooksPath, "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind mount %s: %w", hooksPath, err)
+	}
+	// Remount as read-only.
+	if err := syscall.Mount("", hooksPath, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY, ""); err != nil {
+		return fmt.Errorf("remount ro %s: %w", hooksPath, err)
+	}
+	return nil
+}
+
+// setupResolvConf writes a custom resolv.conf and bind-mounts it over /etc/resolv.conf.
+func setupResolvConf(tmpDir string) error {
+	resolvPath := filepath.Join(tmpDir, "resolv.conf")
+	if err := os.WriteFile(resolvPath, []byte("nameserver 10.0.2.2\n"), 0o644); err != nil {
+		return fmt.Errorf("writing resolv.conf: %w", err)
+	}
+	target := "/etc/resolv.conf"
+	if _, err := os.Stat(target); err != nil {
+		return nil
+	}
+	if err := syscall.Mount(resolvPath, target, "", syscall.MS_BIND, ""); err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			return nil
+		}
+		return fmt.Errorf("bind mount resolv.conf: %w", err)
+	}
+	return nil
 }
 
 // findExecutable resolves a command name to an absolute path using the PATH from env.

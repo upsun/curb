@@ -60,3 +60,16 @@ func ForcedEnvVars(tmpDir, homePath string) map[string]string {
 		"SHELL":  "/bin/sh",
 	}
 }
+
+// ExpandTildes replaces a leading ~/ in each path with the given home directory.
+func ExpandTildes(paths []string, home string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		if strings.HasPrefix(p, "~/") {
+			out[i] = home + p[1:]
+		} else {
+			out[i] = p
+		}
+	}
+	return out
+}

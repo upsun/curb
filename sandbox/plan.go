@@ -43,6 +43,7 @@ type SandboxPlan struct {
 	RWPaths        []string
 	HiddenPaths    []string
 	ExecPaths      []string
+	GitHooksPath   string
 	NetEnabled     bool
 	AllowedDomains []string
 	EnvSet         map[string]string
@@ -51,6 +52,7 @@ type SandboxPlan struct {
 	TempDir        string
 	CWD            string
 	CWDWritable    bool
+	NoFSRestrict   bool
 	Command        []string
 	Caps           *Capabilities
 }
@@ -63,6 +65,8 @@ type ChildConfig struct {
 	RWPaths        []string `json:"rw_paths,omitempty"`
 	HiddenPaths    []string `json:"hidden_paths,omitempty"`
 	ExecPaths      []string `json:"exec_paths,omitempty"`
+	GitHooksPath   string   `json:"git_hooks_path,omitempty"`
+	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	TempDir        string   `json:"temp_dir"`
@@ -105,7 +109,11 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		})
 	}
 
+	// Resolve the real home dir for tilde expansion (before child overrides HOME).
+	realHome, _ := os.UserHomeDir()
+
 	// Filesystem policy.
+	plan.NoFSRestrict = cfg.NoFSRestrict
 	if cfg.NoFSRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "filesystem",
@@ -115,17 +123,33 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	} else {
 		plan.ROPaths = slices.Concat(config.DefaultROPaths, cfg.ROPaths)
 		plan.HiddenPaths = slices.Concat(config.DefaultHiddenPaths, cfg.HiddenPaths)
+		if realHome != "" {
+			plan.ROPaths = config.ExpandTildes(plan.ROPaths, realHome)
+			plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
+		}
 	}
 	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
+	if realHome != "" {
+		plan.RWPaths = config.ExpandTildes(plan.RWPaths, realHome)
+	}
 
 	// CWD Git detection.
 	cwd, err := os.Getwd()
 	if err == nil {
 		plan.CWD = cwd
-		isGit, gitErr := config.IsGitWorkTree(cwd)
-		if gitErr == nil && isGit {
+		gitRoot, gitErr := config.FindGitRoot(cwd)
+		if gitErr == nil && gitRoot != "" {
 			plan.CWDWritable = true
 			plan.RWPaths = append(plan.RWPaths, cwd)
+			if !cfg.NoFSRestrict {
+				hooksDir := filepath.Join(gitRoot, ".git", "hooks")
+				if info, statErr := os.Stat(hooksDir); statErr == nil && info.IsDir() {
+					plan.GitHooksPath = hooksDir
+				}
+			}
+		} else if !cfg.NoFSRestrict {
+			// Non-Git directory: read-only CWD.
+			plan.ROPaths = append(plan.ROPaths, cwd)
 		}
 	}
 
@@ -189,6 +213,8 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		RWPaths:        p.RWPaths,
 		HiddenPaths:    p.HiddenPaths,
 		ExecPaths:      p.ExecPaths,
+		GitHooksPath:   p.GitHooksPath,
+		NoFSRestrict:   p.NoFSRestrict,
 		NetEnabled:     p.NetEnabled,
 		AllowedDomains: p.AllowedDomains,
 		TempDir:        p.TempDir,
@@ -281,6 +307,9 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	}
 	if len(p.HiddenPaths) > 0 {
 		pr("    hidden:     %s\n", strings.Join(p.HiddenPaths, " "))
+	}
+	if p.GitHooksPath != "" {
+		pr("    hooks (ro): %s\n", p.GitHooksPath)
 	}
 	if len(p.ExecPaths) > 0 {
 		pr("    exec:       %s\n", strings.Join(p.ExecPaths, " "))
