@@ -49,6 +49,9 @@ type SandboxPlan struct {
 	AllowedDomains []string
 	ExactMatch     bool
 	DNSUpstream    string
+	BlockECH       bool
+	RequireSNI     bool
+	AllowHTTP      bool
 	EnvSet         map[string]string
 	EnvPassthrough []string
 	DegradedLayers []DegradedLayer
@@ -202,6 +205,9 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.ExactMatch = cfg.ExactMatch
 	plan.DNSUpstream = cfg.DNSUpstream
+	plan.BlockECH = cfg.BlockECH
+	plan.RequireSNI = cfg.RequireSNI
+	plan.AllowHTTP = cfg.AllowHTTP
 
 	// Environment policy.
 	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
@@ -339,6 +345,22 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    allowed:    (from file)")
 	} else {
 		ln("    allowed:    none (no network interface)")
+	}
+	if p.NetEnabled && len(p.AllowedDomains) > 0 {
+		pr("    tls (443):  SNI filtered")
+		if p.BlockECH {
+			pr(", ECH blocked")
+		}
+		if p.RequireSNI {
+			pr(", SNI required")
+		}
+		pr("\n")
+		if p.AllowHTTP {
+			ln("    http (80):  Host filtered")
+		} else {
+			ln("    http (80):  blocked (use --unsafe-allow-http to enable)")
+		}
+		ln("    other:      dropped")
 	}
 	ln("    blocked:    everything else")
 

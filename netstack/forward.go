@@ -26,8 +26,14 @@ const (
 )
 
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
-// If dnsFilter is non-nil, TCP port 53 traffic is routed through the DNS filter.
-func setupTCPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
+// If filter is non-nil with a Check function, traffic is routed by port:
+// 53 → DNS filter, 443 → TLS SNI filter, 80 → HTTP filter (if AllowHTTP), others → drop.
+func setupTCPForwarding(s *stack.Stack, filter *FilterConfig) {
+	var dnsFilter *DNSFilter
+	if filter != nil && filter.Check != nil {
+		dnsFilter = &DNSFilter{Check: filter.Check, Upstream: filter.Upstream}
+	}
+
 	fwd := tcp.NewForwarder(s, 0, maxTCPInFlight, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
 		var wq waiter.Queue
@@ -41,9 +47,23 @@ func setupTCPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewTCPConn(&wq, ep)
 
-		// Route DNS traffic through the filter when active.
-		if dnsFilter != nil && id.LocalPort == dnsPort {
-			go dnsFilter.handleTCPQuery(local, dst)
+		// When filtering is active, route by port.
+		if filter != nil && filter.Check != nil {
+			switch id.LocalPort {
+			case dnsPort:
+				go dnsFilter.handleTCPQuery(local, dst)
+			case 443:
+				go handleTLSConnection(local, dst, filter)
+			case 80:
+				if filter.AllowHTTP {
+					go handleHTTPConnection(local, dst, filter)
+				} else {
+					fmt.Fprintf(os.Stderr, "curb: http blocked: port 80 disabled (use --unsafe-allow-http)\n")
+					_ = local.Close()
+				}
+			default:
+				_ = local.Close()
+			}
 			return
 		}
 
@@ -60,8 +80,14 @@ func setupTCPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 }
 
 // setupUDPForwarding installs a UDP forwarder that proxies packets to the real network.
-// If dnsFilter is non-nil, UDP port 53 traffic is routed through the DNS filter.
-func setupUDPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
+// If filter is non-nil with a Check function, only UDP port 53 (DNS) is forwarded;
+// all other UDP traffic is dropped.
+func setupUDPForwarding(s *stack.Stack, filter *FilterConfig) {
+	var dnsFilter *DNSFilter
+	if filter != nil && filter.Check != nil {
+		dnsFilter = &DNSFilter{Check: filter.Check, Upstream: filter.Upstream}
+	}
+
 	fwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		var wq waiter.Queue
@@ -73,9 +99,13 @@ func setupUDPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewUDPConn(&wq, ep)
 
-		// Route DNS traffic through the filter when active.
-		if dnsFilter != nil && id.LocalPort == dnsPort {
-			go dnsFilter.handleQuery(local, dst)
+		// When filtering is active, only DNS is allowed.
+		if filter != nil && filter.Check != nil {
+			if id.LocalPort == dnsPort {
+				go dnsFilter.handleQuery(local, dst)
+			} else {
+				_ = local.Close()
+			}
 			return true
 		}
 

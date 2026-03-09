@@ -108,15 +108,18 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			abortNet()
 			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
 		}
-		var dnsFilter *netstack.DNSFilter
+		var filter *netstack.FilterConfig
 		if len(plan.AllowedDomains) > 0 {
 			matcher := policy.NewDomainMatcher(plan.AllowedDomains, plan.ExactMatch)
-			dnsFilter = &netstack.DNSFilter{
-				Check:    matcher.Match,
-				Upstream: plan.DNSUpstream,
+			filter = &netstack.FilterConfig{
+				Check:      matcher.Match,
+				Upstream:   plan.DNSUpstream,
+				BlockECH:   plan.BlockECH,
+				RequireSNI: plan.RequireSNI,
+				AllowHTTP:  plan.AllowHTTP,
 			}
 		}
-		ns, recvErr = netstack.NewStack(tapFD, dnsFilter)
+		ns, recvErr = netstack.NewStack(tapFD, filter)
 		if recvErr != nil {
 			abortNet()
 			return -1, fmt.Errorf("creating netstack: %w", recvErr)
