@@ -38,8 +38,6 @@ The target command must follow a -- separator.`,
 			caps := sandbox.ProbeAll()
 			plan, err := sandbox.BuildPlan(cfg, caps)
 			if err != nil {
-				// Print capabilities before the fatal error for context.
-				fmt.Fprintln(os.Stderr, "curb: "+err.Error())
 				return err
 			}
 			defer plan.Cleanup()

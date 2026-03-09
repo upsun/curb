@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/platformsh/curb/config"
@@ -30,6 +32,7 @@ type SandboxPlan struct {
 	EnvPassthrough []string
 	DegradedLayers []DegradedLayer
 	TempDir        string
+	CWD            string
 	CWDWritable    bool
 	Caps           *Capabilities
 }
@@ -66,7 +69,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "landlock",
 			Reason: "not available (requires kernel 5.13+)",
-			Impact: "Filesystem restrictions use mount namespace and seccomp-bpf only (weaker).",
+			Impact: landlockWarnMessage(),
 		})
 	}
 
@@ -78,16 +81,15 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			Impact: "Filesystem restrictions disabled by user.",
 		})
 	} else {
-		plan.ROPaths = append(config.DefaultROPaths[:0:0], config.DefaultROPaths...)
-		plan.ROPaths = append(plan.ROPaths, cfg.ROPaths...)
-		plan.HiddenPaths = append(config.DefaultHiddenPaths[:0:0], config.DefaultHiddenPaths...)
-		plan.HiddenPaths = append(plan.HiddenPaths, cfg.HiddenPaths...)
+		plan.ROPaths = slices.Concat(config.DefaultROPaths, cfg.ROPaths)
+		plan.HiddenPaths = slices.Concat(config.DefaultHiddenPaths, cfg.HiddenPaths)
 	}
 	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
 
 	// CWD Git detection.
 	cwd, err := os.Getwd()
 	if err == nil {
+		plan.CWD = cwd
 		isGit, gitErr := config.IsGitWorkTree(cwd)
 		if gitErr == nil && isGit {
 			plan.CWDWritable = true
@@ -169,7 +171,11 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	printCap(w, "mount namespaces", p.Caps.MountNS, "")
 	printCap(w, "network namespaces", p.Caps.NetNS, "")
 	printCap(w, "/dev/net/tun", p.Caps.TUN, "")
-	printLandlock(w, p.Caps.LandlockABI)
+	if p.Caps.LandlockABI > 0 {
+		printCap(w, "landlock", nil, fmt.Sprintf("ABI v%d", p.Caps.LandlockABI))
+	} else {
+		printCap(w, "landlock", fmt.Errorf("unavailable"), "")
+	}
 	ln()
 
 	ln("curb: sandbox plan")
@@ -183,8 +189,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		rw := make([]string, len(p.RWPaths))
 		copy(rw, p.RWPaths)
 		for i, path := range rw {
-			cwd, _ := os.Getwd()
-			if path == cwd && p.CWDWritable {
+			if path == p.CWD && p.CWDWritable {
 				rw[i] = ". (Git working tree detected)"
 			}
 		}
@@ -210,9 +215,14 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 
 	// Environment.
 	ln("  environment:")
+	keys := make([]string, 0, len(p.EnvSet))
+	for k := range p.EnvSet {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var setParts []string
-	for k, v := range p.EnvSet {
-		setParts = append(setParts, k+"="+v)
+	for _, k := range keys {
+		setParts = append(setParts, k+"="+p.EnvSet[k])
 	}
 	if len(setParts) > 0 {
 		pr("    set:        %s\n", strings.Join(setParts, " "))
@@ -250,14 +260,5 @@ func printCap(w io.Writer, name string, err error, info string) {
 		}
 	} else {
 		_, _ = fmt.Fprintf(w, "%sunavailable (%s)\n", label, err)
-	}
-}
-
-func printLandlock(w io.Writer, abi int) {
-	label := fmt.Sprintf("  %-20s", "landlock:")
-	if abi > 0 {
-		_, _ = fmt.Fprintf(w, "%sok (ABI v%d)\n", label, abi)
-	} else {
-		_, _ = fmt.Fprintf(w, "%sunavailable\n", label)
 	}
 }

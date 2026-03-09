@@ -16,9 +16,9 @@ import (
 func ProbeAll() *Capabilities {
 	caps := &Capabilities{}
 	caps.KernelInfo = probeKernel()
-	caps.UserNS = probeUserNS()
-	caps.MountNS = probeMountNS()
-	caps.NetNS = probeNetNS()
+	caps.UserNS = probeNS(syscall.CLONE_NEWUSER, "user namespace")
+	caps.MountNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNS, "mount namespace")
+	caps.NetNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNET, "network namespace")
 	caps.TUN = probeTUN()
 	caps.LandlockABI = probeLandlock()
 	return caps
@@ -32,35 +32,14 @@ func probeKernel() string {
 	return strings.TrimRight(string(uname.Release[:]), "\x00")
 }
 
-func probeUserNS() error {
+// probeNS tests namespace creation by spawning a child with the given clone flags.
+func probeNS(flags uintptr, name string) error {
 	cmd := exec.Command("/bin/true")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUSER,
+		Cloneflags: flags,
 	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("user namespace creation failed: %w", err)
-	}
-	return nil
-}
-
-func probeMountNS() error {
-	cmd := exec.Command("/bin/true")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
-	}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("mount namespace creation failed: %w", err)
-	}
-	return nil
-}
-
-func probeNetNS() error {
-	cmd := exec.Command("/bin/true")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
-	}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("network namespace creation failed: %w", err)
+		return fmt.Errorf("%s creation failed: %w", name, err)
 	}
 	return nil
 }
