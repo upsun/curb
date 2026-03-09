@@ -47,7 +47,7 @@ func RecvFD(conn *os.File) (int, error) {
 		if err == nil && len(fds) > 0 {
 			// Close any extra fds beyond the first to avoid leaks.
 			for _, extra := range fds[1:] {
-				unix.Close(extra)
+				_ = unix.Close(extra)
 			}
 			runtime.KeepAlive(conn)
 			return fds[0], nil

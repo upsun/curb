@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -236,9 +237,7 @@ func isInternalEnvVar(name string) bool {
 // resolveEnv resolves the final environment from EnvSet and EnvPassthrough.
 func (p *SandboxPlan) resolveEnv() []string {
 	env := make(map[string]string, len(p.EnvSet))
-	for k, v := range p.EnvSet {
-		env[k] = v
-	}
+	maps.Copy(env, p.EnvSet)
 	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
 		for _, e := range os.Environ() {
 			k, v, _ := strings.Cut(e, "=")

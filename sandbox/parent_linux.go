@@ -24,8 +24,8 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// Create socketpair for later fd passing (TAP fd in WP07).
 	sockParent, sockChild, err := CreateSocketPair()
 	if err != nil {
-		configR.Close()
-		configW.Close()
+		_ = configR.Close()
+		_ = configW.Close()
 		return -1, fmt.Errorf("creating socketpair: %w", err)
 	}
 
@@ -37,10 +37,10 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// /proc/self/exe is a magic link that some kernels restrict inside user namespaces.
 	self, err := os.Executable()
 	if err != nil {
-		configR.Close()
-		configW.Close()
-		sockParent.Close()
-		sockChild.Close()
+		_ = configR.Close()
+		_ = configW.Close()
+		_ = sockParent.Close()
+		_ = sockChild.Close()
 		signal.Stop(sigCh)
 		return -1, fmt.Errorf("resolving executable path: %w", err)
 	}
@@ -64,16 +64,16 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 
 	if err := cmd.Start(); err != nil {
 		signal.Stop(sigCh)
-		configR.Close()
-		configW.Close()
-		sockParent.Close()
-		sockChild.Close()
+		_ = configR.Close()
+		_ = configW.Close()
+		_ = sockParent.Close()
+		_ = sockChild.Close()
 		return -1, fmt.Errorf("starting sandbox: %w", err)
 	}
 
 	// Child has inherited these fds; close our copies.
-	configR.Close()
-	sockChild.Close()
+	_ = configR.Close()
+	_ = sockChild.Close()
 
 	// Write config to the pipe.
 	cfg := plan.childConfig()
@@ -81,11 +81,11 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		signal.Stop(sigCh)
-		configW.Close()
-		sockParent.Close()
+		_ = configW.Close()
+		_ = sockParent.Close()
 		return -1, fmt.Errorf("writing config to child: %w", err)
 	}
-	configW.Close()
+	_ = configW.Close()
 
 	// Forward signals to the child.
 	go func() {
@@ -98,7 +98,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	waitErr := cmd.Wait()
 	signal.Stop(sigCh)
 	close(sigCh)
-	sockParent.Close()
+	_ = sockParent.Close()
 
 	if waitErr == nil {
 		return 0, nil

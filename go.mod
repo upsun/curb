@@ -1,6 +1,6 @@
 module github.com/upsun/curb
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/landlock-lsm/go-landlock v0.7.0

@@ -35,10 +35,10 @@ func childInit() error {
 	if err := json.NewDecoder(configFile).Decode(&cfg); err != nil {
 		return fmt.Errorf("reading config: %w", err)
 	}
-	configFile.Close()
+	_ = configFile.Close()
 
 	// TODO(WP07): Use sockFile for TAP fd passing.
-	sockFile.Close()
+	_ = sockFile.Close()
 
 	// Filesystem enforcement: mounts first, then Landlock.
 	// Landlock would block mount syscalls if enforced first.

@@ -13,8 +13,8 @@ import (
 func TestCreateSocketPair(t *testing.T) {
 	parent, child, err := CreateSocketPair()
 	require.NoError(t, err)
-	defer parent.Close()
-	defer child.Close()
+	defer func() { _ = parent.Close() }()
+	defer func() { _ = child.Close() }()
 
 	assert.Greater(t, int(parent.Fd()), 2)
 	assert.Greater(t, int(child.Fd()), 2)
@@ -23,14 +23,14 @@ func TestCreateSocketPair(t *testing.T) {
 func TestSendRecvFD(t *testing.T) {
 	parent, child, err := CreateSocketPair()
 	require.NoError(t, err)
-	defer parent.Close()
-	defer child.Close()
+	defer func() { _ = parent.Close() }()
+	defer func() { _ = child.Close() }()
 
 	// Create a pipe as a test fd to send.
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	defer r.Close()
-	defer w.Close()
+	defer func() { _ = r.Close() }()
+	defer func() { _ = w.Close() }()
 
 	// Send the write end from child to parent.
 	err = SendFD(child, int(w.Fd()))
@@ -43,7 +43,7 @@ func TestSendRecvFD(t *testing.T) {
 
 	// Write through the received fd and read from original read end.
 	received := os.NewFile(uintptr(fd), "received")
-	defer received.Close()
+	defer func() { _ = received.Close() }()
 
 	_, err = received.Write([]byte("hello"))
 	require.NoError(t, err)

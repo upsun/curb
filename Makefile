@@ -11,6 +11,7 @@ test-coverage:
 	go tool cover -func=coverage.out
 
 lint:
+	@test -z "$$(go fix -diff ./... 2>&1)" || { go fix -diff ./...; echo "go fix: run 'go fix ./...' to apply fixes"; exit 1; }
 	golangci-lint run ./...
 
 clean:

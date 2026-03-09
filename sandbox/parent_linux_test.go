@@ -42,12 +42,12 @@ func TestMain(m *testing.M) {
 	cmd.Dir = ".."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "build: %v\n%s\n", err, out)
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}
 
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 
@@ -352,7 +352,7 @@ func TestCurb_FS_WriteGitCWDAllowed(t *testing.T) {
 	cmd.Dir = gitDir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected CWD write in git dir to succeed: %s", string(out))
-	os.Remove(testFile)
+	_ = os.Remove(testFile)
 }
 
 // TestCurb_FS_WriteNonGitCWDBlocked verifies that CWD is read-only in a non-git directory.
@@ -399,7 +399,7 @@ func TestCurb_FS_NoFSRestrict(t *testing.T) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected --no-fs-restrict to allow writes: %s", string(out))
-	os.Remove(testFile)
+	_ = os.Remove(testFile)
 }
 
 // TestCurb_FS_HiddenPath verifies that hidden paths are overmounted with empty tmpfs.
@@ -417,7 +417,7 @@ func TestCurb_FS_HiddenPath(t *testing.T) {
 	outStr := strings.TrimSpace(string(out))
 	// Filter out warning lines.
 	var lines []string
-	for _, line := range strings.Split(outStr, "\n") {
+	for line := range strings.SplitSeq(outStr, "\n") {
 		if !strings.HasPrefix(line, "curb:") {
 			lines = append(lines, line)
 		}

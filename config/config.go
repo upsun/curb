@@ -241,7 +241,7 @@ func appendEnvList(existing []string, envKey string) []string {
 
 func splitComma(s string) []string {
 	var result []string
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
 		if part != "" {
 			result = append(result, part)
