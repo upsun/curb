@@ -162,15 +162,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan.AllowedDomains = cfg.AllowedDomains
 
 	// Environment policy.
-	plan.EnvSet = map[string]string{
-		"HOME":   cfg.HomePath,
-		"TMPDIR": tmpDir,
-		"PATH":   strings.Join(config.SystemExecPaths, ":"),
-		"SHELL":  "/bin/sh",
-	}
-	if plan.EnvSet["HOME"] == "" {
-		plan.EnvSet["HOME"] = tmpDir
-	}
+	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
 	for _, pair := range cfg.EnvSet {
 		k, v, _ := strings.Cut(pair, "=")
 		plan.EnvSet[k] = v
@@ -213,12 +205,18 @@ func (p *SandboxPlan) resolveEnv() []string {
 	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
 		for _, e := range os.Environ() {
 			k, v, _ := strings.Cut(e, "=")
+			if k == InitEnvKey || strings.HasPrefix(k, "_CURB_") {
+				continue // Never leak internal env vars.
+			}
 			if _, ok := env[k]; !ok {
 				env[k] = v
 			}
 		}
 	} else {
 		for _, name := range p.EnvPassthrough {
+			if name == InitEnvKey || strings.HasPrefix(name, "_CURB_") {
+				continue // Never leak internal env vars.
+			}
 			if v, ok := os.LookupEnv(name); ok {
 				if _, set := env[name]; !set {
 					env[name] = v

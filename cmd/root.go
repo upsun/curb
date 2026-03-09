@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
 	"github.com/upsun/curb/config"
 	"github.com/upsun/curb/sandbox"
-	"github.com/spf13/cobra"
 )
 
 // NewRootCmd creates the curb root command.
@@ -34,6 +34,10 @@ The target command must follow a -- separator.`,
 			}
 			config.MergeEnv(cfg, cmd)
 			cfg.Command = args
+
+			if cfg.EnvPassthroughAll {
+				fmt.Fprintln(os.Stderr, "curb: warning: --env-passthrough passes entire host environment to child")
+			}
 
 			caps := sandbox.ProbeAll()
 			plan, err := sandbox.BuildPlan(cfg, caps)

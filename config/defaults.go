@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // DefaultHiddenPaths are sensitive dotfile directories hidden from the child process.
 var DefaultHiddenPaths = []string{
 	"~/.ssh",
@@ -39,4 +41,22 @@ var SystemExecPaths = []string{
 	"/usr/local/bin",
 	"/usr/sbin",
 	"/sbin",
+}
+
+// DefaultPath is the default PATH value for sandboxed processes.
+var DefaultPath = strings.Join(SystemExecPaths, ":")
+
+// ForcedEnvVars returns the environment variables that are always set in the sandbox.
+// HOME defaults to tmpDir unless homePath overrides it. TMPDIR is always tmpDir.
+func ForcedEnvVars(tmpDir, homePath string) map[string]string {
+	home := homePath
+	if home == "" {
+		home = tmpDir
+	}
+	return map[string]string{
+		"HOME":   home,
+		"TMPDIR": tmpDir,
+		"PATH":   DefaultPath,
+		"SHELL":  "/bin/sh",
+	}
 }

@@ -6,9 +6,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/upsun/curb/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/upsun/curb/config"
 )
 
 func TestProbeAll_ReturnsResults(t *testing.T) {
