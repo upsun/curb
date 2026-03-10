@@ -28,6 +28,7 @@ type Config struct {
 	AllowHTTP         bool
 	LogFile           string
 	Verbose           bool
+	Debug             bool
 	Quiet             bool
 	DryRun            bool
 	HomePath          string
@@ -91,6 +92,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	debug, err := flags.GetBool("debug")
+	if err != nil {
+		return nil, err
+	}
 	quiet, err := flags.GetBool("quiet")
 	if err != nil {
 		return nil, err
@@ -121,6 +126,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		AllowHTTP:      allowHTTP,
 		LogFile:        logFile,
 		Verbose:        verbose,
+		Debug:          debug,
 		Quiet:          quiet,
 		DryRun:         dryRun,
 		HomePath:       home,
@@ -208,6 +214,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	// Bool values: env only if flag not explicitly set.
 	mergeBoolEnv(flags, &cfg.AllowLocalhost, "allow-localhost", "CURB_ALLOW_LOCALHOST")
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
+	mergeBoolEnv(flags, &cfg.Debug, "debug", "CURB_DEBUG")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
 	// ECH mode: env only if flag not explicitly set.

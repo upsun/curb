@@ -162,13 +162,16 @@ func parseSNIExtension(data []byte) string {
 func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 	defer func() { _ = local.Close() }()
 
+	filter.Logger.Debug("tls read ClientHello: %s", dst)
 	_ = local.SetReadDeadline(time.Now().Add(tlsReadTimeout))
 	buf := make([]byte, tlsMaxRead)
 	n, err := local.Read(buf)
 	if err != nil || n == 0 {
+		filter.Logger.Debug("tls read failed: %s (n=%d, err=%v)", dst, n, err)
 		return
 	}
 	data := buf[:n]
+	filter.Logger.Debug("tls read %d bytes: %s", n, dst)
 
 	sni, hasECH, parseErr := ParseClientHello(data)
 
@@ -220,11 +223,13 @@ func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 	// Clear deadline for relay.
 	_ = local.SetReadDeadline(time.Time{})
 
+	filter.Logger.Debug("tls dial remote: %s (sni=%q)", dst, sni)
 	remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 	if dialErr != nil {
 		filter.Logger.Warn("tls forward %s: %v", dst, dialErr)
 		return
 	}
+	filter.Logger.Debug("tls dial ok: %s", dst)
 
 	// Write the buffered data to the remote before relaying.
 	if _, err := remote.Write(data); err != nil {
@@ -233,5 +238,5 @@ func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 		return
 	}
 
-	relay(local, remote)
+	relay(local, remote, dst, filter.Logger)
 }

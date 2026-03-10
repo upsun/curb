@@ -80,13 +80,14 @@ func TestNilSafety(t *testing.T) {
 		l.Warn("noop")
 		l.Error("noop")
 		l.Info("noop")
+		l.Debug("noop")
 		l.Event("test", "test", "test", "")
 		l.Close()
 	})
 }
 
 func TestNew(t *testing.T) {
-	l, err := New("", false, false)
+	l, err := New("", false, false, false)
 	require.NoError(t, err)
 	defer l.Close()
 	assert.NotNil(t, l)

@@ -37,7 +37,7 @@ Use -- before the command when it has its own flags.`,
 			config.MergeEnv(cfg, cmd)
 			cfg.Command = args
 
-			logger, logErr := clog.New(cfg.LogFile, cfg.Verbose, cfg.Quiet)
+			logger, logErr := clog.New(cfg.LogFile, cfg.Verbose, cfg.Debug, cfg.Quiet)
 			if logErr != nil {
 				return logErr
 			}
@@ -127,6 +127,7 @@ func registerFlags(cmd *cobra.Command) {
 	// Logging.
 	f.String("log-file", "", "write structured JSON logs to file")
 	f.BoolP("verbose", "v", false, "verbose output")
+	f.Bool("debug", false, "detailed netstack/relay debug logging (implies -v)")
 	f.BoolP("quiet", "q", false, "suppress warnings")
 
 	// Other.

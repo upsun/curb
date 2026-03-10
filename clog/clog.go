@@ -26,6 +26,7 @@ const (
 type Logger struct {
 	json    *slog.Logger // JSON logger for --log-file (nil if unset).
 	verbose bool         // --verbose: human-readable to stderr.
+	debug   bool         // --debug: detailed netstack/relay logging to stderr.
 	quiet   bool         // --quiet: suppress warnings.
 	color   bool         // Whether stderr supports color.
 	w       io.Writer    // Output writer (defaults to os.Stderr).
@@ -34,10 +35,12 @@ type Logger struct {
 
 // New creates a Logger. If logFile is non-empty, JSON events are written to
 // that file. If verbose is true, human-readable lines are written to stderr.
+// If debug is true, detailed netstack/relay logging is enabled (implies verbose).
 // If quiet is true, warnings are suppressed.
-func New(logFile string, verbose, quiet bool) (*Logger, error) {
+func New(logFile string, verbose, debug, quiet bool) (*Logger, error) {
 	l := &Logger{
-		verbose: verbose,
+		verbose: verbose || debug,
+		debug:   debug,
 		quiet:   quiet,
 		w:       os.Stderr,
 	}
@@ -124,6 +127,19 @@ func (l *Logger) Event(event, domain, action, reason string) {
 			_, _ = fmt.Fprintf(l.w, "curb: %s\n", msg)
 		}
 	}
+}
+
+// IsDebug reports whether debug logging is enabled.
+func (l *Logger) IsDebug() bool {
+	return l != nil && l.debug
+}
+
+// Debug prints a debug message to stderr, only when --debug is enabled.
+func (l *Logger) Debug(format string, args ...any) {
+	if !l.IsDebug() {
+		return
+	}
+	l.printLevel("debug", ansiDim, fmt.Sprintf(format, args...))
 }
 
 // Close closes the log file if open.

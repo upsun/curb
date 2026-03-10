@@ -86,5 +86,5 @@ func handleHTTPConnection(local net.Conn, dst string, filter *FilterConfig) {
 		return
 	}
 
-	relay(local, remote)
+	relay(local, remote, dst, filter.Logger)
 }

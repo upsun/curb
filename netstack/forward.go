@@ -67,6 +67,11 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
+			if logger.IsDebug() {
+				logger.Debug("tcp endpoint failed: %s:%d → %s:%d: %v",
+					addrString(id.RemoteAddress), id.RemotePort,
+					addrString(id.LocalAddress), id.LocalPort, err)
+			}
 			r.Complete(true)
 			return
 		}
@@ -74,6 +79,9 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 
 		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewTCPConn(&wq, ep)
+		if logger.IsDebug() {
+			logger.Debug("tcp accept: %s:%d → %s", addrString(id.RemoteAddress), id.RemotePort, dst)
+		}
 
 		// Loopback traffic handling.
 		if isLoopback(id.LocalAddress) {
@@ -95,6 +103,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 				go forwardTCP(local, hostDst, logger)
 				return
 			}
+			logger.Debug("tcp loopback dropped: %s (no AllowLocalhost)", dst)
 			_ = local.Close()
 			return
 		}
@@ -114,6 +123,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 					_ = local.Close()
 				}
 			default:
+				logger.Debug("tcp port %d dropped (not 53/80/443): %s", id.LocalPort, dst)
 				_ = local.Close()
 			}
 			return
@@ -122,6 +132,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 		// If a filter is set but has no Check function (localhost-only mode),
 		// drop all non-loopback traffic.
 		if filter != nil {
+			logger.Debug("tcp dropped (localhost-only mode): %s", dst)
 			_ = local.Close()
 			return
 		}
@@ -133,7 +144,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			return
 		}
 
-		go relay(local, remote)
+		go relay(local, remote, dst, logger)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
 }
@@ -146,7 +157,7 @@ func forwardTCP(local net.Conn, dst string, logger *clog.Logger) {
 		_ = local.Close()
 		return
 	}
-	relay(local, remote)
+	relay(local, remote, dst, logger)
 }
 
 // setupUDPForwarding installs a UDP forwarder that proxies packets to the real network.
@@ -197,6 +208,7 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 				go relayUDP(local, remote)
 				return true
 			}
+			logger.Debug("udp loopback dropped: %s", dst)
 			_ = local.Close()
 			return true
 		}
@@ -206,6 +218,7 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			if id.LocalPort == dnsPort {
 				go dnsFilter.handleQuery(local, dst)
 			} else {
+				logger.Debug("udp port %d dropped (not 53): %s", id.LocalPort, dst)
 				_ = local.Close()
 			}
 			return true
@@ -232,16 +245,24 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 }
 
 // relay copies data bidirectionally between two connections, then closes both.
-func relay(a, b net.Conn) {
+func relay(a, b net.Conn, dst string, logger *clog.Logger) {
+	logger.Debug("relay start: %s", dst)
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(a, b)
+		n, err := io.Copy(a, b)
+		if err != nil {
+			logger.Debug("relay remote→local: %s (%d bytes, err=%v)", dst, n, err)
+		}
 		close(done)
 	}()
-	_, _ = io.Copy(b, a)
+	n, err := io.Copy(b, a)
+	if err != nil {
+		logger.Debug("relay local→remote: %s (%d bytes, err=%v)", dst, n, err)
+	}
 	<-done
 	_ = a.Close()
 	_ = b.Close()
+	logger.Debug("relay done: %s (%d bytes client→server)", dst, n)
 }
 
 // relayUDP copies data bidirectionally between a gonet UDPConn and a real net.Conn.
