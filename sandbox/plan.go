@@ -47,7 +47,7 @@ type SandboxPlan struct {
 	GitHooksPath   string
 	NetEnabled     bool
 	AllowedDomains []string
-	ExactMatch     bool
+	AllowLocalhost bool
 	DNSUpstream    string
 	BlockECH       bool
 	RequireSNI     bool
@@ -86,7 +86,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSFixMessage())
 	}
 
-	if len(cfg.AllowedDomains) > 0 || cfg.AllowFile != "" {
+	if len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost {
 		if caps.NetNS != nil {
 			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSFixMessage())
 		}
@@ -187,7 +187,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
 				plan.ExecPaths = append(plan.ExecPaths, abs)
 			} else {
-				return nil, fmt.Errorf("--exec %s: not found in PATH", name)
+				return nil, fmt.Errorf("--allow-exec %s: not found in PATH", name)
 			}
 		}
 		if len(cfg.Command) > 0 {
@@ -201,7 +201,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 
 	// Network policy.
-	plan.NetEnabled = len(cfg.AllowedDomains) > 0 || cfg.AllowFile != ""
+	plan.NetEnabled = len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost
 	if plan.NetEnabled && !cfg.NoFSRestrict {
 		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
 		// On systemd systems, /etc/resolv.conf is a symlink to /run/systemd/resolve/,
@@ -211,7 +211,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		}
 	}
 	plan.AllowedDomains = cfg.AllowedDomains
-	plan.ExactMatch = cfg.ExactMatch
+	plan.AllowLocalhost = cfg.AllowLocalhost
 	plan.DNSUpstream = cfg.DNSUpstream
 	plan.BlockECH = cfg.BlockECH
 	plan.RequireSNI = cfg.RequireSNI
@@ -350,9 +350,12 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	if p.NetEnabled && len(p.AllowedDomains) > 0 {
 		pr("    allowed:    %s\n", strings.Join(p.AllowedDomains, " "))
 	} else if p.NetEnabled {
-		ln("    allowed:    (from file)")
+		ln("    allowed:    localhost only")
 	} else {
 		ln("    allowed:    none (no network interface)")
+	}
+	if p.AllowLocalhost {
+		ln("    localhost:  forwarded to host")
 	}
 	if p.NetEnabled && len(p.AllowedDomains) > 0 {
 		pr("    tls (443):  SNI filtered")

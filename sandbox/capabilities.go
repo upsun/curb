@@ -4,8 +4,8 @@ package sandbox
 type Capabilities struct {
 	UserNS      error  // nil = ok, non-nil = fatal.
 	MountNS     error  // nil = ok, non-nil = warn (degrade).
-	NetNS       error  // nil = ok, non-nil = fatal if --allow used.
-	TUN         error  // nil = ok, non-nil = fatal if --allow used.
+	NetNS       error  // nil = ok, non-nil = fatal if --allow-domains used.
+	TUN         error  // nil = ok, non-nil = fatal if --allow-domains used.
 	LandlockABI int    // 0 = unavailable, 1-5 = version.
 	KernelInfo  string // e.g., "6.8.0-100-generic".
 }
@@ -29,17 +29,17 @@ func mountNSWarnMessage() string {
 
 // netNSFixMessage returns an actionable fix message for network namespace errors.
 func netNSFixMessage() string {
-	return `Network namespaces are required for --allow but not available.
+	return `Network namespaces are required for --allow-domains/--allow-localhost but not available.
 
   To fix (temporarily):
     sudo sysctl -w kernel.unprivileged_userns_clone=1
 
-  Remove --allow flags to run without network filtering.`
+  Remove --allow-domains/--allow-localhost to run without network filtering.`
 }
 
 // tunFixMessage returns an actionable fix message for TUN device errors.
 func tunFixMessage() string {
-	return `/dev/net/tun is required for --allow but not available.
+	return `/dev/net/tun is required for --allow-domains/--allow-localhost but not available.
 
   To fix (device missing):
     sudo mkdir -p /dev/net
@@ -52,7 +52,7 @@ func tunFixMessage() string {
        For full DNS support, also add: capability sys_admin,
     3. sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
 
-  Remove --allow flags to run without network filtering.`
+  Remove --allow-domains/--allow-localhost to run without network filtering.`
 }
 
 // landlockWarnMessage returns a warning for missing Landlock support.

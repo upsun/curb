@@ -2,22 +2,23 @@ package policy
 
 import "strings"
 
-// DomainMatcher checks domain names against an allowlist with exact, wildcard,
-// and subdomain matching support.
+// DomainMatcher checks domain names against an allowlist with exact and
+// wildcard matching support.
+// Bare domains match exactly: "example.com" matches only "example.com".
+// Wildcards match subdomains: "*.example.com" matches "api.example.com" but not "example.com".
+// Use both for full coverage: "example.com,*.example.com".
 type DomainMatcher struct {
 	exactDomains     map[string]bool
 	wildcardSuffixes []string
-	exactOnly        bool
 	matchAll         bool
 }
 
 // NewDomainMatcher creates a matcher from a list of domain patterns.
 // Patterns can be exact ("example.com"), wildcard ("*.github.com"), or "*" (match all).
-// Unless exactOnly is true, "example.com" also matches "sub.example.com".
-func NewDomainMatcher(domains []string, exactOnly bool) *DomainMatcher {
+// Bare domains match exactly (no implicit subdomain matching).
+func NewDomainMatcher(domains []string) *DomainMatcher {
 	m := &DomainMatcher{
 		exactDomains: make(map[string]bool),
-		exactOnly:    exactOnly,
 	}
 	for _, d := range domains {
 		d = normalizeDomain(d)
@@ -48,15 +49,6 @@ func (m *DomainMatcher) Match(domain string) bool {
 	// Exact match.
 	if m.exactDomains[domain] {
 		return true
-	}
-
-	// Subdomain of an exact domain (unless exactOnly).
-	if !m.exactOnly {
-		for d := range m.exactDomains {
-			if strings.HasSuffix(domain, "."+d) {
-				return true
-			}
-		}
 	}
 
 	// Wildcard suffix match.

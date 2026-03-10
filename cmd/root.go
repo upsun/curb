@@ -51,14 +51,14 @@ The target command must follow a -- separator.`,
 				return nil
 			}
 
-			if cfg.NoExecRestrict {
+			if cfg.Verbose && cfg.NoExecRestrict {
 				fmt.Fprintln(os.Stderr, "curb: info: executable restrictions disabled")
 			}
 
 			exitCode, err := sandbox.StartSandbox(plan)
 			plan.Cleanup()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "curb: %v\n", err)
+				fmt.Fprintf(os.Stderr, "curb: error: %v\n", err)
 				os.Exit(sandbox.ExitSetupFailure)
 			}
 			os.Exit(exitCode)
@@ -76,16 +76,15 @@ func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 
 	// Domain filtering.
-	f.StringSlice("allow", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
-	f.String("allow-file", "", "file containing allowed domains (one per line)")
+	f.StringSlice("allow-domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 
 	// Filesystem.
-	f.StringSlice("ro", nil, "additional read-only paths")
-	f.StringSlice("rw", nil, "additional read-write paths")
-	f.StringSlice("hide", nil, "paths to hide from the child process")
+	f.StringSlice("fs-ro", nil, "additional read-only paths")
+	f.StringSlice("fs-rw", nil, "additional read-write paths")
+	f.StringSlice("fs-hide", nil, "paths to hide from the child process")
 
 	// Executable control.
-	f.StringSlice("exec", nil, "additional allowed executables")
+	f.StringSlice("allow-exec", nil, "additional allowed executables")
 
 	// Environment.
 	f.StringSlice("env", nil, "env vars to pass through (NAME) or set (NAME=VALUE)")
@@ -100,12 +99,10 @@ func registerFlags(cmd *cobra.Command) {
 	f.Bool("unsafe-allow-ech", false, "allow TLS Encrypted Client Hello (reduces filtering)")
 	f.Bool("unsafe-allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
 	f.Bool("unsafe-allow-http", false, "allow plaintext HTTP when domain filtering is active")
-	f.Bool("exact-match", false, "disable subdomain matching for allowed domains")
 	f.String("dns-upstream", "", "upstream DNS resolver address")
 
 	// Logging.
-	f.Bool("log-blocked", true, "log blocked access attempts to stderr")
-	f.Bool("log-allowed", false, "log allowed access to stderr")
+	f.String("log-file", "", "write structured JSON logs to file")
 	f.BoolP("verbose", "v", false, "verbose output")
 
 	// Other.

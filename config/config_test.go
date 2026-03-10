@@ -16,12 +16,11 @@ func newTestCmd(args []string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error { return nil },
 	}
 	f := cmd.Flags()
-	f.StringSlice("allow", nil, "")
-	f.String("allow-file", "", "")
-	f.StringSlice("ro", nil, "")
-	f.StringSlice("rw", nil, "")
-	f.StringSlice("hide", nil, "")
-	f.StringSlice("exec", nil, "")
+	f.StringSlice("allow-domains", nil, "")
+	f.StringSlice("fs-ro", nil, "")
+	f.StringSlice("fs-rw", nil, "")
+	f.StringSlice("fs-hide", nil, "")
+	f.StringSlice("allow-exec", nil, "")
 	f.StringSlice("env", nil, "")
 	f.Bool("env-passthrough", false, "")
 	f.Bool("no-fs-restrict", false, "")
@@ -30,10 +29,8 @@ func newTestCmd(args []string) *cobra.Command {
 	f.Bool("unsafe-allow-ech", false, "")
 	f.Bool("unsafe-allow-no-sni", false, "")
 	f.Bool("unsafe-allow-http", false, "")
-	f.Bool("exact-match", false, "")
 	f.String("dns-upstream", "", "")
-	f.Bool("log-blocked", true, "")
-	f.Bool("log-allowed", false, "")
+	f.String("log-file", "", "")
 	f.BoolP("verbose", "v", false, "")
 	f.Bool("dry-run", false, "")
 	f.String("home", "", "")
@@ -49,7 +46,6 @@ func TestFromFlags_Defaults(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, cfg.AllowedDomains)
-	assert.Empty(t, cfg.AllowFile)
 	assert.Empty(t, cfg.ROPaths)
 	assert.Empty(t, cfg.RWPaths)
 	assert.False(t, cfg.EnvPassthroughAll)
@@ -58,20 +54,18 @@ func TestFromFlags_Defaults(t *testing.T) {
 	assert.True(t, cfg.BlockECH, "BlockECH defaults to true")
 	assert.True(t, cfg.RequireSNI, "RequireSNI defaults to true")
 	assert.False(t, cfg.AllowHTTP, "AllowHTTP defaults to false")
-	assert.True(t, cfg.LogBlocked, "LogBlocked defaults to true")
-	assert.False(t, cfg.LogAllowed)
+	assert.Empty(t, cfg.LogFile)
 	assert.False(t, cfg.Verbose)
 	assert.False(t, cfg.DryRun)
 }
 
 func TestFromFlags_AllFlags(t *testing.T) {
 	cmd := newTestCmd([]string{
-		"--allow", "a.com,b.com",
-		"--allow-file", "/tmp/domains.txt",
-		"--ro", "/opt",
-		"--rw", "/data",
-		"--hide", "/secret",
-		"--exec", "rg",
+		"--allow-domains", "a.com,b.com",
+		"--fs-ro", "/opt",
+		"--fs-rw", "/data",
+		"--fs-hide", "/secret",
+		"--allow-exec", "rg",
 		"--env", "GOPATH",
 		"--env", "FOO=bar",
 		"--env-passthrough",
@@ -81,9 +75,8 @@ func TestFromFlags_AllFlags(t *testing.T) {
 		"--unsafe-allow-ech",
 		"--unsafe-allow-no-sni",
 		"--unsafe-allow-http",
-		"--exact-match",
 		"--dns-upstream", "8.8.8.8:53",
-		"--log-allowed",
+		"--log-file", "/tmp/curb.log",
 		"-v",
 		"--dry-run",
 		"--home", "/custom/home",
@@ -92,7 +85,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"a.com", "b.com"}, cfg.AllowedDomains)
-	assert.Equal(t, "/tmp/domains.txt", cfg.AllowFile)
 	assert.Equal(t, []string{"/opt"}, cfg.ROPaths)
 	assert.Equal(t, []string{"/data"}, cfg.RWPaths)
 	assert.Equal(t, []string{"/secret"}, cfg.HiddenPaths)
@@ -106,20 +98,19 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.False(t, cfg.BlockECH, "--unsafe-allow-ech inverts BlockECH")
 	assert.False(t, cfg.RequireSNI, "--unsafe-allow-no-sni inverts RequireSNI")
 	assert.True(t, cfg.AllowHTTP, "--unsafe-allow-http sets AllowHTTP")
-	assert.True(t, cfg.ExactMatch)
 	assert.Equal(t, "8.8.8.8:53", cfg.DNSUpstream)
-	assert.True(t, cfg.LogAllowed)
+	assert.Equal(t, "/tmp/curb.log", cfg.LogFile)
 	assert.True(t, cfg.Verbose)
 	assert.True(t, cfg.DryRun)
 	assert.Equal(t, "/custom/home", cfg.HomePath)
 }
 
 func TestMergeEnv_ListsAdditive(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow", "b.com"})
+	cmd := newTestCmd([]string{"--allow-domains", "b.com"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW", "a.com")
+	t.Setenv("CURB_ALLOW_DOMAINS", "a.com")
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"b.com", "a.com"}, cfg.AllowedDomains)
@@ -130,7 +121,7 @@ func TestMergeEnv_CommaSeparatedList(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_EXEC", "rg, jq, fd")
+	t.Setenv("CURB_ALLOW_EXEC", "rg, jq, fd")
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"rg", "jq", "fd"}, cfg.ExecAllow)

@@ -11,7 +11,6 @@ import (
 // Config holds the resolved configuration after merging CLI flags, CURB_* env vars, and defaults.
 type Config struct {
 	AllowedDomains    []string
-	AllowFile         string
 	ROPaths           []string
 	RWPaths           []string
 	HiddenPaths       []string
@@ -25,10 +24,8 @@ type Config struct {
 	BlockECH          bool
 	RequireSNI        bool
 	AllowHTTP         bool
-	ExactMatch        bool
 	DNSUpstream       string
-	LogBlocked        bool
-	LogAllowed        bool
+	LogFile           string
 	Verbose           bool
 	DryRun            bool
 	HomePath          string
@@ -39,27 +36,23 @@ type Config struct {
 func FromFlags(cmd *cobra.Command) (*Config, error) {
 	flags := cmd.Flags()
 
-	allow, err := flags.GetStringSlice("allow")
+	allow, err := flags.GetStringSlice("allow-domains")
 	if err != nil {
 		return nil, err
 	}
-	allowFile, err := flags.GetString("allow-file")
+	ro, err := flags.GetStringSlice("fs-ro")
 	if err != nil {
 		return nil, err
 	}
-	ro, err := flags.GetStringSlice("ro")
+	rw, err := flags.GetStringSlice("fs-rw")
 	if err != nil {
 		return nil, err
 	}
-	rw, err := flags.GetStringSlice("rw")
+	hide, err := flags.GetStringSlice("fs-hide")
 	if err != nil {
 		return nil, err
 	}
-	hide, err := flags.GetStringSlice("hide")
-	if err != nil {
-		return nil, err
-	}
-	exec, err := flags.GetStringSlice("exec")
+	exec, err := flags.GetStringSlice("allow-exec")
 	if err != nil {
 		return nil, err
 	}
@@ -95,19 +88,11 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	exactMatch, err := flags.GetBool("exact-match")
-	if err != nil {
-		return nil, err
-	}
 	dnsUpstream, err := flags.GetString("dns-upstream")
 	if err != nil {
 		return nil, err
 	}
-	logBlocked, err := flags.GetBool("log-blocked")
-	if err != nil {
-		return nil, err
-	}
-	logAllowed, err := flags.GetBool("log-allowed")
+	logFile, err := flags.GetString("log-file")
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +121,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 
 	cfg := &Config{
 		AllowedDomains:    allow,
-		AllowFile:         allowFile,
 		ROPaths:           ro,
 		RWPaths:           rw,
 		HiddenPaths:       hide,
@@ -150,10 +134,8 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		BlockECH:          !unsafeAllowECH,
 		RequireSNI:        !unsafeAllowNoSNI,
 		AllowHTTP:         unsafeAllowHTTP,
-		ExactMatch:        exactMatch,
 		DNSUpstream:       dnsUpstream,
-		LogBlocked:        logBlocked,
-		LogAllowed:        logAllowed,
+		LogFile:           logFile,
 		Verbose:           verbose,
 		DryRun:            dryRun,
 		HomePath:          home,
@@ -170,11 +152,11 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	flags := cmd.Flags()
 
 	// List values: always additive.
-	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_ALLOW")
-	cfg.ROPaths = appendEnvList(cfg.ROPaths, "CURB_RO")
-	cfg.RWPaths = appendEnvList(cfg.RWPaths, "CURB_RW")
-	cfg.HiddenPaths = appendEnvList(cfg.HiddenPaths, "CURB_HIDE")
-	cfg.ExecAllow = appendEnvList(cfg.ExecAllow, "CURB_EXEC")
+	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_ALLOW_DOMAINS")
+	cfg.ROPaths = appendEnvList(cfg.ROPaths, "CURB_FS_RO")
+	cfg.RWPaths = appendEnvList(cfg.RWPaths, "CURB_FS_RW")
+	cfg.HiddenPaths = appendEnvList(cfg.HiddenPaths, "CURB_FS_HIDE")
+	cfg.ExecAllow = appendEnvList(cfg.ExecAllow, "CURB_ALLOW_EXEC")
 
 	// --env via CURB_ENV: split and classify like FromFlags.
 	if val, ok := os.LookupEnv("CURB_ENV"); ok {
@@ -188,11 +170,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	}
 
 	// String values: env only if flag not explicitly set.
-	if !flags.Changed("allow-file") {
-		if val, ok := os.LookupEnv("CURB_ALLOW_FILE"); ok {
-			cfg.AllowFile = val
-		}
-	}
 	if !flags.Changed("dns-upstream") {
 		if val, ok := os.LookupEnv("CURB_DNS_UPSTREAM"); ok {
 			cfg.DNSUpstream = val
@@ -203,14 +180,17 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 			cfg.HomePath = val
 		}
 	}
+	if !flags.Changed("log-file") {
+		if val, ok := os.LookupEnv("CURB_LOG_FILE"); ok {
+			cfg.LogFile = val
+		}
+	}
 
 	// Bool values: env only if flag not explicitly set.
 	mergeBoolEnv(flags, &cfg.EnvPassthroughAll, "env-passthrough", "CURB_ENV_PASSTHROUGH")
 	mergeBoolEnv(flags, &cfg.NoFSRestrict, "no-fs-restrict", "CURB_NO_FS_RESTRICT")
 	mergeBoolEnv(flags, &cfg.NoExecRestrict, "no-exec-restrict", "CURB_NO_EXEC_RESTRICT")
 	mergeBoolEnv(flags, &cfg.AllowLocalhost, "allow-localhost", "CURB_ALLOW_LOCALHOST")
-	mergeBoolEnv(flags, &cfg.ExactMatch, "exact-match", "CURB_EXACT_MATCH")
-	mergeBoolEnv(flags, &cfg.LogAllowed, "log-allowed", "CURB_LOG_ALLOWED")
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
 
 	// Inverted bool flags: CURB_UNSAFE_ALLOW_ECH=1 → BlockECH=false.

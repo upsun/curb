@@ -417,7 +417,7 @@ func TestCurb_FS_HiddenPath(t *testing.T) {
 	hideDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(hideDir, "secret"), []byte("sensitive"), 0o644))
 
-	cmd := exec.Command(curbBin, "--hide", hideDir, "--", "ls", hideDir)
+	cmd := exec.Command(curbBin, "--fs-hide", hideDir, "--", "ls", hideDir)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "ls on hidden path should succeed (shows empty tmpfs): %s", string(out))
 	outStr := strings.TrimSpace(string(out))
@@ -452,7 +452,7 @@ func TestCurb_FS_PathTraversalBlocked(t *testing.T) {
 	symlink := filepath.Join(dir, "escape")
 	require.NoError(t, os.Symlink("/etc/shadow", symlink))
 
-	cmd := exec.Command(curbBin, "--rw", dir, "--", "cat", symlink)
+	cmd := exec.Command(curbBin, "--fs-rw", dir, "--", "cat", symlink)
 	out, err := cmd.CombinedOutput()
 	// /etc/shadow is only in RO paths, so reading through a symlink should still work
 	// (it resolves to /etc/shadow which is under /etc, a default RO path).
@@ -466,7 +466,7 @@ func TestCurb_FS_PathTraversalBlocked(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmpFile, []byte("original"), 0o644))
 	require.NoError(t, os.Symlink(tmpFile, writeTarget))
 
-	cmd = exec.Command(curbBin, "--rw", dir, "--", "sh", "-c", fmt.Sprintf("echo pwned > %s", writeTarget))
+	cmd = exec.Command(curbBin, "--fs-rw", dir, "--", "sh", "-c", fmt.Sprintf("echo pwned > %s", writeTarget))
 	out, err = cmd.CombinedOutput()
 	require.Error(t, err, "expected write via symlink to non-RW path to fail: %s", string(out))
 }
@@ -503,7 +503,7 @@ func TestCurb_Net_LoopbackDNSRouted(t *testing.T) {
 	requireUserNS(t)
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*", "--", "getent", "hosts", "example.com")
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "*", "--", "getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected DNS resolution to succeed: %s", string(out))
 	assert.NotEmpty(t, strings.TrimSpace(string(out)), "getent should return at least one address")
@@ -549,13 +549,13 @@ func TestCurb_Exec_NonSystemBinaryBlocked(t *testing.T) {
 	copyBinary(t, "/bin/true", bin)
 
 	// Use --rw so the binary is readable, but exec restrictions should block execve().
-	cmd := exec.Command(curbBin, "--rw", dir, "--", "sh", "-c", bin)
+	cmd := exec.Command(curbBin, "--fs-rw", dir, "--", "sh", "-c", bin)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected non-system binary to be blocked: %s", string(out))
 	assert.Contains(t, string(out), "Permission denied")
 }
 
-// TestCurb_Exec_ExecFlagAllows verifies that --exec allows a specific binary.
+// TestCurb_Exec_ExecFlagAllows verifies that --allow-exec allows a specific binary.
 func TestCurb_Exec_ExecFlagAllows(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
@@ -564,9 +564,9 @@ func TestCurb_Exec_ExecFlagAllows(t *testing.T) {
 	bin := filepath.Join(dir, "true")
 	copyBinary(t, "/bin/true", bin)
 
-	cmd := exec.Command(curbBin, "--rw", dir, "--exec", bin, "--", "sh", "-c", bin)
+	cmd := exec.Command(curbBin, "--fs-rw", dir, "--allow-exec", bin, "--", "sh", "-c", bin)
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected --exec to allow binary: %s", string(out))
+	require.NoError(t, err, "expected --allow-execto allow binary: %s", string(out))
 }
 
 // TestCurb_Exec_NoExecRestrict verifies that --no-exec-restrict allows any binary.
@@ -578,19 +578,19 @@ func TestCurb_Exec_NoExecRestrict(t *testing.T) {
 	bin := filepath.Join(dir, "true")
 	copyBinary(t, "/bin/true", bin)
 
-	cmd := exec.Command(curbBin, "--rw", dir, "--no-exec-restrict", "--", "sh", "-c", bin)
+	cmd := exec.Command(curbBin, "--fs-rw", dir, "--no-exec-restrict", "-v", "--", "sh", "-c", bin)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected --no-exec-restrict to allow binary: %s", string(out))
 	assert.Contains(t, string(out), "curb: info: executable restrictions disabled")
 }
 
-// TestCurb_Exec_NotFoundErrors verifies that --exec with an unknown name errors.
+// TestCurb_Exec_NotFoundErrors verifies that --allow-exec with an unknown name errors.
 func TestCurb_Exec_NotFoundErrors(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--exec", "nonexistent_tool_xyz", "--", "echo", "hello")
+	cmd := exec.Command(curbBin, "--allow-exec", "nonexistent_tool_xyz", "--", "echo", "hello")
 	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "expected --exec with nonexistent tool to error: %s", string(out))
+	require.Error(t, err, "expected --allow-exec with nonexistent tool to error: %s", string(out))
 	assert.Contains(t, string(out), "not found in PATH")
 }
 
@@ -638,7 +638,7 @@ func requireNetNS(t *testing.T) {
 	}
 }
 
-// TestCurb_Net_NoNetworkByDefault verifies that without --allow, network is unreachable.
+// TestCurb_Net_NoNetworkByDefault verifies that without --allow-domains, network is unreachable.
 func TestCurb_Net_NoNetworkByDefault(t *testing.T) {
 	requireUserNS(t)
 
@@ -647,7 +647,7 @@ func TestCurb_Net_NoNetworkByDefault(t *testing.T) {
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "--",
 		"sh", "-c", "curl -s --connect-timeout 3 http://93.184.215.14/ >/dev/null 2>&1")
 	err := cmd.Run()
-	require.Error(t, err, "expected curl to fail without --allow")
+	require.Error(t, err, "expected curl to fail without --allow-domains")
 	exitErr, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	// curl exit 6 = couldn't resolve, 7 = couldn't connect, 28 = timeout.
@@ -657,14 +657,14 @@ func TestCurb_Net_NoNetworkByDefault(t *testing.T) {
 		"expected curl failure exit code (6/7/28), got %d", code)
 }
 
-// TestCurb_Net_LoopbackDown verifies that localhost is also unreachable without --allow.
+// TestCurb_Net_LoopbackDown verifies that localhost is also unreachable without --allow-domains.
 func TestCurb_Net_LoopbackDown(t *testing.T) {
 	requireUserNS(t)
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "--",
 		"sh", "-c", "curl -s --connect-timeout 2 http://127.0.0.1/ >/dev/null 2>&1")
 	err := cmd.Run()
-	require.Error(t, err, "expected localhost to be unreachable without --allow")
+	require.Error(t, err, "expected localhost to be unreachable without --allow-domains")
 	exitErr, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	code := exitErr.ExitCode()
@@ -681,7 +681,7 @@ func TestCurb_Net_TCPForwarding(t *testing.T) {
 	// mount namespace support.
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--allow", "*", "--unsafe-allow-http", "--no-fs-restrict", "--no-exec-restrict", "--",
+	cmd := exec.Command(curbBin, "--allow-domains", "*", "--unsafe-allow-http", "--no-fs-restrict", "--no-exec-restrict", "--",
 		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -696,7 +696,7 @@ func TestCurb_Net_TLSWorks(t *testing.T) {
 	// Use --resolve to avoid DNS but still validate the TLS certificate.
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--allow", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
+	cmd := exec.Command(curbBin, "--allow-domains", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
 		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -708,7 +708,7 @@ func TestCurb_Net_TLSWorks(t *testing.T) {
 func TestCurb_Net_NoRawSocketEscape(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--allow", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
+	cmd := exec.Command(curbBin, "--allow-domains", "*", "--no-fs-restrict", "--no-exec-restrict", "--",
 		"sh", "-c", "python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)' 2>&1; echo exit=$?")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -739,7 +739,7 @@ func resolveForTest(t *testing.T, host string) string {
 func TestCurb_DNS_AllowedDomainResolves(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -751,39 +751,39 @@ func TestCurb_DNS_AllowedDomainResolves(t *testing.T) {
 func TestCurb_DNS_BlockedDomainFails(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"getent", "hosts", "other.com")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected blocked domain DNS to fail: %s", string(out))
 }
 
-// TestCurb_DNS_SubdomainAllowed verifies that subdomains of allowed domains resolve (default behavior).
-func TestCurb_DNS_SubdomainAllowed(t *testing.T) {
+// TestCurb_DNS_SubdomainViaWildcard verifies that subdomains resolve when using wildcard patterns.
+func TestCurb_DNS_SubdomainViaWildcard(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "*.example.com", "--",
 		"getent", "hosts", "www.example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
-	require.NoError(t, err, "expected subdomain to resolve: %s", outStr)
+	require.NoError(t, err, "expected subdomain to resolve via wildcard: %s", outStr)
 	assert.NotEmpty(t, strings.TrimSpace(outStr))
 }
 
-// TestCurb_DNS_ExactMatchBlocksSubdomain verifies that --exact-match blocks subdomains.
-func TestCurb_DNS_ExactMatchBlocksSubdomain(t *testing.T) {
+// TestCurb_DNS_BareBlocksSubdomain verifies that bare domain patterns do not match subdomains.
+func TestCurb_DNS_BareBlocksSubdomain(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--exact-match", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"getent", "hosts", "www.example.com")
 	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "expected subdomain to be blocked with --exact-match: %s", string(out))
+	require.Error(t, err, "expected subdomain to be blocked with bare domain pattern: %s", string(out))
 }
 
 // TestCurb_DNS_WildcardAllows verifies that wildcard patterns work for DNS.
 func TestCurb_DNS_WildcardAllows(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*.example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "*.example.com", "--",
 		"getent", "hosts", "www.example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -795,17 +795,17 @@ func TestCurb_DNS_WildcardAllows(t *testing.T) {
 func TestCurb_DNS_WildcardDoesNotMatchBare(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*.example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "*.example.com", "--",
 		"getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected bare domain to be blocked with wildcard: %s", string(out))
 }
 
-// TestCurb_DNS_StarAllowsEverything verifies that --allow '*' allows all DNS queries.
+// TestCurb_DNS_StarAllowsEverything verifies that --allow-domains '*' allows all DNS queries.
 func TestCurb_DNS_StarAllowsEverything(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "*", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "*", "--",
 		"getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -817,7 +817,7 @@ func TestCurb_DNS_StarAllowsEverything(t *testing.T) {
 func TestCurb_DNS_BlockedLogMessage(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"getent", "hosts", "blocked.test")
 	out, _ := cmd.CombinedOutput()
 	assert.Contains(t, string(out), "curb: dns blocked:", "expected blocked DNS log message")
@@ -838,7 +838,7 @@ func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
 
 	// Port 80 is blocked by default (no --unsafe-allow-http), so direct HTTP fails.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "other-domain-not-example.test", "--",
+		"--allow-domains", "other-domain-not-example.test", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -857,7 +857,7 @@ func TestCurb_TLS_AllowedDomainSucceeds(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -873,7 +873,7 @@ func TestCurb_TLS_BlockedDomainFails(t *testing.T) {
 
 	// Allow only "other.test" but connect via IP with SNI "example.com".
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "other.test", "--",
+		"--allow-domains", "other.test", "--",
 		"curl", "-s", "--connect-timeout", "5",
 		"--resolve", fmt.Sprintf("example.com:443:%s", ip), "https://example.com/")
 	out, _ := cmd.CombinedOutput()
@@ -891,7 +891,7 @@ func TestCurb_TLS_DirectIPBlocked(t *testing.T) {
 	// Connect to IP directly via HTTPS. curl sends SNI if a hostname is given,
 	// so use -k and the IP as the URL to avoid sending a hostname SNI.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "other.test", "--",
+		"--allow-domains", "other.test", "--",
 		"curl", "-sk", "--connect-timeout", "5", fmt.Sprintf("https://%s/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -910,7 +910,7 @@ func TestCurb_TLS_PlaintextOn443Blocked(t *testing.T) {
 
 	// Send plaintext HTTP to port 443. The TLS parser should reject it.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s:443/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -927,7 +927,7 @@ func TestCurb_HTTP_AllowedHostSucceeds(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--unsafe-allow-http", "--",
+		"--allow-domains", "example.com", "--unsafe-allow-http", "--",
 		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -942,7 +942,7 @@ func TestCurb_HTTP_BlockedHostGets403(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "other.test", "--unsafe-allow-http", "--",
+		"--allow-domains", "other.test", "--unsafe-allow-http", "--",
 		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 5 http://%s/ -H 'Host: blocked.com' | head -1", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -958,7 +958,7 @@ func TestCurb_HTTP_BlockedByDefault(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -987,7 +987,7 @@ s.close()
 "`, ip)
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--unsafe-allow-http", "--",
+		"--allow-domains", "example.com", "--unsafe-allow-http", "--",
 		"sh", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1006,7 +1006,7 @@ func TestCurb_Net_NonStandardPortDropped(t *testing.T) {
 	// Try to connect on port 8080 (non-standard). The netstack accepts the TCP
 	// connection then closes it immediately, so curl gets an empty reply.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "3", fmt.Sprintf("http://%s:8080/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1032,14 +1032,14 @@ except socket.timeout:
 s.close()
 "`
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"sh", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	assert.Contains(t, outStr, "TIMEOUT", "expected non-DNS UDP to be dropped")
 }
 
-// TestCurb_Net_WildcardAllowsEverything verifies that --allow '*' with port filtering
+// TestCurb_Net_WildcardAllowsEverything verifies that --allow-domains '*' with port filtering
 // still allows traffic (TLS SNI matches all, HTTP Host matches all).
 func TestCurb_Net_WildcardAllowsEverything(t *testing.T) {
 	requireNetNS(t)
@@ -1047,7 +1047,7 @@ func TestCurb_Net_WildcardAllowsEverything(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "*", "--",
+		"--allow-domains", "*", "--",
 		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1065,7 +1065,7 @@ func TestCurb_DNS_Bypass_TCPPort53(t *testing.T) {
 	// Allow only "only-this-domain.test", then query a real domain over TCP.
 	// If the TCP forwarder does not filter port 53, we get a real answer.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "only-this-domain.test", "--",
+		"--allow-domains", "only-this-domain.test", "--",
 		"dig", "+tcp", "+short", "+time=5", "+tries=1", "example.com", "@127.0.0.53")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1089,7 +1089,7 @@ func TestCurb_DNS_TCPAllowedDomainWorks(t *testing.T) {
 	requireNetNS(t)
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"dig", "+tcp", "+short", "+time=5", "+tries=1", "example.com", "@127.0.0.53")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1115,7 +1115,7 @@ func TestCurb_DNS_Bypass_MixedCaseQuery(t *testing.T) {
 
 	// Allow "example.com" (lowercase), query "EVIL.COM" in uppercase.
 	// The filter should still block it.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "EVIL.COM")
 	out, err := cmd.CombinedOutput()
 	outStr := string(out)
@@ -1153,7 +1153,7 @@ except Exception as e:
     print(f'ERROR {e}')
 `
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1215,7 +1215,7 @@ except Exception as e:
     print(f'ERROR {e}')
 `
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1237,7 +1237,7 @@ func TestCurb_DNS_Bypass_TrailingDot(t *testing.T) {
 	requireNetNS(t)
 
 	// Query "evil.com." (with trailing dot) when only "example.com" is allowed.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "evil.com.")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1251,9 +1251,8 @@ func TestCurb_DNS_Bypass_TrailingDot(t *testing.T) {
 // TestCurb_DNS_Bypass_NullByteInDomain verifies that null bytes embedded in
 // domain name labels are handled correctly by the filter. miekg/dns escapes
 // null bytes as \000, so "evil\x00.example.com" becomes "evil\000.example.com."
-// which is technically a subdomain of example.com. This is correct behavior
-// when subdomain matching is enabled (default). With --exact-match, the
-// null-byte subdomain must be blocked.
+// which is technically a subdomain of example.com. With exact matching (default),
+// the null-byte subdomain must be blocked.
 func TestCurb_DNS_Bypass_NullByteInDomain(t *testing.T) {
 	requireNetNS(t)
 
@@ -1284,17 +1283,17 @@ func TestCurb_DNS_Bypass_NullByteInDomain(t *testing.T) {
 		"    print('ERROR %s' % e)\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o644))
 
-	// With --exact-match, "evil\000.example.com" should NOT match "example.com".
+	// Bare domains are exact-only, so "evil\000.example.com" should NOT match "example.com".
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--exact-match", "--",
+		"--allow-domains", "example.com", "--",
 		"python3", scriptPath)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 
-	// With exact matching, the null-byte subdomain must be refused.
+	// With exact matching (default), the null-byte subdomain must be refused.
 	assert.True(t,
 		strings.Contains(outStr, "REFUSED") || strings.Contains(outStr, "TIMEOUT"),
-		"expected null-byte subdomain to be refused with --exact-match, got: %s", outStr)
+		"expected null-byte subdomain to be refused, got: %s", outStr)
 }
 
 // TestCurb_DNS_Bypass_PTRQuery verifies that reverse DNS (PTR) queries for
@@ -1305,7 +1304,7 @@ func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
 	// PTR query for 8.8.8.8 → 8.8.8.8.in-addr.arpa.
 	// This should be blocked since "8.8.8.8.in-addr.arpa" is not in the allowlist.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "-x", "8.8.8.8")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1326,7 +1325,7 @@ func TestCurb_DNS_Bypass_ANYQuery(t *testing.T) {
 	requireNetNS(t)
 
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"dig", "+notcp", "+time=3", "+tries=1", "evil.com", "ANY")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -1363,7 +1362,7 @@ print('GARBAGE_SENT')
 	// Send garbage to port 53, then do a legitimate query to prove
 	// the filter is still functional.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"sh", "-c", fmt.Sprintf("python3 %s && getent hosts example.com", scriptPath))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1418,7 +1417,7 @@ except Exception as e:
     print(f'ERROR {e}')
 `
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1461,7 +1460,7 @@ except Exception as e:
     print(f'ERROR {e}')
 `
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1477,7 +1476,7 @@ except Exception as e:
 func TestCurb_DNS_Bypass_SubdomainOfBlockedViaAllowed(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "example.com.evil.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1502,7 +1501,7 @@ func TestCurb_DNS_Bypass_NonStandardPort(t *testing.T) {
 	// However, without a server listening on 5353, this will simply fail.
 	// The test documents that non-53 DNS is out of scope for WP08.
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=2", "+tries=1", "evil.com", "@127.0.0.53", "-p", "5353")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -1521,7 +1520,7 @@ func TestCurb_DNS_Bypass_AllowedDomainThenBlockedQuery(t *testing.T) {
 	requireNetNS(t)
 
 	// First resolve an allowed domain, then immediately try a blocked one.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
 		"sh", "-c", "getent hosts example.com >/dev/null 2>&1 && getent hosts evil.com 2>&1")
 	out, err := cmd.CombinedOutput()
 
@@ -1572,7 +1571,7 @@ print(f'refused={refused_count}/10')
 sock.close()
 `
 	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
-		"--allow", "example.com", "--",
+		"--allow-domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
