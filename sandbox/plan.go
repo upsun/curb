@@ -126,22 +126,27 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			Impact: "Filesystem restrictions disabled by user.",
 		})
 	} else {
-		plan.ROPaths = slices.Concat(config.DefaultROPaths, cfg.ROPaths)
+		// Expand tildes and globs in user-supplied paths, then prepend defaults.
+		userRO := slices.Clone(cfg.ROPaths)
 		plan.HiddenPaths = slices.Clone(cfg.HiddenPaths)
 		if len(plan.HiddenPaths) > 0 && caps.MountNS != nil {
 			return nil, fmt.Errorf("--hide requires mount namespaces: %w", caps.MountNS)
 		}
 		if realHome != "" {
-			plan.ROPaths = config.ExpandTildes(plan.ROPaths, realHome)
+			userRO = config.ExpandTildes(userRO, realHome)
 			if len(plan.HiddenPaths) > 0 {
 				plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
 			}
 		}
+		userRO = config.ExpandGlobs(userRO)
+		plan.HiddenPaths = config.ExpandGlobs(plan.HiddenPaths)
+		plan.ROPaths = slices.Concat(config.DefaultROPaths, userRO)
 	}
 	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
 	if realHome != "" {
 		plan.RWPaths = config.ExpandTildes(plan.RWPaths, realHome)
 	}
+	plan.RWPaths = config.ExpandGlobs(plan.RWPaths)
 
 	// CWD: always read-only by default (use --allow-write . for write access).
 	cwd, err := os.Getwd()
@@ -168,7 +173,8 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.ExecPaths = append(plan.ExecPaths, config.SystemExecPaths...)
 		for _, name := range cfg.ExecAllow {
 			if filepath.IsAbs(name) {
-				plan.ExecPaths = append(plan.ExecPaths, name)
+				// Expand globs in absolute exec paths (e.g. /usr/bin/python*).
+				plan.ExecPaths = append(plan.ExecPaths, config.ExpandGlobs([]string{name})...)
 			} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
 				plan.ExecPaths = append(plan.ExecPaths, abs)
 			} else {

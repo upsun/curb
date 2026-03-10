@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -14,7 +13,7 @@ import (
 // NewRootCmd creates the curb root command.
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "curb [flags] command [args...]",
+		Use:   "curb [flags] [--] command [args...]",
 		Short: "Sandbox a process with filesystem, network, and environment restrictions",
 		Long: `curb runs a command inside an unprivileged sandbox with:
   - Filesystem restrictions (Landlock + mount namespace)
@@ -25,7 +24,8 @@ func NewRootCmd() *cobra.Command {
 Use -- before the command when it has its own flags.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("requires a command to run")
+				_ = cmd.Help()
+				os.Exit(0)
 			}
 			return nil
 		},
@@ -107,7 +107,7 @@ func registerFlags(cmd *cobra.Command) {
 	// Domain filtering.
 	f.StringSlice("allow-domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 
-	// Filesystem.
+	// Filesystem (supports glob patterns, e.g. ~/projects/*.md).
 	f.StringSlice("allow-read", nil, "additional readable paths (use '*' to allow all reads)")
 	f.StringSlice("allow-write", nil, "additional writable paths (use '*' to disable all FS restrictions)")
 	f.StringSlice("hide", nil, "paths to hide from the child process")

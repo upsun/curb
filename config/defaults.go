@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // DefaultROPaths are system directories made available read-only.
 var DefaultROPaths = []string{
@@ -17,6 +20,8 @@ var DefaultROPaths = []string{
 var SafePassthroughVars = []string{
 	"TERM",
 	"COLORTERM",
+	"NO_COLOR",
+	"LS_COLORS",
 	"LANG",
 	"LC_ALL",
 	"LC_CTYPE",
@@ -54,6 +59,30 @@ func ForcedEnvVars(tmpDir, homePath string) map[string]string {
 		"PATH":   DefaultPath,
 		"SHELL":  "/bin/sh",
 	}
+}
+
+// ExpandGlobs expands glob patterns in the path list. Paths without glob
+// metacharacters are passed through unchanged. Patterns that match nothing
+// (or have invalid syntax) are silently dropped.
+func ExpandGlobs(paths []string) []string {
+	var expanded []string
+	for _, p := range paths {
+		if !hasGlobMeta(p) {
+			expanded = append(expanded, p)
+			continue
+		}
+		matches, err := filepath.Glob(p)
+		if err != nil || len(matches) == 0 {
+			continue
+		}
+		expanded = append(expanded, matches...)
+	}
+	return expanded
+}
+
+// hasGlobMeta reports whether path contains glob metacharacters.
+func hasGlobMeta(path string) bool {
+	return strings.ContainsAny(path, "*?[")
 }
 
 // ExpandTildes replaces a leading ~/ in each path with the given home directory.

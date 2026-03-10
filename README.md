@@ -66,7 +66,7 @@ curb --dry-run make test
 | `--allow-write` | `CURB_ALLOW_WRITE` | Additional writable paths (use `'*'` to disable all FS restrictions) |
 | `--hide` | `CURB_HIDE` | Paths to hide (overmounted with empty tmpfs) |
 
-By default, system paths (`/usr`, `/lib`, `/etc`, etc.) and the current directory are read-only. A private temp directory is created and set as `TMPDIR`. Use `--allow-write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`).
+By default, system paths (`/usr`, `/lib`, `/etc`, etc.) and the current directory are read-only. A private temp directory is created and set as `TMPDIR`. Use `--allow-write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`). Glob patterns are supported (e.g. `--allow-read '~/docs/*.md'`).
 
 ### Executable Control
 
