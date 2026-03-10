@@ -2,15 +2,6 @@ package config
 
 import "strings"
 
-// DefaultHiddenPaths are sensitive dotfile directories hidden from the child process.
-var DefaultHiddenPaths = []string{
-	"~/.ssh",
-	"~/.gnupg",
-	"~/.aws",
-	"~/.config/gcloud",
-	"~/.docker",
-}
-
 // DefaultROPaths are system directories made available read-only.
 var DefaultROPaths = []string{
 	"/usr",

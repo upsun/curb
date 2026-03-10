@@ -62,7 +62,7 @@ curb --dry-run -- make test
 | `--fs-rw` | `CURB_FS_RW` | Additional read-write paths |
 | `--fs-hide` | `CURB_FS_HIDE` | Paths to hide (overmounted with empty tmpfs) |
 
-By default, system paths (`/usr`, `/lib`, `/etc`, etc.) and the current directory are read-only, and dotfiles are hidden. A private temp directory is created and set as `TMPDIR`. Use `--fs-rw .` to grant write access to the current directory.
+By default, system paths (`/usr`, `/lib`, `/etc`, etc.) and the current directory are read-only. A private temp directory is created and set as `TMPDIR`. Use `--fs-rw .` to grant write access to the current directory. Use `--fs-hide` to hide sensitive paths (e.g. `--fs-hide ~/.ssh`).
 
 ### Executable Control
 
@@ -125,7 +125,7 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `T
 
 1. **Environment sanitization**: deny-by-default environment with only safe variables passed through.
 2. **User namespace**: the child runs as uid 0 in an isolated namespace (no host privileges).
-3. **Mount namespace**: dotfiles and sensitive paths are hidden via tmpfs overmounts; Git hooks directories are read-only.
+3. **Mount namespace**: paths specified with `--fs-hide` are hidden via tmpfs overmounts.
 4. **Landlock LSM**: filesystem access restricted to declared read-only, read-write, and execute paths.
 5. **Network namespace + TAP**: child gets an isolated network with a virtual Ethernet device. A userspace TCP/IP stack (gvisor netstack) on the parent side filters traffic:
    - DNS queries checked against the domain allowlist

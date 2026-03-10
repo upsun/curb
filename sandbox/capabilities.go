@@ -3,7 +3,7 @@ package sandbox
 // Capabilities holds the results of probing system capabilities.
 type Capabilities struct {
 	UserNS      error  // nil = ok, non-nil = fatal.
-	MountNS     error  // nil = ok, non-nil = warn (degrade).
+	MountNS     error  // nil = ok, non-nil = fatal if --fs-hide used.
 	NetNS       error  // nil = ok, non-nil = fatal if --allow-domains used.
 	TUN         error  // nil = ok, non-nil = fatal if --allow-domains used.
 	LandlockABI int    // 0 = unavailable, 1-5 = version.
@@ -20,11 +20,6 @@ func userNSFixMessage() string {
   To fix (permanently):
     echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.conf
     sudo sysctl --system`
-}
-
-// mountNSWarnMessage returns a warning message for mount namespace unavailability.
-func mountNSWarnMessage() string {
-	return "Mount namespaces unavailable; filesystem hiding uses reduced enforcement."
 }
 
 // netNSFixMessage returns an actionable fix message for network namespace errors.

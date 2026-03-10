@@ -66,7 +66,7 @@ func TestBuildPlan_NoLandlock(t *testing.T) {
 	assert.Equal(t, "landlock", plan.DegradedLayers[0].Layer)
 }
 
-func TestBuildPlan_NoMountNS(t *testing.T) {
+func TestBuildPlan_NoMountNS_NoHide(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		MountNS:     assert.AnError,
@@ -79,8 +79,24 @@ func TestBuildPlan_NoMountNS(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	assert.Len(t, plan.DegradedLayers, 1)
-	assert.Equal(t, "mount namespace", plan.DegradedLayers[0].Layer)
+	// Without --fs-hide, mount NS unavailability is not degraded.
+	assert.Empty(t, plan.DegradedLayers)
+}
+
+func TestBuildPlan_NoMountNS_WithHide(t *testing.T) {
+	caps := &Capabilities{
+		UserNS:      nil,
+		MountNS:     assert.AnError,
+		LandlockABI: 4,
+		KernelInfo:  "6.8.0-test",
+	}
+	cfg := &config.Config{
+		HiddenPaths: []string{"/tmp/test"},
+	}
+
+	_, err := BuildPlan(cfg, caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--fs-hide requires mount namespaces")
 }
 
 func TestBuildPlan_FatalUserNS(t *testing.T) {
@@ -198,7 +214,6 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
-		MountNS:     assert.AnError,
 		LandlockABI: 0,
 		KernelInfo:  "5.10.0-test",
 	}
@@ -213,7 +228,6 @@ func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	output := buf.String()
 
 	assert.Contains(t, output, "enforcement: degraded")
-	assert.Contains(t, output, "warning: mount namespace:")
 	assert.Contains(t, output, "warning: landlock:")
 }
 

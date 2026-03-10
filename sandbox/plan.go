@@ -46,7 +46,6 @@ type SandboxPlan struct {
 	RWPaths        []string
 	HiddenPaths    []string
 	ExecPaths      []string
-	GitHooksPath   string
 	NetEnabled     bool
 	AllowedDomains []string
 	AllowLocalhost bool
@@ -73,7 +72,6 @@ type ChildConfig struct {
 	RWPaths        []string `json:"rw_paths,omitempty"`
 	HiddenPaths    []string `json:"hidden_paths,omitempty"`
 	ExecPaths      []string `json:"exec_paths,omitempty"`
-	GitHooksPath   string   `json:"git_hooks_path,omitempty"`
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
@@ -107,13 +105,6 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 
 	// Record degraded layers.
-	if caps.MountNS != nil {
-		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-			Layer:  "mount namespace",
-			Reason: caps.MountNS.Error(),
-			Impact: mountNSWarnMessage(),
-		})
-	}
 	if caps.LandlockABI == 0 {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "landlock",
@@ -137,16 +128,15 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		})
 	} else {
 		plan.ROPaths = slices.Concat(config.DefaultROPaths, cfg.ROPaths)
-		plan.HiddenPaths = slices.Concat(config.DefaultHiddenPaths, cfg.HiddenPaths)
+		plan.HiddenPaths = slices.Clone(cfg.HiddenPaths)
+		if len(plan.HiddenPaths) > 0 && caps.MountNS != nil {
+			return nil, fmt.Errorf("--fs-hide requires mount namespaces: %w", caps.MountNS)
+		}
 		if realHome != "" {
 			plan.ROPaths = config.ExpandTildes(plan.ROPaths, realHome)
-			plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
-		} else if hasTildePaths(plan.HiddenPaths) {
-			plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-				Layer:  "filesystem",
-				Reason: "$HOME not set",
-				Impact: "Cannot expand ~/ paths; dotfile hiding may not work.",
-			})
+			if len(plan.HiddenPaths) > 0 {
+				plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
+			}
 		}
 	}
 	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
@@ -156,17 +146,8 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 	// CWD: always read-only by default (use --fs-rw . for write access).
 	cwd, err := os.Getwd()
-	if err == nil {
-		if !cfg.NoFSRestrict {
-			plan.ROPaths = append(plan.ROPaths, cwd)
-			// Protect git hooks if in a git repo (harmless if CWD is read-only).
-			gitRoot, gitErr := config.FindGitRoot(cwd)
-			if gitErr == nil && gitRoot != "" {
-				if hooksDir := config.FindGitHooksDir(gitRoot); hooksDir != "" {
-					plan.GitHooksPath = hooksDir
-				}
-			}
-		}
+	if err == nil && !cfg.NoFSRestrict {
+		plan.ROPaths = append(plan.ROPaths, cwd)
 	}
 
 	// Temp directory.
@@ -250,7 +231,6 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		RWPaths:        p.RWPaths,
 		HiddenPaths:    p.HiddenPaths,
 		ExecPaths:      p.ExecPaths,
-		GitHooksPath:   p.GitHooksPath,
 		NoFSRestrict:   p.NoFSRestrict,
 		NetEnabled:     p.NetEnabled,
 		AllowedDomains: p.AllowedDomains,
@@ -313,7 +293,6 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 
 	ln("curb: system capabilities")
 	printCap(w, "user namespaces", p.Caps.UserNS, p.capUserInfo())
-	printCap(w, "mount namespaces", p.Caps.MountNS, "")
 	printCap(w, "network namespaces", p.Caps.NetNS, "")
 	printCap(w, "/dev/net/tun", p.Caps.TUN, "")
 	if p.Caps.LandlockABI > 0 {
@@ -335,9 +314,6 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	}
 	if len(p.HiddenPaths) > 0 {
 		pr("    hidden:     %s\n", strings.Join(p.HiddenPaths, " "))
-	}
-	if p.GitHooksPath != "" {
-		pr("    hooks (ro): %s\n", p.GitHooksPath)
 	}
 	if len(p.ExecPaths) > 0 {
 		pr("    exec:       %s\n", strings.Join(p.ExecPaths, " "))
@@ -424,15 +400,6 @@ func resolvConfDir() string {
 		return "" // Already covered by default RO paths.
 	}
 	return dir
-}
-
-func hasTildePaths(paths []string) bool {
-	for _, p := range paths {
-		if strings.HasPrefix(p, "~/") {
-			return true
-		}
-	}
-	return false
 }
 
 // buildDegradedPlan creates a plan for non-Linux platforms where only

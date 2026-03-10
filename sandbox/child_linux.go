@@ -49,15 +49,12 @@ func childInit() error {
 	// Filesystem enforcement: mounts first, then Landlock.
 	// Landlock would block mount syscalls if enforced first.
 	if !cfg.NoFSRestrict {
-		mountsOK := prepareMountNS(cfg.Quiet)
-		if mountsOK {
+		if len(cfg.HiddenPaths) > 0 {
+			if err := prepareMountNS(); err != nil {
+				return fmt.Errorf("mount namespace setup: %w", err)
+			}
 			if err := hidePaths(cfg.HiddenPaths); err != nil {
 				return fmt.Errorf("hiding paths: %w", err)
-			}
-			if cfg.GitHooksPath != "" {
-				if err := protectHooksDir(cfg.GitHooksPath); err != nil {
-					return fmt.Errorf("protecting hooks dir: %w", err)
-				}
 			}
 		}
 		rules := policy.BuildLandlockRules(cfg.ROPaths, cfg.RWPaths, cfg.ExecPaths)
@@ -95,14 +92,8 @@ func childWarn(quiet bool, format string, args ...any) {
 }
 
 // prepareMountNS makes mount propagation slave so overmounts don't propagate to host.
-// Returns false if mount operations are not available (e.g. AppArmor restrictions).
-func prepareMountNS(quiet bool) bool {
-	err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
-	if err != nil {
-		childWarn(quiet, "Dotfile hiding and hooks protection unavailable (mount namespace restricted).")
-		return false
-	}
-	return true
+func prepareMountNS() error {
+	return syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
 }
 
 // hidePaths overmounts each path with an empty tmpfs, making the original content invisible.
@@ -118,23 +109,6 @@ func hidePaths(paths []string) error {
 	}
 	return nil
 }
-
-// protectHooksDir bind-mounts a Git hooks directory as read-only.
-func protectHooksDir(hooksPath string) error {
-	// Bind-mount the directory on itself.
-	if err := syscall.Mount(hooksPath, hooksPath, "", syscall.MS_BIND, ""); err != nil {
-		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR) {
-			return nil
-		}
-		return fmt.Errorf("bind mount %s: %w", hooksPath, err)
-	}
-	// Remount as read-only.
-	if err := syscall.Mount("", hooksPath, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY, ""); err != nil {
-		return fmt.Errorf("remount ro %s: %w", hooksPath, err)
-	}
-	return nil
-}
-
 
 // setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
 // fd to the parent, and waits for a ready signal before continuing.

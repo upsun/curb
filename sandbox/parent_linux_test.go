@@ -315,9 +315,10 @@ func requireLandlock(t *testing.T) {
 func requireMountOps(t *testing.T) {
 	t.Helper()
 	// Test if mount operations work inside a user+mount namespace.
-	cmd := exec.Command(curbBin, "--", "sh", "-c", "cat /etc/resolv.conf")
-	out, _ := cmd.CombinedOutput()
-	if strings.Contains(string(out), "mount namespace restricted") {
+	hideDir := t.TempDir()
+	cmd := exec.Command(curbBin, "--fs-hide", hideDir, "--", "true")
+	out, err := cmd.CombinedOutput()
+	if err != nil && strings.Contains(string(out), "mount namespace") {
 		t.Skip("mount operations unavailable (AppArmor or similar restriction)")
 	}
 }
@@ -380,25 +381,6 @@ func TestCurb_FS_WriteNonGitCWDBlocked(t *testing.T) {
 	cmd.Dir = nonGitDir
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected CWD write in non-git dir to fail: %s", string(out))
-	assert.Contains(t, string(out), "Permission denied")
-}
-
-// TestCurb_FS_WriteHooksBlocked verifies that .git/hooks is read-only even
-// when CWD is explicitly writable.
-func TestCurb_FS_WriteHooksBlocked(t *testing.T) {
-	requireUserNS(t)
-	requireLandlock(t)
-	requireMountOps(t)
-
-	gitDir := t.TempDir()
-	hooksDir := filepath.Join(gitDir, ".git", "hooks")
-	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
-	hookFile := filepath.Join(hooksDir, "pre-commit")
-
-	cmd := exec.Command(curbBin, "--fs-rw", gitDir, "--", "touch", hookFile)
-	cmd.Dir = gitDir
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "expected hooks write to fail: %s", string(out))
 	assert.Contains(t, string(out), "Permission denied")
 }
 
