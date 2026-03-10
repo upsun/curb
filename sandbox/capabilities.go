@@ -1,5 +1,13 @@
 package sandbox
 
+import "errors"
+
+// Sentinel errors for TUN probe failures.
+var (
+	errTUNDevice = errors.New("tun device unavailable")
+	errTUNIoctl  = errors.New("TAP ioctl failed in namespace")
+)
+
 // Capabilities holds the results of probing system capabilities.
 type Capabilities struct {
 	UserNS      error  // nil = ok, non-nil = fatal.
@@ -10,47 +18,25 @@ type Capabilities struct {
 	KernelInfo  string // e.g., "6.8.0-100-generic".
 }
 
-// userNSFixMessage returns an actionable fix message for user namespace errors.
-func userNSFixMessage() string {
-	return `User namespaces are required but not available.
-
-  To fix (temporarily):
-    sudo sysctl -w kernel.unprivileged_userns_clone=1
-
-  To fix (permanently):
-    echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.conf
-    sudo sysctl --system`
+// userNSErrMessage returns an error message for user namespace errors.
+func userNSErrMessage() string {
+	return `User namespaces are required but are not available.`
 }
 
-// netNSFixMessage returns an actionable fix message for network namespace errors.
-func netNSFixMessage() string {
-	return `Network namespaces are required for --allow-domains/--allow-localhost but not available.
-
-  To fix (temporarily):
-    sudo sysctl -w kernel.unprivileged_userns_clone=1
-
-  Remove --allow-domains/--allow-localhost to run without network filtering.`
+// netNSErrMessage returns an error message for network namespace errors.
+func netNSErrMessage() string {
+	return `Network namespaces are required for --allow-domains/--allow-localhost but are not available.`
 }
 
-// tunFixMessage returns an actionable fix message for TUN device errors.
-func tunFixMessage() string {
-	return `/dev/net/tun is required for --allow-domains/--allow-localhost but not available.
+// tunDeviceErrMessage returns an error message when /dev/net/tun does not exist.
+func tunDeviceErrMessage() string {
+	return `/dev/net/tun is required for --allow-domains/--allow-localhost but is not available.`
+}
 
-  To fix (device missing):
-    sudo mkdir -p /dev/net
-    sudo mknod /dev/net/tun c 10 200
-    sudo chmod 0666 /dev/net/tun
-
-  If AppArmor blocks TUN/TAP creation (TUNSETIFF: operation not permitted):
-    1. Comment out 'audit deny capability,' in /etc/apparmor.d/unprivileged_userns
-    2. Add rules to /etc/apparmor.d/local/unprivileged_userns:
-         capability net_admin,
-         owner file rw dev/pts/[0-9]*,
-       The devpts rule fixes fstat errors on terminal devices (disconnected paths).
-       For full DNS support, also add: capability sys_admin,
-    3. sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
-
-  Remove --allow-domains/--allow-localhost to run without network filtering.`
+// tunIoctlErrMessage returns an error message when /dev/net/tun exists but
+// TUNSETIFF fails (e.g. AppArmor blocking CAP_NET_ADMIN in user namespaces).
+func tunIoctlErrMessage() string {
+	return `/dev/net/tun exists but TAP creation failed inside a user+network namespace.`
 }
 
 // landlockWarnMessage returns a warning for missing Landlock support.

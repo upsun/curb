@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/policy"
 	"golang.org/x/sys/unix"
-	"golang.org/x/term"
 )
 
 // ChildInit is the entry point for the re-exec'd child process inside new namespaces.
@@ -21,7 +21,7 @@ import (
 // and execs the target command. It never returns on success.
 func ChildInit() {
 	if err := childInit(); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: child init: %v\n", err)
+		clog.Errorf("%v", err)
 		os.Exit(ExitSetupFailure)
 	}
 }
@@ -84,17 +84,12 @@ func childInit() error {
 }
 
 // childWarn prints a warning to stderr from the child process.
-// Suppressed if quiet is true. Uses color if stderr is a terminal.
+// Suppressed if quiet is true.
 func childWarn(quiet bool, format string, args ...any) {
 	if quiet {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
-	if term.IsTerminal(int(os.Stderr.Fd())) && os.Getenv("NO_COLOR") == "" {
-		fmt.Fprintf(os.Stderr, "\033[33mcurb: warning:\033[0m %s\n", msg)
-	} else {
-		fmt.Fprintf(os.Stderr, "curb: warning: %s\n", msg)
-	}
+	clog.Warnf(format, args...)
 }
 
 // prepareMountNS makes mount propagation slave so overmounts don't propagate to host.

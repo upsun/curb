@@ -3,12 +3,13 @@
 package sandbox
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/upsun/curb/clog"
 )
 
 // ChildInit is not supported on non-Linux platforms.
 func ChildInit() {
-	fmt.Fprintln(os.Stderr, "curb: error: child init not supported on this platform.")
+	clog.Errorf("sandboxing is not supported on this platform")
 	os.Exit(ExitSetupFailure)
 }

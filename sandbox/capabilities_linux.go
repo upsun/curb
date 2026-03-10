@@ -50,7 +50,7 @@ func probeNS(flags uintptr, name string) error {
 func probeTUN() error {
 	f, err := os.Open("/dev/net/tun")
 	if err != nil {
-		return fmt.Errorf("/dev/net/tun unavailable: %w", err)
+		return fmt.Errorf("%w: %w", errTUNDevice, err)
 	}
 	_ = f.Close()
 
@@ -75,7 +75,7 @@ func probeTUN() error {
 		if msg == "" {
 			msg = runErr.Error()
 		}
-		return fmt.Errorf("TAP creation failed in namespace: %s", msg)
+		return fmt.Errorf("%w: %s", errTUNIoctl, msg)
 	}
 	return nil
 }

@@ -109,27 +109,7 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `T
 
 ## Troubleshooting
 
-### AppArmor on Ubuntu 24.04+
-
-Ubuntu 24.04+ restricts user namespaces via the `unprivileged_userns` AppArmor profile. This can cause two issues:
-
-**TUN/TAP creation fails** (`--allow-domains`): Add capabilities to `/etc/apparmor.d/local/unprivileged_userns`:
-
-```
-capability net_admin,
-```
-
-**`fstat` errors on terminal devices** (e.g. `EACCES: permission denied, fstat` from Bun/Node): The AppArmor profile only allows file access on absolute paths (`/**`), but devpts nodes in a user namespace appear as disconnected paths (`dev/pts/0` without leading `/`). Add to `/etc/apparmor.d/local/unprivileged_userns`:
-
-```
-owner file rw dev/pts/[0-9]*,
-```
-
-After editing, reload the profile:
-
-```
-sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
-```
+See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common issues including user namespace restrictions, missing `/dev/net/tun`, and AppArmor on Ubuntu 24.04+.
 
 ## How It Works
 

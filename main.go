@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
+	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/cmd"
 	"github.com/upsun/curb/sandbox"
 )
@@ -22,7 +22,7 @@ func main() {
 	}
 
 	if err := cmd.NewRootCmd().Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: %v\n", err)
+		clog.Errorf("%v", err)
 		os.Exit(1)
 	}
 }

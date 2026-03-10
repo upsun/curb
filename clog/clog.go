@@ -44,9 +44,7 @@ func New(logFile string, verbose, debug, quiet bool) (*Logger, error) {
 		quiet:   quiet,
 		w:       os.Stderr,
 	}
-	if f, ok := l.w.(*os.File); ok {
-		l.color = term.IsTerminal(int(f.Fd())) && os.Getenv("NO_COLOR") == ""
-	}
+	l.color = isColorStderr()
 	if logFile != "" {
 		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
@@ -150,4 +148,22 @@ func (l *Logger) Close() {
 	if l.file != nil {
 		_ = l.file.Close()
 	}
+}
+
+// Errorf prints a colored error to stderr without needing a Logger instance.
+func Errorf(format string, args ...any) {
+	l := &Logger{w: os.Stderr, color: isColorStderr()}
+	l.printLevel("error", ansiRed, fmt.Sprintf(format, args...))
+}
+
+// Warnf prints a colored warning to stderr without needing a Logger instance.
+// Unlike Logger.Warn, this does not honor --quiet. Callers must check quiet themselves.
+func Warnf(format string, args ...any) {
+	l := &Logger{w: os.Stderr, color: isColorStderr()}
+	l.printLevel("warning", ansiYellow, fmt.Sprintf(format, args...))
+}
+
+// isColorStderr reports whether stderr supports color output.
+func isColorStderr() bool {
+	return term.IsTerminal(int(os.Stderr.Fd())) && os.Getenv("NO_COLOR") == ""
 }

@@ -109,7 +109,7 @@ func TestBuildPlan_FatalUserNS(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, plan)
 	assert.Contains(t, err.Error(), "fatal")
-	assert.Contains(t, err.Error(), "unprivileged_userns_clone")
+	assert.Contains(t, err.Error(), "User namespaces")
 }
 
 func TestBuildPlan_FatalNetNS(t *testing.T) {
@@ -229,22 +229,4 @@ func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 
 	assert.Contains(t, output, "enforcement: degraded")
 	assert.Contains(t, output, "warning: landlock:")
-}
-
-func TestErrorMessages_ContainFixInstructions(t *testing.T) {
-	tests := []struct {
-		name    string
-		message string
-		expect  string
-	}{
-		{"userNS fix", userNSFixMessage(), "unprivileged_userns_clone"},
-		{"netNS fix", netNSFixMessage(), "unprivileged_userns_clone"},
-		{"TUN fix", tunFixMessage(), "/dev/net/tun"},
-		{"landlock warn", landlockWarnMessage(), "kernel 5.13"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Contains(t, tt.message, tt.expect)
-		})
-	}
 }

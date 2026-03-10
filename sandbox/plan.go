@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -57,9 +58,9 @@ type SandboxPlan struct {
 	EnvSet         map[string]string
 	EnvPassthrough []string
 	DegradedLayers []DegradedLayer
-	TempDir      string
-	NoFSRestrict bool
-	Quiet        bool
+	TempDir        string
+	NoFSRestrict   bool
+	Quiet          bool
 	Command        []string
 	Caps           *Capabilities
 	Logger         *clog.Logger
@@ -78,8 +79,8 @@ type ChildConfig struct {
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
-	Quiet   bool   `json:"quiet,omitempty"`
-	TempDir string `json:"temp_dir"`
+	Quiet          bool     `json:"quiet,omitempty"`
+	TempDir        string   `json:"temp_dir"`
 }
 
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
@@ -91,15 +92,19 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 
 	if caps.UserNS != nil {
-		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSFixMessage())
+		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSErrMessage())
 	}
 
 	if len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost {
 		if caps.NetNS != nil {
-			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSFixMessage())
+			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSErrMessage())
 		}
 		if caps.TUN != nil {
-			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.TUN, tunFixMessage())
+			msg := tunDeviceErrMessage()
+			if errors.Is(caps.TUN, errTUNIoctl) {
+				msg = tunIoctlErrMessage()
+			}
+			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.TUN, msg)
 		}
 	}
 
@@ -265,8 +270,8 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		NoFSRestrict:   p.NoFSRestrict,
 		NetEnabled:     p.NetEnabled,
 		AllowedDomains: p.AllowedDomains,
-		Quiet:   p.Quiet,
-		TempDir: p.TempDir,
+		Quiet:          p.Quiet,
+		TempDir:        p.TempDir,
 	}
 }
 
