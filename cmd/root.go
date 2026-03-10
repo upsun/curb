@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/upsun/curb/clog"
@@ -59,8 +60,28 @@ The target command must follow a -- separator.`,
 				return nil
 			}
 
+			// Startup summary.
+			if plan.NetEnabled && len(plan.AllowedDomains) > 0 {
+				logger.Info("net: allowed domains: %s.", strings.Join(plan.AllowedDomains, ", "))
+			} else if plan.NetEnabled {
+				logger.Info("net: localhost only.")
+			} else {
+				logger.Info("net: disabled (no --allow-domains).")
+			}
+			if plan.NoFSRestrict {
+				logger.Info("fs: disabled (--no-fs-restrict).")
+			} else {
+				logger.Info("fs: active.")
+			}
 			if cfg.NoExecRestrict {
-				logger.Info("Executable restrictions disabled (--no-exec-restrict).")
+				logger.Info("exec: disabled (--no-exec-restrict).")
+			} else {
+				logger.Info("exec: active.")
+			}
+			if cfg.EnvPassthroughAll {
+				logger.Info("env: full host passthrough.")
+			} else {
+				logger.Info("env: deny-by-default.")
 			}
 
 			exitCode, err := sandbox.StartSandbox(plan)

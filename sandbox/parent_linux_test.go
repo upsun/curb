@@ -581,7 +581,7 @@ func TestCurb_Exec_NoExecRestrict(t *testing.T) {
 	cmd := exec.Command(curbBin, "--fs-rw", dir, "--no-exec-restrict", "-v", "--", "sh", "-c", bin)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected --no-exec-restrict to allow binary: %s", string(out))
-	assert.Contains(t, string(out), "curb: info: Executable restrictions disabled (--no-exec-restrict).")
+	assert.Contains(t, string(out), "curb: info: exec: disabled (--no-exec-restrict).")
 }
 
 // TestCurb_Exec_NotFoundErrors verifies that --allow-exec with an unknown name errors.

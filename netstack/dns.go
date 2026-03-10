@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -21,6 +22,8 @@ type DNSFilter struct {
 	Upstream string
 	// Logger for DNS events.
 	Logger *clog.Logger
+	// seenBlocked tracks domains already logged as blocked to avoid repetition.
+	seenBlocked sync.Map
 }
 
 // handleQuery reads a DNS query from the sandbox, checks it against the
@@ -64,7 +67,9 @@ func (f *DNSFilter) checkPacket(packet []byte) (refusedResp []byte, allowed bool
 	// Check all question names against the allowlist.
 	for _, q := range msg.Question {
 		if !f.Check(q.Name) {
-			f.Logger.Event("dns_query", q.Name, "blocked", "domain")
+			if _, dup := f.seenBlocked.LoadOrStore(q.Name, true); !dup {
+				f.Logger.Event("dns_query", q.Name, "blocked", "domain")
+			}
 			return refused(&msg), false
 		}
 	}
