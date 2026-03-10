@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// DefaultROPaths are system directories made available read-only.
+// DefaultROPaths are system directories and pseudo-filesystems made available read-only.
 var DefaultROPaths = []string{
 	"/usr",
 	"/lib",
@@ -14,6 +14,30 @@ var DefaultROPaths = []string{
 	"/sbin",
 	"/etc",
 	"/opt",
+	// /proc is safe to expose fully: the user namespace blocks ptrace-guarded
+	// access (e.g. /proc/[pid]/environ) for processes outside the namespace.
+	"/proc",
+}
+
+// DefaultROFiles are individual files made available read-only.
+// Separated from DefaultROPaths because Landlock requires different access
+// rights for files vs directories.
+var DefaultROFiles = []string{
+	"/dev/urandom",
+	"/dev/random",
+}
+
+// DefaultRWPaths are directories that need write access by default.
+var DefaultRWPaths = []string{
+	// Interactive programs need read-write access to their terminal device.
+	"/dev/pts",
+}
+
+// DefaultRWFiles are device nodes that need write access (e.g. /dev/null as an output target).
+var DefaultRWFiles = []string{
+	"/dev/null",
+	"/dev/zero",
+	"/dev/ptmx",
 }
 
 // SafePassthroughVars are environment variables always passed to the child process.

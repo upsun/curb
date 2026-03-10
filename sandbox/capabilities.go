@@ -43,7 +43,10 @@ func tunFixMessage() string {
 
   If AppArmor blocks TUN/TAP creation (TUNSETIFF: operation not permitted):
     1. Comment out 'audit deny capability,' in /etc/apparmor.d/unprivileged_userns
-    2. echo 'capability net_admin,' | sudo tee /etc/apparmor.d/local/unprivileged_userns
+    2. Add rules to /etc/apparmor.d/local/unprivileged_userns:
+         capability net_admin,
+         owner file rw dev/pts/[0-9]*,
+       The devpts rule fixes fstat errors on terminal devices (disconnected paths).
        For full DNS support, also add: capability sys_admin,
     3. sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
 

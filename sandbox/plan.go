@@ -43,7 +43,9 @@ type DegradedLayer struct {
 // SandboxPlan is the resolved enforcement plan derived from Config + Capabilities.
 type SandboxPlan struct {
 	ROPaths        []string
+	ROFiles        []string
 	RWPaths        []string
+	RWFiles        []string
 	HiddenPaths    []string
 	ExecPaths      []string
 	NetEnabled     bool
@@ -68,7 +70,9 @@ type ChildConfig struct {
 	Command        []string `json:"command"`
 	Env            []string `json:"env"`
 	ROPaths        []string `json:"ro_paths,omitempty"`
+	ROFiles        []string `json:"ro_files,omitempty"`
 	RWPaths        []string `json:"rw_paths,omitempty"`
+	RWFiles        []string `json:"rw_files,omitempty"`
 	HiddenPaths    []string `json:"hidden_paths,omitempty"`
 	ExecPaths      []string `json:"exec_paths,omitempty"`
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
@@ -141,6 +145,9 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		userRO = config.ExpandGlobs(userRO)
 		plan.HiddenPaths = config.ExpandGlobs(plan.HiddenPaths)
 		plan.ROPaths = slices.Concat(config.DefaultROPaths, userRO)
+		plan.ROFiles = append(plan.ROFiles, config.DefaultROFiles...)
+		plan.RWPaths = append(plan.RWPaths, config.DefaultRWPaths...)
+		plan.RWFiles = append(plan.RWFiles, config.DefaultRWFiles...)
 	}
 	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
 	if realHome != "" {
@@ -243,7 +250,9 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		Command:        p.Command,
 		Env:            p.ResolveEnv(),
 		ROPaths:        p.ROPaths,
+		ROFiles:        p.ROFiles,
 		RWPaths:        p.RWPaths,
+		RWFiles:        p.RWFiles,
 		HiddenPaths:    p.HiddenPaths,
 		ExecPaths:      p.ExecPaths,
 		NoFSRestrict:   p.NoFSRestrict,

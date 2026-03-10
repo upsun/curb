@@ -305,6 +305,40 @@ func TestCurb_EnvOnlyExpectedVars(t *testing.T) {
 	}
 }
 
+// TestCurb_EnvLeak_ProcEnviron tries to read /proc/[pid]/environ of the parent
+// process to bypass env sanitization. The user namespace blocks ptrace-guarded
+// access to processes outside the namespace, so the parent's env is unreadable.
+func TestCurb_EnvLeak_ProcEnviron(t *testing.T) {
+	requireUserNS(t)
+
+	// Pass a secret in the parent environment; the child should not be able
+	// to recover it by reading the parent's /proc/[pid]/environ.
+	ppid := os.Getpid()
+	cmd := exec.Command(curbBin, "--", "sh", "-c",
+		fmt.Sprintf("cat /proc/%d/environ 2>&1 || true", ppid))
+	cmd.Env = append(os.Environ(), "SECRET_LEAK_TEST=hunter2")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "command failed: %s", string(out))
+	assert.NotContains(t, string(out), "hunter2",
+		"/proc/%d/environ leaked parent env", ppid)
+}
+
+// TestCurb_EnvLeak_ProcWalk tries to enumerate /proc/[pid] directories to find
+// the parent's secret via environ files. The user namespace blocks ptrace-guarded
+// access to processes outside the namespace. The child's own environ is readable
+// but only contains the sanitized environment (no secrets from the parent).
+func TestCurb_EnvLeak_ProcWalk(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c",
+		`for f in /proc/[0-9]*/environ; do cat "$f" 2>/dev/null; done; true`)
+	cmd.Env = append(os.Environ(), "SECRET_WALK_TEST=s3cret")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "walk command failed: %s", string(out))
+	assert.NotContains(t, string(out), "s3cret",
+		"secret from parent env leaked via /proc walk")
+}
+
 func requireLandlock(t *testing.T) {
 	t.Helper()
 	if testCaps.LandlockABI == 0 {

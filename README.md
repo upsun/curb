@@ -66,7 +66,7 @@ curb --dry-run make test
 | `--allow-write` | `CURB_ALLOW_WRITE` | Additional writable paths (use `'*'` to disable all FS restrictions) |
 | `--hide` | `CURB_HIDE` | Paths to hide (overmounted with empty tmpfs) |
 
-By default, system paths (`/usr`, `/lib`, `/etc`, etc.) and the current directory are read-only. A private temp directory is created and set as `TMPDIR`. Use `--allow-write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`). Glob patterns are supported (e.g. `--allow-read '~/docs/*.md'`).
+By default, system paths (`/usr`, `/lib`, `/etc`, `/proc`), device nodes (`/dev/null`, `/dev/urandom`, `/dev/pts`), and the current directory are accessible. A private temp directory is created and set as `TMPDIR`. Use `--allow-write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`). Glob patterns are supported (e.g. `--allow-read '~/docs/*.md'`).
 
 ### Executable Control
 
@@ -106,6 +106,30 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `T
 | Linux (kernel 5.13+) | Full | Landlock + namespaces + netstack |
 | Linux (kernel 4.18-5.12) | Degraded | No Landlock; mount/seccomp only |
 | macOS / Windows | Environment only | Sanitized env; all other restrictions unavailable |
+
+## Troubleshooting
+
+### AppArmor on Ubuntu 24.04+
+
+Ubuntu 24.04+ restricts user namespaces via the `unprivileged_userns` AppArmor profile. This can cause two issues:
+
+**TUN/TAP creation fails** (`--allow-domains`): Add capabilities to `/etc/apparmor.d/local/unprivileged_userns`:
+
+```
+capability net_admin,
+```
+
+**`fstat` errors on terminal devices** (e.g. `EACCES: permission denied, fstat` from Bun/Node): The AppArmor profile only allows file access on absolute paths (`/**`), but devpts nodes in a user namespace appear as disconnected paths (`dev/pts/0` without leading `/`). Add to `/etc/apparmor.d/local/unprivileged_userns`:
+
+```
+owner file rw dev/pts/[0-9]*,
+```
+
+After editing, reload the profile:
+
+```
+sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
+```
 
 ## How It Works
 

@@ -57,7 +57,13 @@ func childInit() error {
 				return fmt.Errorf("hiding paths: %w", err)
 			}
 		}
-		rules := policy.BuildLandlockRules(cfg.ROPaths, cfg.RWPaths, cfg.ExecPaths)
+		rules := policy.BuildLandlockRules(policy.LandlockPaths{
+			RODirs:  cfg.ROPaths,
+			ROFiles: cfg.ROFiles,
+			RWDirs:  cfg.RWPaths,
+			RWFiles: cfg.RWFiles,
+			Exec:    cfg.ExecPaths,
+		})
 		if len(rules) > 0 {
 			if err := policy.EnforceLandlock(rules); err != nil {
 				return fmt.Errorf("enforcing landlock: %w", err)

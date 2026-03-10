@@ -48,10 +48,18 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		return -1, fmt.Errorf("resolving executable path: %w", err)
 	}
 
-	// Re-exec curb inside new user, network, and mount namespaces.
+	// Re-exec curb inside new user and network namespaces.
+	// Mount namespace is only added when needed (--hide). On Ubuntu 24.04+,
+	// AppArmor's unprivileged_userns profile blocks fstat on inherited pty
+	// fds inside a mount namespace ("disconnected path"). Skipping CLONE_NEWNS
+	// when not needed avoids this.
+	cloneFlags := uintptr(syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET)
+	if len(plan.HiddenPaths) > 0 {
+		cloneFlags |= syscall.CLONE_NEWNS
+	}
 	cmd := exec.Command(self)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
+		Cloneflags: cloneFlags,
 		UidMappings: []syscall.SysProcIDMap{
 			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
 		},
