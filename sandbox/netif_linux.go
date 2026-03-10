@@ -157,15 +157,11 @@ func addRoutePrefix(dst net.IP, dstLen uint8, gw string, ifindex int) error {
 		return fmt.Errorf("invalid gateway IP: %s", gw)
 	}
 
-	sock, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
+	sock, err := nlRouteSocket()
 	if err != nil {
-		return fmt.Errorf("netlink socket: %w", err)
+		return err
 	}
 	defer func() { _ = unix.Close(sock) }()
-
-	if err := unix.Bind(sock, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return fmt.Errorf("netlink bind: %w", err)
-	}
 
 	const rtMsgSize = int(unsafe.Sizeof(unix.RtMsg{}))
 	hdrLen := unix.NLMSG_HDRLEN + rtMsgSize
@@ -199,12 +195,109 @@ func addRoutePrefix(dst net.IP, dstLen uint8, gw string, ifindex int) error {
 	rtBuf[7] = unix.RTN_UNICAST
 	copy(buf[hdrLen:], attrs)
 
-	if err := unix.Sendto(sock, buf, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return fmt.Errorf("netlink send: %w", err)
+	return nlRouteSend(sock, buf)
+}
+
+// routeLoopback redirects loopback traffic (127.0.0.0/8) through the TAP
+// device so it reaches the parent's netstack instead of staying on lo.
+// This is needed for DNS (e.g. 127.0.0.53 systemd-resolved) and for
+// --allow-localhost forwarding of 127.0.0.1 connections.
+func routeLoopback(ifindex int) error {
+	// Delete the kernel's local-table routes for 127.0.0.0/8. These are
+	// auto-created when lo is brought up and have higher priority than the
+	// main table (local table is checked at priority 0, main at 32766).
+	// Without removing them, loopback traffic is delivered to lo (where
+	// nothing listens) instead of being routed through the TAP.
+	if err := deleteLocalLoopbackRoutes(); err != nil {
+		return fmt.Errorf("deleting local loopback routes: %w", err)
 	}
 
-	// Read ack.
-	ackBuf := make([]byte, 1024)
+	// Enable route_localnet so 127.0.0.0/8 can be routed through non-loopback interfaces.
+	// Safe: this is an isolated network namespace with nothing on its loopback.
+	sysctl := fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", tapName)
+	if err := os.WriteFile(sysctl, []byte("1"), 0o644); err != nil {
+		return fmt.Errorf("writing route_localnet: %w", err)
+	}
+
+	// Route all of 127.0.0.0/8 through the TAP. This covers both DNS
+	// nameservers (e.g. 127.0.0.53) and localhost services (127.0.0.1).
+	if err := addSubnetRoute(net.IPv4(127, 0, 0, 0), 8, gatewayIP, ifindex); err != nil {
+		return fmt.Errorf("adding loopback route: %w", err)
+	}
+	return nil
+}
+
+// deleteLocalLoopbackRoutes removes the kernel's auto-created local-table
+// routes for 127.0.0.0/8 (added when lo is brought up). These are:
+//   - local 127.0.0.0/8 dev lo (scope host)
+//   - local 127.0.0.1/32 dev lo (scope host)
+//   - broadcast 127.255.255.255/32 dev lo (scope link)
+func deleteLocalLoopbackRoutes() error {
+	sock, err := nlRouteSocket()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(sock) }()
+
+	routes := []struct {
+		dst   net.IP
+		pfx   uint8
+		typ   uint8
+		scope uint8
+	}{
+		{net.IPv4(127, 0, 0, 0), 8, unix.RTN_LOCAL, unix.RT_SCOPE_HOST},
+		{net.IPv4(127, 0, 0, 1), 32, unix.RTN_LOCAL, unix.RT_SCOPE_HOST},
+		{net.IPv4(127, 255, 255, 255), 32, unix.RTN_BROADCAST, unix.RT_SCOPE_LINK},
+	}
+
+	const rtMsgSize = int(unsafe.Sizeof(unix.RtMsg{}))
+	hdrLen := unix.NLMSG_HDRLEN + rtMsgSize
+
+	for _, r := range routes {
+		attrs := nlAttr(unix.RTA_DST, r.dst.To4())
+		totalLen := hdrLen + len(attrs)
+		buf := make([]byte, totalLen)
+
+		binary.NativeEndian.PutUint32(buf[0:4], uint32(totalLen))
+		binary.NativeEndian.PutUint16(buf[4:6], unix.RTM_DELROUTE)
+		binary.NativeEndian.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK)
+		binary.NativeEndian.PutUint32(buf[8:12], 1) // seq
+
+		rtBuf := buf[unix.NLMSG_HDRLEN:]
+		rtBuf[0] = unix.AF_INET       // Family
+		rtBuf[1] = r.pfx              // Dst_len
+		rtBuf[4] = unix.RT_TABLE_LOCAL // Table
+		rtBuf[5] = unix.RTPROT_KERNEL  // Protocol
+		rtBuf[6] = r.scope            // Scope
+		rtBuf[7] = r.typ              // Type
+		copy(buf[hdrLen:], attrs)
+
+		if err := nlRouteSend(sock, buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nlRouteSocket creates and binds a netlink route socket.
+func nlRouteSocket() (int, error) {
+	sock, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
+	if err != nil {
+		return -1, fmt.Errorf("netlink socket: %w", err)
+	}
+	if err := unix.Bind(sock, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		_ = unix.Close(sock)
+		return -1, fmt.Errorf("netlink bind: %w", err)
+	}
+	return sock, nil
+}
+
+// nlRouteSend sends a pre-built netlink message and waits for the ack.
+func nlRouteSend(sock int, msg []byte) error {
+	if err := unix.Sendto(sock, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return fmt.Errorf("netlink send: %w", err)
+	}
+	ackBuf := make([]byte, 128)
 	n, _, err := unix.Recvfrom(sock, ackBuf, 0)
 	if err != nil {
 		return fmt.Errorf("netlink recv: %w", err)
@@ -217,26 +310,6 @@ func addRoutePrefix(dst net.IP, dstLen uint8, gw string, ifindex int) error {
 				return fmt.Errorf("netlink error: %w", unix.Errno(-errno))
 			}
 		}
-	}
-	return nil
-}
-
-// routeLoopback enables route_localnet on the TAP device and adds a route for
-// 127.0.0.0/8 via the gateway. This allows traffic destined for loopback
-// addresses (e.g. 127.0.0.53 for systemd-resolved, 127.0.0.1 for localhost
-// services) to flow through the TAP to the parent's netstack.
-func routeLoopback(ifindex int) error {
-	// Enable route_localnet so 127.0.0.0/8 can be routed through non-loopback interfaces.
-	// Safe: this is an isolated network namespace with nothing on its loopback.
-	sysctl := fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", tapName)
-	if err := os.WriteFile(sysctl, []byte("1"), 0o644); err != nil {
-		return fmt.Errorf("writing route_localnet: %w", err)
-	}
-
-	// Route all of 127.0.0.0/8 through the TAP. This covers both DNS
-	// nameservers (e.g. 127.0.0.53) and localhost services (127.0.0.1).
-	if err := addSubnetRoute(net.IPv4(127, 0, 0, 0), 8, gatewayIP, ifindex); err != nil {
-		return fmt.Errorf("adding loopback route: %w", err)
 	}
 	return nil
 }
