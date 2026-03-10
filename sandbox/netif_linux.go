@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -139,6 +138,20 @@ func getInterfaceIndex(sock int, name string) (int, error) {
 // addRoute adds a route via the given gateway using netlink.
 // If dst is nil, adds a default route (0.0.0.0/0). Otherwise adds a /32 host route.
 func addRoute(dst net.IP, gw string, ifindex int) error {
+	var prefixLen uint8
+	if dst != nil {
+		prefixLen = 32
+	}
+	return addRoutePrefix(dst, prefixLen, gw, ifindex)
+}
+
+// addSubnetRoute adds a route for a CIDR prefix via the given gateway.
+func addSubnetRoute(dst net.IP, prefixLen uint8, gw string, ifindex int) error {
+	return addRoutePrefix(dst, prefixLen, gw, ifindex)
+}
+
+// addRoutePrefix adds a route with the given prefix length via the gateway using netlink.
+func addRoutePrefix(dst net.IP, dstLen uint8, gw string, ifindex int) error {
 	gwIP := net.ParseIP(gw).To4()
 	if gwIP == nil {
 		return fmt.Errorf("invalid gateway IP: %s", gw)
@@ -152,11 +165,6 @@ func addRoute(dst net.IP, gw string, ifindex int) error {
 
 	if err := unix.Bind(sock, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("netlink bind: %w", err)
-	}
-
-	var dstLen uint8
-	if dst != nil {
-		dstLen = 32
 	}
 
 	const rtMsgSize = int(unsafe.Sizeof(unix.RtMsg{}))
@@ -213,24 +221,11 @@ func addRoute(dst net.IP, gw string, ifindex int) error {
 	return nil
 }
 
-// routeLoopbackDNS enables route_localnet on the TAP device and adds host
-// routes for any loopback nameservers found in /etc/resolv.conf. This allows
-// DNS traffic destined for e.g. 127.0.0.53 (systemd-resolved) to flow through
-// the TAP to the parent's netstack, which forwards it to the real host resolver.
-// This avoids needing a mount namespace to bind-mount a custom resolv.conf.
-func routeLoopbackDNS(ifindex int) error {
-	nameservers := parseResolvConf("/etc/resolv.conf")
-	var loopback []net.IP
-	for _, ns := range nameservers {
-		ip := net.ParseIP(ns).To4()
-		if ip != nil && ip[0] == 127 {
-			loopback = append(loopback, ip)
-		}
-	}
-	if len(loopback) == 0 {
-		return nil
-	}
-
+// routeLoopback enables route_localnet on the TAP device and adds a route for
+// 127.0.0.0/8 via the gateway. This allows traffic destined for loopback
+// addresses (e.g. 127.0.0.53 for systemd-resolved, 127.0.0.1 for localhost
+// services) to flow through the TAP to the parent's netstack.
+func routeLoopback(ifindex int) error {
 	// Enable route_localnet so 127.0.0.0/8 can be routed through non-loopback interfaces.
 	// Safe: this is an isolated network namespace with nothing on its loopback.
 	sysctl := fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", tapName)
@@ -238,30 +233,12 @@ func routeLoopbackDNS(ifindex int) error {
 		return fmt.Errorf("writing route_localnet: %w", err)
 	}
 
-	for _, ip := range loopback {
-		if err := addRoute(ip, gatewayIP, ifindex); err != nil {
-			return fmt.Errorf("adding route for %s: %w", ip, err)
-		}
+	// Route all of 127.0.0.0/8 through the TAP. This covers both DNS
+	// nameservers (e.g. 127.0.0.53) and localhost services (127.0.0.1).
+	if err := addSubnetRoute(net.IPv4(127, 0, 0, 0), 8, gatewayIP, ifindex); err != nil {
+		return fmt.Errorf("adding loopback route: %w", err)
 	}
 	return nil
-}
-
-// parseResolvConf extracts nameserver addresses from a resolv.conf file.
-func parseResolvConf(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var servers []string
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "nameserver ") {
-			if addr := strings.TrimSpace(line[len("nameserver "):]); addr != "" {
-				servers = append(servers, addr)
-			}
-		}
-	}
-	return servers
 }
 
 // nlAttr builds a netlink attribute (NLA header + payload, padded to 4 bytes).

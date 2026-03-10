@@ -1581,6 +1581,109 @@ sock.close()
 		"expected all rapid-fire blocked queries to be refused, got: %s", outStr)
 }
 
+// --- Localhost forwarding tests ---
+
+// TestCurb_Net_LocalhostAllowed verifies that --allow-localhost forwards TCP to host services.
+func TestCurb_Net_LocalhostAllowed(t *testing.T) {
+	requireNetNS(t)
+
+	// Start a test HTTP server on the host.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHELLO_CURB_OK"))
+			_ = conn.Close()
+		}
+	}()
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow-domains", "*", "--allow-localhost", "--unsafe-allow-http", "--",
+		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://127.0.0.1:%d/", port))
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "expected localhost curl to succeed: %s", outStr)
+	assert.Contains(t, outStr, "HELLO_CURB_OK", "expected test server response")
+}
+
+// TestCurb_Net_LocalhostBlocked verifies that without --allow-localhost, 127.0.0.1 is not reachable.
+func TestCurb_Net_LocalhostBlocked(t *testing.T) {
+	requireNetNS(t)
+
+	// Start a test HTTP server on the host.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nLEAKED"))
+			_ = conn.Close()
+		}
+	}()
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow-domains", "*", "--unsafe-allow-http", "--",
+		"curl", "-s", "--connect-timeout", "3", fmt.Sprintf("http://127.0.0.1:%d/", port))
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	assert.NotContains(t, outStr, "LEAKED", "localhost should not be reachable without --allow-localhost")
+}
+
+// TestCurb_Net_LocalhostOnlyMode verifies that --allow-localhost without --allow-domains
+// still sets up the network namespace and forwards localhost traffic.
+func TestCurb_Net_LocalhostOnlyMode(t *testing.T) {
+	requireNetNS(t)
+
+	// Start a test TCP server on the host.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_, _ = conn.Write([]byte("LOCALHOST_OK\n"))
+			_ = conn.Close()
+		}
+	}()
+
+	// No --allow-domains, just --allow-localhost.
+	script := fmt.Sprintf(`python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect(('127.0.0.1', %d))
+data = s.recv(1024)
+print(data.decode())
+s.close()
+"`, port)
+
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+		"--allow-localhost", "--",
+		"sh", "-c", script)
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "expected localhost connection to succeed: %s", outStr)
+	assert.Contains(t, outStr, "LOCALHOST_OK", "expected test server response")
+}
+
 // filterCurbOutput removes lines starting with "curb:" from output.
 func filterCurbOutput(s string) string {
 	var lines []string

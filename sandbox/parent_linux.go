@@ -120,6 +120,12 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 				AllowLocalhost: plan.AllowLocalhost,
 				Logger:         plan.Logger,
 			}
+		} else if plan.AllowLocalhost {
+			// Localhost-only mode: no domain filtering, just forward loopback traffic.
+			filter = &netstack.FilterConfig{
+				AllowLocalhost: true,
+				Logger:         plan.Logger,
+			}
 		}
 		ns, recvErr = netstack.NewStack(tapFD, filter)
 		if recvErr != nil {

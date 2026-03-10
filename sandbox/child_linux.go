@@ -133,8 +133,8 @@ func setupChildNetwork(sockFile *os.File) error {
 		_ = unix.Close(tapFD)
 		return err
 	}
-	if err := routeLoopbackDNS(ifindex); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: warning: loopback DNS routing failed (%v); DNS may not work\n", err)
+	if err := routeLoopback(ifindex); err != nil {
+		fmt.Fprintf(os.Stderr, "curb: warning: loopback routing failed (%v); DNS and localhost services may not work\n", err)
 	}
 	if err := SendFD(sockFile, tapFD); err != nil {
 		_ = unix.Close(tapFD)

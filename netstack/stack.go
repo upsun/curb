@@ -90,7 +90,7 @@ func NewStack(tapFD int, filter *FilterConfig) (*Stack, error) {
 	// Set up TCP and UDP forwarding.
 	dnsFilter := newDNSFilter(filter)
 	setupTCPForwarding(s, filter, dnsFilter)
-	setupUDPForwarding(s, dnsFilter)
+	setupUDPForwarding(s, filter, dnsFilter)
 
 	return &Stack{s: s}, nil
 }
