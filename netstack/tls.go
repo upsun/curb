@@ -183,10 +183,23 @@ func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 		return
 	}
 
-	// Block ECH if configured.
-	if filter.BlockECH && hasECH {
-		filter.Logger.Event("tls_connect", dst, "blocked", "ech")
-		return
+	// Handle ECH based on mode.
+	if hasECH {
+		switch filter.ECHMode {
+		case ECHAllow:
+			// Allow ECH unconditionally.
+		case ECHDeny:
+			filter.Logger.Event("tls_connect", dst, "blocked", "ech")
+			return
+		default: // ECHStrip — residual ECH, validate via DNS IP cache.
+			host, _, _ := net.SplitHostPort(dst)
+			if filter.checkIP != nil && filter.checkIP(host) {
+				filter.Logger.Event("tls_connect", dst, "allowed", "ech_dns")
+			} else {
+				filter.Logger.Event("tls_connect", dst, "blocked", "ech")
+				return
+			}
+		}
 	}
 
 	// Require SNI if configured.

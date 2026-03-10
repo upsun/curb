@@ -51,7 +51,7 @@ type SandboxPlan struct {
 	NetEnabled     bool
 	AllowedDomains []string
 	AllowLocalhost bool
-	BlockECH       bool
+	ECHMode        string
 	RequireSNI     bool
 	AllowHTTP      bool
 	EnvSet         map[string]string
@@ -221,7 +221,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.AllowLocalhost = cfg.AllowLocalhost
-	plan.BlockECH = cfg.BlockECH
+	plan.ECHMode = cfg.ECHMode
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
 
@@ -358,10 +358,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    localhost:  forwarded to host")
 	}
 	if p.NetEnabled && len(p.AllowedDomains) > 0 {
-		pr("    tls (443):  SNI filtered")
-		if p.BlockECH {
-			pr(", ECH blocked")
-		}
+		pr("    tls (443):  SNI filtered, ECH %s", p.ECHMode)
 		if p.RequireSNI {
 			pr(", SNI required")
 		}

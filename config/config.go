@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -22,7 +23,7 @@ type Config struct {
 	NoFSRestrict      bool
 	NoExecRestrict    bool
 	AllowLocalhost    bool
-	BlockECH          bool
+	ECHMode           string
 	RequireSNI        bool
 	AllowHTTP         bool
 	LogFile           string
@@ -65,9 +66,14 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	allowECH, err := flags.GetBool("allow-ech")
+	echMode, err := flags.GetString("ech")
 	if err != nil {
 		return nil, err
+	}
+	switch echMode {
+	case "strip", "allow", "deny":
+	default:
+		return nil, fmt.Errorf("--ech must be strip, allow, or deny (got %q)", echMode)
 	}
 	allowNoSNI, err := flags.GetBool("allow-no-sni")
 	if err != nil {
@@ -110,7 +116,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		EnvPassthrough: passNames,
 		EnvSet:         setPairs,
 		AllowLocalhost: allowLocalhost,
-		BlockECH:       !allowECH,
+		ECHMode:        echMode,
 		RequireSNI:     !allowNoSNI,
 		AllowHTTP:      allowHTTP,
 		LogFile:        logFile,
@@ -204,10 +210,13 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
-	// Inverted bool flags: CURB_ALLOW_ECH=1 → BlockECH=false.
-	if !flags.Changed("allow-ech") {
-		if envBool("CURB_ALLOW_ECH") {
-			cfg.BlockECH = false
+	// ECH mode: env only if flag not explicitly set.
+	if !flags.Changed("ech") {
+		if val, ok := os.LookupEnv("CURB_ECH"); ok {
+			switch val {
+			case "strip", "allow", "deny":
+				cfg.ECHMode = val
+			}
 		}
 	}
 	if !flags.Changed("allow-no-sni") {

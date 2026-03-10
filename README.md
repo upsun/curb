@@ -55,7 +55,7 @@ curb --dry-run make test
 | `--allow-domains` | `CURB_ALLOW_DOMAINS` | Allowed domain patterns (comma-separated). Bare domains match exactly; use `*.example.com` for subdomains, or `*` to allow all. |
 | `--allow-localhost` | `CURB_ALLOW_LOCALHOST` | Forward connections to 127.0.0.0/8 to the host |
 | `--allow-http` | `CURB_ALLOW_HTTP` | Allow plaintext HTTP (port 80) when domain filtering is active |
-| `--allow-ech` | `CURB_ALLOW_ECH` | Allow TLS Encrypted Client Hello (reduces filtering) |
+| `--ech` | `CURB_ECH` | ECH handling mode: `strip` (default, strips ECH from DNS), `allow`, `deny` |
 | `--allow-no-sni` | `CURB_ALLOW_NO_SNI` | Allow TLS connections without SNI (reduces filtering) |
 
 ### Filesystem

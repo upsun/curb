@@ -120,7 +120,7 @@ func registerFlags(cmd *cobra.Command) {
 
 	// Network options.
 	f.Bool("allow-localhost", false, "allow child to reach host services via localhost")
-	f.Bool("allow-ech", false, "allow TLS Encrypted Client Hello (reduces filtering)")
+	f.String("ech", "strip", "ECH handling mode: strip, allow, deny")
 	f.Bool("allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
 	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")
 

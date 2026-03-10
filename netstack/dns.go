@@ -13,14 +13,99 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
+const (
+	// minCacheTTL is the minimum TTL for DNS IP cache entries.
+	minCacheTTL = 60 * time.Second
+)
+
 // DNSFilter intercepts DNS queries and checks them against an allowlist.
 type DNSFilter struct {
 	// Check reports whether the given domain name is allowed.
 	Check func(domain string) bool
 	// Logger for DNS events.
 	Logger *clog.Logger
+	// stripECH removes ECH SvcParams from HTTPS/SVCB DNS responses.
+	stripECH bool
 	// seenBlocked tracks domains already logged as blocked to avoid repetition.
 	seenBlocked sync.Map
+	// resolvedIPs maps IP string to expiry time for the DNS IP cache.
+	resolvedIPs sync.Map
+}
+
+// isResolvedIP reports whether the given IP was recently resolved via DNS.
+func (f *DNSFilter) isResolvedIP(ip string) bool {
+	val, ok := f.resolvedIPs.Load(ip)
+	if !ok {
+		return false
+	}
+	expiry := val.(time.Time)
+	if time.Now().After(expiry) {
+		f.resolvedIPs.Delete(ip)
+		return false
+	}
+	return true
+}
+
+// processECHStrip parses a DNS response, caches A/AAAA IPs,
+// and strips ECH SvcParams from HTTPS/SVCB records. It returns the
+// (possibly modified) response. This single-parse approach avoids
+// unpacking the DNS message twice.
+func (f *DNSFilter) processECHStrip(response []byte) []byte {
+	var msg dns.Msg
+	if err := msg.Unpack(response); err != nil {
+		return response
+	}
+
+	// Cache A/AAAA IPs for residual ECH validation.
+	for _, rr := range msg.Answer {
+		var ip string
+		switch r := rr.(type) {
+		case *dns.A:
+			ip = r.A.String()
+		case *dns.AAAA:
+			ip = r.AAAA.String()
+		default:
+			continue
+		}
+		ttl := max(time.Duration(rr.Header().Ttl)*time.Second, minCacheTTL)
+		f.resolvedIPs.Store(ip, time.Now().Add(ttl))
+	}
+
+	// Strip ECH SvcParams from HTTPS/SVCB records.
+	modified := false
+	stripRRs := func(rrs []dns.RR) {
+		for _, rr := range rrs {
+			var svcb *dns.SVCB
+			switch r := rr.(type) {
+			case *dns.SVCB:
+				svcb = r
+			case *dns.HTTPS:
+				svcb = &r.SVCB
+			default:
+				continue
+			}
+			filtered := svcb.Value[:0]
+			for _, kv := range svcb.Value {
+				if kv.Key() == dns.SVCB_ECHCONFIG {
+					modified = true
+					continue
+				}
+				filtered = append(filtered, kv)
+			}
+			svcb.Value = filtered
+		}
+	}
+	stripRRs(msg.Answer)
+	stripRRs(msg.Extra)
+
+	if !modified {
+		return response
+	}
+	out, err := msg.Pack()
+	if err != nil {
+		return response
+	}
+	return out
 }
 
 // handleQuery reads a DNS query from the sandbox, checks it against the
@@ -82,7 +167,11 @@ func (f *DNSFilter) processPacket(packet []byte, dst string) []byte {
 	}
 
 	// All questions allowed; forward to the original destination via UDP.
-	return f.forward(packet, dst)
+	resp = f.forward(packet, dst)
+	if resp != nil && f.stripECH {
+		resp = f.processECHStrip(resp)
+	}
+	return resp
 }
 
 // forward sends the raw DNS query to the upstream server and returns the response.
@@ -143,6 +232,9 @@ func (f *DNSFilter) handleTCPQuery(local net.Conn, dst string) {
 		var resp []byte
 		if allowed {
 			resp = f.forwardTCP(packet, dst)
+			if resp != nil && f.stripECH {
+				resp = f.processECHStrip(resp)
+			}
 		} else {
 			resp = refusedResp
 		}

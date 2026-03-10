@@ -28,12 +28,18 @@ const (
 )
 
 // newDNSFilter creates a DNSFilter from a FilterConfig, or returns nil if
-// filtering is not active.
+// filtering is not active. When ECHMode is ECHStrip, DNS ECH stripping and
+// IP caching are enabled, and the filter's checkIP is wired to the cache.
 func newDNSFilter(filter *FilterConfig) *DNSFilter {
 	if filter == nil || filter.Check == nil {
 		return nil
 	}
-	return &DNSFilter{Check: filter.Check, Logger: filter.Logger}
+	df := &DNSFilter{Check: filter.Check, Logger: filter.Logger}
+	if filter.ECHMode == ECHStrip {
+		df.stripECH = true
+		filter.checkIP = df.isResolvedIP
+	}
+	return df
 }
 
 // isLoopback reports whether the address is in 127.0.0.0/8.

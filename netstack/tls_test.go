@@ -2,7 +2,9 @@ package netstack
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,4 +188,133 @@ func TestParseClientHello_MultipleExtensions(t *testing.T) {
 	sni, _, err := ParseClientHello(data)
 	require.NoError(t, err)
 	assert.Equal(t, "test.example.org", sni)
+}
+
+func TestHandleTLSConnection_ECHDeny(t *testing.T) {
+	exts := append(buildSNIExtension("example.com"), buildECHExtension()...)
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check:   func(string) bool { return true },
+		ECHMode: ECHDeny,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "93.184.216.34:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	// The handler should close the connection since ECH is denied.
+	buf := make([]byte, 1)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed when ECH is denied")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_ECHAllow(t *testing.T) {
+	exts := append(buildSNIExtension("example.com"), buildECHExtension()...)
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check:   func(string) bool { return true },
+		ECHMode: ECHAllow,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// This will try to dial 127.0.0.1:1 which will fail, but it means
+		// ECH was not blocked (it proceeded past the ECH check).
+		handleTLSConnection(server, "127.0.0.1:1", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should close after dial failure")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_ECHStripWithValidIP(t *testing.T) {
+	exts := append(buildSNIExtension("example.com"), buildECHExtension()...)
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check:   func(string) bool { return true },
+		ECHMode: ECHStrip,
+		checkIP: func(ip string) bool { return ip == "93.184.216.34" },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "93.184.216.34:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	_, _ = client.Read(buf)
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_ECHStripWithUnknownIP(t *testing.T) {
+	exts := append(buildSNIExtension("example.com"), buildECHExtension()...)
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check:   func(string) bool { return true },
+		ECHMode: ECHStrip,
+		checkIP: func(string) bool { return false },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "1.2.3.4:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed when ECH strip has unknown IP")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_ECHStripNilCheckIP(t *testing.T) {
+	exts := append(buildSNIExtension("example.com"), buildECHExtension()...)
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check:   func(string) bool { return true },
+		ECHMode: ECHStrip,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "1.2.3.4:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed when checkIP is nil")
+	_ = client.Close()
+	<-done
 }

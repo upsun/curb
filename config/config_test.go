@@ -23,7 +23,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("allow-exec", nil, "")
 	f.StringSlice("allow-env", nil, "")
 	f.Bool("allow-localhost", false, "")
-	f.Bool("allow-ech", false, "")
+	f.String("ech", "strip", "")
 	f.Bool("allow-no-sni", false, "")
 	f.Bool("allow-http", false, "")
 	f.String("log-file", "", "")
@@ -48,7 +48,7 @@ func TestFromFlags_Defaults(t *testing.T) {
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
 	assert.False(t, cfg.AllowLocalhost)
-	assert.True(t, cfg.BlockECH, "BlockECH defaults to true")
+	assert.Equal(t, "strip", cfg.ECHMode, "ECHMode defaults to strip")
 	assert.True(t, cfg.RequireSNI, "RequireSNI defaults to true")
 	assert.False(t, cfg.AllowHTTP, "AllowHTTP defaults to false")
 	assert.Empty(t, cfg.LogFile)
@@ -66,7 +66,7 @@ func TestFromFlags_AllFlags(t *testing.T) {
 		"--allow-env", "GOPATH",
 		"--allow-env", "FOO=bar",
 		"--allow-localhost",
-		"--allow-ech",
+		"--ech", "allow",
 		"--allow-no-sni",
 		"--allow-http",
 		"--log-file", "/tmp/curb.log",
@@ -88,7 +88,7 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.False(t, cfg.NoFSRestrict)
 	assert.False(t, cfg.NoExecRestrict)
 	assert.True(t, cfg.AllowLocalhost)
-	assert.False(t, cfg.BlockECH, "--allow-ech inverts BlockECH")
+	assert.Equal(t, "allow", cfg.ECHMode, "--ech allow sets ECHMode")
 	assert.False(t, cfg.RequireSNI, "--allow-no-sni inverts RequireSNI")
 	assert.True(t, cfg.AllowHTTP, "--allow-http sets AllowHTTP")
 	assert.Equal(t, "/tmp/curb.log", cfg.LogFile)
@@ -177,11 +177,11 @@ func TestMergeEnv_InvertedBools(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_ECH", "1")
+	t.Setenv("CURB_ECH", "deny")
 	t.Setenv("CURB_ALLOW_HTTP", "true")
 	MergeEnv(cfg, cmd)
 
-	assert.False(t, cfg.BlockECH)
+	assert.Equal(t, "deny", cfg.ECHMode)
 	assert.True(t, cfg.AllowHTTP)
 }
 
