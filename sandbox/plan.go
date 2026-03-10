@@ -284,13 +284,18 @@ func (p *SandboxPlan) ResolveEnv() []string {
 			}
 		}
 	} else {
-		for _, name := range p.EnvPassthrough {
-			if isInternalEnvVar(name) {
+		for _, e := range os.Environ() {
+			k, v, _ := strings.Cut(e, "=")
+			if isInternalEnvVar(k) {
 				continue
 			}
-			if v, ok := os.LookupEnv(name); ok {
-				if _, set := env[name]; !set {
-					env[name] = v
+			if _, set := env[k]; set {
+				continue
+			}
+			for _, pat := range p.EnvPassthrough {
+				if matched, _ := filepath.Match(pat, k); matched {
+					env[k] = v
+					break
 				}
 			}
 		}
@@ -387,7 +392,18 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		pr("    set:        %s\n", strings.Join(setParts, " "))
 	}
 	if len(p.EnvPassthrough) > 0 {
-		pr("    passthrough: %s\n", strings.Join(p.EnvPassthrough, " "))
+		var resolved []string
+		for _, e := range os.Environ() {
+			k, _, _ := strings.Cut(e, "=")
+			for _, pat := range p.EnvPassthrough {
+				if matched, _ := filepath.Match(pat, k); matched {
+					resolved = append(resolved, k)
+					break
+				}
+			}
+		}
+		sort.Strings(resolved)
+		pr("    passthrough: %s\n", strings.Join(resolved, " "))
 	}
 	ln("    blocked:    everything else")
 

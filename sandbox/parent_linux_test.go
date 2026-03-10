@@ -150,6 +150,37 @@ func TestResolveEnv_PassthroughAll(t *testing.T) {
 	}
 }
 
+func TestResolveEnv_GlobPassthrough(t *testing.T) {
+	t.Setenv("TEST_CURB_ALPHA", "a")
+	t.Setenv("TEST_CURB_BETA", "b")
+	t.Setenv("TEST_OTHER", "x")
+	t.Setenv(InitEnvKey, "1")
+
+	plan := &SandboxPlan{
+		EnvSet:         map[string]string{"HOME": "/tmp"},
+		EnvPassthrough: []string{"TEST_CURB_*"},
+	}
+
+	env := plan.ResolveEnv()
+	assert.Contains(t, env, "TEST_CURB_ALPHA=a")
+	assert.Contains(t, env, "TEST_CURB_BETA=b")
+	assert.NotContains(t, env, "TEST_OTHER=x", "non-matching var must not appear")
+}
+
+func TestResolveEnv_GlobFiltersInternalVars(t *testing.T) {
+	t.Setenv(InitEnvKey, "1")
+	t.Setenv("_CURB_SECRET", "hidden")
+
+	plan := &SandboxPlan{
+		EnvPassthrough: []string{"_CURB_*"},
+	}
+
+	env := plan.ResolveEnv()
+	for _, e := range env {
+		assert.False(t, strings.HasPrefix(e, "_CURB_"), "glob must not leak internal _CURB_ vars")
+	}
+}
+
 func TestCurb_ID(t *testing.T) {
 	requireUserNS(t)
 
