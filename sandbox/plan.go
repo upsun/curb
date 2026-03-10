@@ -190,6 +190,11 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			}
 		}
 
+		// Resolve symlinks in exec paths so Landlock covers the target
+		// inodes. Without this, symlinked binaries (e.g. ~/.local/bin/foo
+		// -> ~/.local/share/foo/binary) fail with permission denied.
+		plan.ExecPaths = resolveExecSymlinks(plan.ExecPaths)
+
 		// Ensure directories containing exec paths are readable so the
 		// child can stat() them for path resolution after Landlock.
 		if !cfg.NoFSRestrict {
@@ -424,6 +429,24 @@ func appendExecDirs(roPaths, execPaths []string) []string {
 		}
 	}
 	return roPaths
+}
+
+// resolveExecSymlinks evaluates symlinks in exec paths and appends any resolved
+// paths that differ from the original, so Landlock covers both the symlink and
+// its target. Errors are silently ignored (the path may not exist yet).
+func resolveExecSymlinks(paths []string) []string {
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		seen[p] = true
+	}
+	for _, p := range paths {
+		resolved, err := filepath.EvalSymlinks(p)
+		if err == nil && !seen[resolved] {
+			paths = append(paths, resolved)
+			seen[resolved] = true
+		}
+	}
+	return paths
 }
 
 // resolvConfDir returns the parent directory of /etc/resolv.conf's real path,

@@ -559,6 +559,29 @@ func TestCurb_Exec_ExecFlagAllows(t *testing.T) {
 	require.NoError(t, err, "expected --allow-exec to allow binary: %s", string(out))
 }
 
+// TestCurb_Exec_SymlinkedBinaryAllowed verifies that a symlinked binary can be
+// executed when the symlink directory is in PATH and the target is elsewhere.
+func TestCurb_Exec_SymlinkedBinaryAllowed(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	// Create target binary in one directory.
+	targetDir := t.TempDir()
+	targetBin := filepath.Join(targetDir, "mytrue")
+	copyBinary(t, "/bin/true", targetBin)
+
+	// Create symlink in a different directory.
+	linkDir := t.TempDir()
+	link := filepath.Join(linkDir, "mytrue")
+	require.NoError(t, os.Symlink(targetBin, link))
+
+	// Run curb with the symlink as the command. Curb should resolve the
+	// symlink and allow execution of the target.
+	cmd := exec.Command(curbBin, "--allow-read", targetDir, "--allow-read", linkDir, "--allow-exec", link, "--", link)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected symlinked binary to be allowed: %s", string(out))
+}
+
 // TestCurb_Exec_NoExecRestrict verifies that --allow-exec '*' allows any binary.
 func TestCurb_Exec_NoExecRestrict(t *testing.T) {
 	requireUserNS(t)
