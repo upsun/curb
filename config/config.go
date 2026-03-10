@@ -99,14 +99,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	}
 
 	// Separate --allow-env values into passthrough names and explicit name=value pairs.
-	var passNames, setPairs []string
-	for _, v := range env {
-		if strings.Contains(v, "=") {
-			setPairs = append(setPairs, v)
-		} else {
-			passNames = append(passNames, v)
-		}
-	}
+	passNames, setPairs := classifyEnvArgs(env)
 
 	cfg := &Config{
 		AllowedDomains: allow,
@@ -184,18 +177,13 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 
 	// --allow-env via CURB_ALLOW_ENV: split and classify like FromFlags.
 	if val, ok := os.LookupEnv("CURB_ALLOW_ENV"); ok {
-		parts := splitComma(val)
-		if containsStar(parts) {
+		envPass, envSet := classifyEnvArgs(splitComma(val))
+		if containsStar(envPass) {
 			cfg.EnvPassthroughAll = true
 			cfg.EnvPassthrough = nil
 		} else {
-			for _, v := range parts {
-				if strings.Contains(v, "=") {
-					cfg.EnvSet = append(cfg.EnvSet, v)
-				} else {
-					cfg.EnvPassthrough = append(cfg.EnvPassthrough, v)
-				}
-			}
+			cfg.EnvPassthrough = append(cfg.EnvPassthrough, envPass...)
+			cfg.EnvSet = append(cfg.EnvSet, envSet...)
 		}
 	}
 
@@ -232,6 +220,18 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 			cfg.AllowHTTP = true
 		}
 	}
+}
+
+// classifyEnvArgs separates env args into passthrough names and explicit name=value pairs.
+func classifyEnvArgs(args []string) (passNames, setPairs []string) {
+	for _, v := range args {
+		if strings.Contains(v, "=") {
+			setPairs = append(setPairs, v)
+		} else {
+			passNames = append(passNames, v)
+		}
+	}
+	return
 }
 
 // containsStar reports whether the slice contains a literal "*" element.

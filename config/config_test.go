@@ -233,6 +233,28 @@ func TestMergeEnv_WildcardEnv(t *testing.T) {
 	assert.Empty(t, cfg.EnvPassthrough)
 }
 
+func TestMergeEnv_WildcardEnvValueNotPassthrough(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	// FOO=* is a set-pair, not a wildcard passthrough.
+	t.Setenv("CURB_ALLOW_ENV", "FOO=*")
+	MergeEnv(cfg, cmd)
+
+	assert.False(t, cfg.EnvPassthroughAll, "FOO=* should not trigger passthrough-all")
+	assert.Equal(t, []string{"FOO=*"}, cfg.EnvSet)
+}
+
+func TestFromFlags_WildcardEnvValueNotPassthrough(t *testing.T) {
+	cmd := newTestCmd([]string{"--allow-env", "FOO=*"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	assert.False(t, cfg.EnvPassthroughAll, "FOO=* should not trigger passthrough-all")
+	assert.Equal(t, []string{"FOO=*"}, cfg.EnvSet)
+}
+
 func TestSplitComma(t *testing.T) {
 	tests := []struct {
 		name string
