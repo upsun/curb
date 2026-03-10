@@ -16,6 +16,7 @@ import (
 const (
 	ansiRed    = "\033[31m"
 	ansiYellow = "\033[33m"
+	ansiBlue   = "\033[34m"
 	ansiDim    = "\033[2m"
 	ansiReset  = "\033[0m"
 )
@@ -84,7 +85,7 @@ func (l *Logger) Info(format string, args ...any) {
 	if l == nil || l.quiet || !l.verbose {
 		return
 	}
-	l.printLevel("info", ansiDim, fmt.Sprintf(format, args...))
+	l.printLevel("info", ansiBlue, fmt.Sprintf(format, args...))
 }
 
 // Event logs a filtering event. Events are written to the JSON log file (if

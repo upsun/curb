@@ -70,6 +70,8 @@ The target command must follow a -- separator.`,
 			}
 			if plan.NoFSRestrict {
 				logger.Info("fs: disabled (--no-fs-restrict).")
+			} else if plan.Caps.MountNS != nil {
+				logger.Warn("fs: Landlock active, dotfile hiding unavailable (no mount namespace).")
 			} else {
 				logger.Info("fs: active.")
 			}
