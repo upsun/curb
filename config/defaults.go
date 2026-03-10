@@ -46,7 +46,6 @@ var SafePassthroughVars = []string{
 	"TERM",
 	"COLORTERM",
 	"NO_COLOR",
-	"LS_COLORS",
 	"LANG",
 	"LC_ALL",
 	"LC_CTYPE",
