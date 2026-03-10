@@ -71,8 +71,7 @@ func TestChildConfig_Serialization(t *testing.T) {
 		ROPaths:        []string{"/usr", "/lib"},
 		NetEnabled:     true,
 		AllowedDomains: []string{"example.com"},
-		TempDir:        "/tmp/curb-test",
-		CWD:            "/home/test",
+		TempDir: "/tmp/curb-test",
 	}
 
 	data, err := json.Marshal(cfg)
@@ -344,20 +343,28 @@ func TestCurb_FS_WriteTmpDirAllowed(t *testing.T) {
 	require.NoError(t, err, "expected TMPDIR write to succeed: %s", string(out))
 }
 
-// TestCurb_FS_WriteGitCWDAllowed verifies that CWD is writable in a git directory.
-func TestCurb_FS_WriteGitCWDAllowed(t *testing.T) {
+// TestCurb_FS_WriteCWDRequiresExplicitFlag verifies that CWD in a git dir is
+// NOT writable by default, and IS writable with --fs-rw.
+func TestCurb_FS_WriteCWDRequiresExplicitFlag(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
 
-	// Create a temp dir with a .git directory to simulate a git repo.
 	gitDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(gitDir, ".git"), 0o755))
 	testFile := filepath.Join(gitDir, "curb-test-write")
 
+	// Without --fs-rw: write should be blocked even in a git dir.
 	cmd := exec.Command(curbBin, "--", "touch", testFile)
 	cmd.Dir = gitDir
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected CWD write in git dir to succeed: %s", string(out))
+	require.Error(t, err, "expected CWD write in git dir to fail without --fs-rw: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+
+	// With --fs-rw: write should succeed.
+	cmd = exec.Command(curbBin, "--fs-rw", gitDir, "--", "touch", testFile)
+	cmd.Dir = gitDir
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "expected CWD write with --fs-rw to succeed: %s", string(out))
 	_ = os.Remove(testFile)
 }
 
@@ -376,7 +383,8 @@ func TestCurb_FS_WriteNonGitCWDBlocked(t *testing.T) {
 	assert.Contains(t, string(out), "Permission denied")
 }
 
-// TestCurb_FS_WriteHooksBlocked verifies that .git/hooks is read-only.
+// TestCurb_FS_WriteHooksBlocked verifies that .git/hooks is read-only even
+// when CWD is explicitly writable.
 func TestCurb_FS_WriteHooksBlocked(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
@@ -387,7 +395,7 @@ func TestCurb_FS_WriteHooksBlocked(t *testing.T) {
 	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 	hookFile := filepath.Join(hooksDir, "pre-commit")
 
-	cmd := exec.Command(curbBin, "--", "touch", hookFile)
+	cmd := exec.Command(curbBin, "--fs-rw", gitDir, "--", "touch", hookFile)
 	cmd.Dir = gitDir
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected hooks write to fail: %s", string(out))
@@ -618,8 +626,8 @@ func TestCurb_Exec_CWDNotExecutable(t *testing.T) {
 	bin := filepath.Join(gitDir, "evil")
 	copyBinary(t, "/bin/true", bin)
 
-	// CWD is writable (git dir), but should not have execute permission.
-	cmd := exec.Command(curbBin, "--", "sh", "-c", bin)
+	// CWD is writable via --fs-rw, but should not have execute permission.
+	cmd := exec.Command(curbBin, "--fs-rw", gitDir, "--", "sh", "-c", bin)
 	cmd.Dir = gitDir
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected exec from writable CWD to be blocked: %s", string(out))

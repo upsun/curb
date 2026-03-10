@@ -19,7 +19,7 @@ Requires Go 1.26+ and Linux kernel 5.13+ (for Landlock). Network filtering requi
 Run a command with default restrictions (filesystem read-only, no network, sanitized environment):
 
 ```
-curb -- make build
+curb -- make check
 ```
 
 Allow HTTPS access to specific domains:
@@ -31,7 +31,7 @@ curb --allow-domains 'example.com,*.github.com' -- curl https://example.com
 Allow a build tool to write to the current directory and access specific domains:
 
 ```
-curb --allow-domains 'registry.npmjs.org,*.npmjs.org' -- npm install
+curb --fs-rw . --allow-domains 'registry.npmjs.org,*.npmjs.org' -- npm install
 ```
 
 Forward localhost services from the host:
@@ -62,7 +62,7 @@ curb --dry-run -- make test
 | `--fs-rw` | `CURB_FS_RW` | Additional read-write paths |
 | `--fs-hide` | `CURB_FS_HIDE` | Paths to hide (overmounted with empty tmpfs) |
 
-By default, system paths (`/usr`, `/lib`, `/etc`, etc.) are read-only, dotfiles are hidden, and Git working directories are writable. A private temp directory is created and set as `TMPDIR`.
+By default, system paths (`/usr`, `/lib`, `/etc`, etc.) and the current directory are read-only, and dotfiles are hidden. A private temp directory is created and set as `TMPDIR`. Use `--fs-rw .` to grant write access to the current directory.
 
 ### Executable Control
 
@@ -70,7 +70,7 @@ By default, system paths (`/usr`, `/lib`, `/etc`, etc.) are read-only, dotfiles 
 |------|---------|-------------|
 | `--allow-exec` | `CURB_ALLOW_EXEC` | Additional allowed executables (name or absolute path) |
 
-By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target command itself have execute permission (via Landlock). Writable directories (TMPDIR, CWD) are not executable.
+By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target command itself have execute permission (via Landlock). Writable directories (TMPDIR) are not executable.
 
 ### Environment
 

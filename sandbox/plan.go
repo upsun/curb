@@ -57,11 +57,9 @@ type SandboxPlan struct {
 	EnvSet         map[string]string
 	EnvPassthrough []string
 	DegradedLayers []DegradedLayer
-	TempDir        string
-	CWD            string
-	CWDWritable    bool
-	NoFSRestrict   bool
-	Quiet          bool
+	TempDir      string
+	NoFSRestrict bool
+	Quiet        bool
 	Command        []string
 	Caps           *Capabilities
 	Logger         *clog.Logger
@@ -79,9 +77,8 @@ type ChildConfig struct {
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
-	Quiet          bool     `json:"quiet,omitempty"`
-	TempDir        string   `json:"temp_dir"`
-	CWD            string   `json:"cwd,omitempty"`
+	Quiet   bool   `json:"quiet,omitempty"`
+	TempDir string `json:"temp_dir"`
 }
 
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
@@ -157,22 +154,18 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.RWPaths = config.ExpandTildes(plan.RWPaths, realHome)
 	}
 
-	// CWD Git detection.
+	// CWD: always read-only by default (use --fs-rw . for write access).
 	cwd, err := os.Getwd()
 	if err == nil {
-		plan.CWD = cwd
-		gitRoot, gitErr := config.FindGitRoot(cwd)
-		if gitErr == nil && gitRoot != "" {
-			plan.CWDWritable = true
-			plan.RWPaths = append(plan.RWPaths, cwd)
-			if !cfg.NoFSRestrict {
+		if !cfg.NoFSRestrict {
+			plan.ROPaths = append(plan.ROPaths, cwd)
+			// Protect git hooks if in a git repo (harmless if CWD is read-only).
+			gitRoot, gitErr := config.FindGitRoot(cwd)
+			if gitErr == nil && gitRoot != "" {
 				if hooksDir := config.FindGitHooksDir(gitRoot); hooksDir != "" {
 					plan.GitHooksPath = hooksDir
 				}
 			}
-		} else if !cfg.NoFSRestrict {
-			// Non-Git directory: read-only CWD.
-			plan.ROPaths = append(plan.ROPaths, cwd)
 		}
 	}
 
@@ -261,9 +254,8 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		NoFSRestrict:   p.NoFSRestrict,
 		NetEnabled:     p.NetEnabled,
 		AllowedDomains: p.AllowedDomains,
-		Quiet:          p.Quiet,
-		TempDir:        p.TempDir,
-		CWD:            p.CWD,
+		Quiet:   p.Quiet,
+		TempDir: p.TempDir,
 	}
 }
 
@@ -339,14 +331,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		pr("    read-only:  %s\n", strings.Join(p.ROPaths, " "))
 	}
 	if len(p.RWPaths) > 0 {
-		rw := make([]string, len(p.RWPaths))
-		copy(rw, p.RWPaths)
-		for i, path := range rw {
-			if path == p.CWD && p.CWDWritable {
-				rw[i] = ". (Git working tree detected)"
-			}
-		}
-		pr("    read-write: %s\n", strings.Join(rw, " "))
+		pr("    read-write: %s\n", strings.Join(p.RWPaths, " "))
 	}
 	if len(p.HiddenPaths) > 0 {
 		pr("    hidden:     %s\n", strings.Join(p.HiddenPaths, " "))
