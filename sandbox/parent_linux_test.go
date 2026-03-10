@@ -96,7 +96,7 @@ func TestResolveEnv(t *testing.T) {
 		EnvPassthrough: []string{"CURB_TEST_VAR"},
 	}
 
-	env := plan.resolveEnv()
+	env := plan.ResolveEnv()
 	assert.Contains(t, env, "HOME=/tmp")
 	assert.Contains(t, env, "PATH=/usr/bin")
 	assert.Contains(t, env, "CURB_TEST_VAR=test_value")
@@ -112,7 +112,7 @@ func TestResolveEnv_ExplicitOverridesPassthrough(t *testing.T) {
 		EnvPassthrough: []string{"HOME"},
 	}
 
-	env := plan.resolveEnv()
+	env := plan.ResolveEnv()
 	assert.Contains(t, env, "HOME=/override")
 	assert.NotContains(t, env, "HOME=/original")
 }
@@ -126,7 +126,7 @@ func TestResolveEnv_FiltersInternalVars(t *testing.T) {
 		EnvPassthrough: []string{InitEnvKey, "_CURB_INTERNAL", "PATH"},
 	}
 
-	env := plan.resolveEnv()
+	env := plan.ResolveEnv()
 	for _, e := range env {
 		assert.False(t, strings.HasPrefix(e, InitEnvKey+"="), "_CURB_INIT must not appear in env")
 		assert.False(t, strings.HasPrefix(e, "_CURB_INTERNAL="), "_CURB_ vars must not appear in env")
@@ -142,7 +142,7 @@ func TestResolveEnv_PassthroughAll(t *testing.T) {
 		EnvPassthrough: []string{envPassthroughAll},
 	}
 
-	env := plan.resolveEnv()
+	env := plan.ResolveEnv()
 	assert.Contains(t, env, "HOME=/sandbox", "forced vars override host")
 	assert.Contains(t, env, "CURB_TEST_PASSALL=yes")
 	for _, e := range env {

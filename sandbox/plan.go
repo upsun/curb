@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -84,6 +85,11 @@ type ChildConfig struct {
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
 // It returns an error only for fatal conditions (user ns unavailable, net required but missing).
 func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
+	if runtime.GOOS != "linux" {
+		// Non-Linux: env-only mode. Record all layers as degraded.
+		return buildDegradedPlan(cfg, caps)
+	}
+
 	if caps.UserNS != nil {
 		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSFixMessage())
 	}
@@ -242,7 +248,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 func (p *SandboxPlan) childConfig() ChildConfig {
 	return ChildConfig{
 		Command:        p.Command,
-		Env:            p.resolveEnv(),
+		Env:            p.ResolveEnv(),
 		ROPaths:        p.ROPaths,
 		RWPaths:        p.RWPaths,
 		HiddenPaths:    p.HiddenPaths,
@@ -262,8 +268,8 @@ func isInternalEnvVar(name string) bool {
 	return strings.HasPrefix(name, "_CURB_")
 }
 
-// resolveEnv resolves the final environment from EnvSet and EnvPassthrough.
-func (p *SandboxPlan) resolveEnv() []string {
+// ResolveEnv resolves the final environment from EnvSet and EnvPassthrough.
+func (p *SandboxPlan) ResolveEnv() []string {
 	env := make(map[string]string, len(p.EnvSet))
 	maps.Copy(env, p.EnvSet)
 	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
@@ -435,6 +441,57 @@ func hasTildePaths(paths []string) bool {
 		}
 	}
 	return false
+}
+
+// buildDegradedPlan creates a plan for non-Linux platforms where only
+// environment sanitization is available.
+func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
+	plan := &SandboxPlan{Caps: caps}
+
+	if len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost {
+		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+			Layer:  "network filtering",
+			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
+			Impact: "Network filtering is not available; all network access is unrestricted.",
+		})
+	}
+	if !cfg.NoFSRestrict {
+		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+			Layer:  "filesystem restrictions",
+			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
+			Impact: "Filesystem restrictions are not available; all paths are accessible.",
+		})
+	}
+	if !cfg.NoExecRestrict {
+		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+			Layer:  "executable control",
+			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
+			Impact: "Executable control is not available; all binaries can be executed.",
+		})
+	}
+
+	// Temp directory.
+	tmpDir, err := os.MkdirTemp("", "curb-")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	plan.TempDir = tmpDir
+
+	// Environment policy (still enforced on all platforms).
+	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
+	for _, pair := range cfg.EnvSet {
+		k, v, _ := strings.Cut(pair, "=")
+		plan.EnvSet[k] = v
+	}
+	if cfg.EnvPassthroughAll {
+		plan.EnvPassthrough = []string{envPassthroughAll}
+	} else {
+		plan.EnvPassthrough = append(plan.EnvPassthrough, config.SafePassthroughVars...)
+		plan.EnvPassthrough = append(plan.EnvPassthrough, cfg.EnvPassthrough...)
+	}
+
+	plan.Command = cfg.Command
+	return plan, nil
 }
 
 func printCap(w io.Writer, name string, err error, info string) {
