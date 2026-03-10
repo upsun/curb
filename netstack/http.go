@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"time"
 )
@@ -76,13 +75,13 @@ func handleHTTPConnection(local net.Conn, dst string, filter *FilterConfig) {
 
 	remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 	if dialErr != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: http forward %s: %v\n", dst, dialErr)
+		filter.Logger.Warn("http forward %s: %v", dst, dialErr)
 		return
 	}
 
 	// Write the buffered data to remote before relaying.
 	if _, err := remote.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: http forward write %s: %v\n", dst, err)
+		filter.Logger.Warn("http forward write %s: %v", dst, err)
 		_ = remote.Close()
 		return
 	}

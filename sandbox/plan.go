@@ -61,6 +61,7 @@ type SandboxPlan struct {
 	CWD            string
 	CWDWritable    bool
 	NoFSRestrict   bool
+	Quiet          bool
 	Command        []string
 	Caps           *Capabilities
 	Logger         *clog.Logger
@@ -78,6 +79,7 @@ type ChildConfig struct {
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	Quiet          bool     `json:"quiet,omitempty"`
 	TempDir        string   `json:"temp_dir"`
 	CWD            string   `json:"cwd,omitempty"`
 }
@@ -122,6 +124,8 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			Impact: landlockWarnMessage(),
 		})
 	}
+
+	plan.Quiet = cfg.Quiet
 
 	// Resolve the real home dir for tilde expansion (before child overrides HOME).
 	realHome, _ := os.UserHomeDir()
@@ -257,6 +261,7 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		NoFSRestrict:   p.NoFSRestrict,
 		NetEnabled:     p.NetEnabled,
 		AllowedDomains: p.AllowedDomains,
+		Quiet:          p.Quiet,
 		TempDir:        p.TempDir,
 		CWD:            p.CWD,
 	}

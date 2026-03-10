@@ -14,7 +14,7 @@ import (
 // are not available.
 func StartSandbox(plan *SandboxPlan) (int, error) {
 	for _, d := range plan.DegradedLayers {
-		fmt.Fprintf(os.Stderr, "curb: warning: %s: %s\n", d.Layer, d.Reason)
+		plan.Logger.Warn("%s: %s", d.Layer, d.Reason)
 	}
 
 	env := plan.ResolveEnv()

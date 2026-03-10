@@ -260,7 +260,7 @@ func TestCurb_EnvPassthroughWarning(t *testing.T) {
 	cmd := exec.Command(curbBin, "--env-passthrough", "--", "true")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "curb --env-passthrough -- true failed: %s", string(out))
-	assert.Contains(t, string(out), "curb: warning: --env-passthrough passes entire host environment to child")
+	assert.Contains(t, string(out), "curb: warning: Entire host environment passed to child (--env-passthrough).")
 }
 
 func TestCurb_EnvSafePassthrough(t *testing.T) {
@@ -581,7 +581,7 @@ func TestCurb_Exec_NoExecRestrict(t *testing.T) {
 	cmd := exec.Command(curbBin, "--fs-rw", dir, "--no-exec-restrict", "-v", "--", "sh", "-c", bin)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected --no-exec-restrict to allow binary: %s", string(out))
-	assert.Contains(t, string(out), "curb: info: executable restrictions disabled")
+	assert.Contains(t, string(out), "curb: info: Executable restrictions disabled (--no-exec-restrict).")
 }
 
 // TestCurb_Exec_NotFoundErrors verifies that --allow-exec with an unknown name errors.

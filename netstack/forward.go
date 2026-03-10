@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"time"
 
+	"github.com/upsun/curb/clog"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -42,11 +42,20 @@ func isLoopback(addr tcpip.Address) bool {
 	return b[0] == 127
 }
 
+// filterLogger returns the Logger from filter, or nil.
+func filterLogger(filter *FilterConfig) *clog.Logger {
+	if filter == nil {
+		return nil
+	}
+	return filter.Logger
+}
+
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
 // If filter is active, traffic is routed by port:
 // 53 → DNS filter, 443 → TLS SNI filter, 80 → HTTP filter (if AllowHTTP), others → drop.
 // Loopback destinations (127.0.0.0/8) are forwarded to the host if AllowLocalhost is set.
 func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilter) {
+	logger := filterLogger(filter)
 	fwd := tcp.NewForwarder(s, 0, maxTCPInFlight, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
 		var wq waiter.Queue
@@ -70,14 +79,14 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 				}
 				if filter != nil && filter.AllowLocalhost {
 					hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
-					go forwardTCP(local, hostDst)
+					go forwardTCP(local, hostDst, logger)
 					return
 				}
 			}
 			// Other loopback ports: forward if AllowLocalhost.
 			if filter != nil && filter.AllowLocalhost {
 				hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
-				go forwardTCP(local, hostDst)
+				go forwardTCP(local, hostDst, logger)
 				return
 			}
 			_ = local.Close()
@@ -113,7 +122,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 
 		remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 		if dialErr != nil {
-			fmt.Fprintf(os.Stderr, "curb: error: tcp forward %s: %v\n", dst, dialErr)
+			logger.Warn("tcp forward %s: %v", dst, dialErr)
 			_ = local.Close()
 			return
 		}
@@ -124,10 +133,10 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 }
 
 // forwardTCP dials the destination and relays data bidirectionally.
-func forwardTCP(local net.Conn, dst string) {
+func forwardTCP(local net.Conn, dst string, logger *clog.Logger) {
 	remote, err := net.DialTimeout("tcp", dst, tcpDialTimeout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: localhost forward %s: %v\n", dst, err)
+		logger.Warn("localhost forward %s: %v", dst, err)
 		_ = local.Close()
 		return
 	}
@@ -138,6 +147,7 @@ func forwardTCP(local net.Conn, dst string) {
 // If dnsFilter is non-nil, only UDP port 53 (DNS) is forwarded; all other UDP is dropped.
 // Loopback DNS is always forwarded; other loopback UDP requires AllowLocalhost.
 func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilter) {
+	logger := filterLogger(filter)
 	fwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		var wq waiter.Queue
@@ -161,7 +171,7 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 					hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
 					remote, dialErr := net.Dial("udp", hostDst)
 					if dialErr != nil {
-						fmt.Fprintf(os.Stderr, "curb: error: localhost udp forward %s: %v\n", hostDst, dialErr)
+						logger.Warn("localhost udp forward %s: %v", hostDst, dialErr)
 						ep.Close()
 						return true
 					}
@@ -174,7 +184,7 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 				hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
 				remote, dialErr := net.Dial("udp", hostDst)
 				if dialErr != nil {
-					fmt.Fprintf(os.Stderr, "curb: error: localhost udp forward %s: %v\n", hostDst, dialErr)
+					logger.Warn("localhost udp forward %s: %v", hostDst, dialErr)
 					ep.Close()
 					return true
 				}
@@ -204,7 +214,7 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 
 		remote, dialErr := net.Dial("udp", dst)
 		if dialErr != nil {
-			fmt.Fprintf(os.Stderr, "curb: error: udp forward %s: %v\n", dst, dialErr)
+			logger.Warn("udp forward %s: %v", dst, dialErr)
 			ep.Close()
 			return true
 		}

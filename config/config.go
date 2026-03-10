@@ -27,6 +27,7 @@ type Config struct {
 	DNSUpstream       string
 	LogFile           string
 	Verbose           bool
+	Quiet             bool
 	DryRun            bool
 	HomePath          string
 	Command           []string
@@ -100,6 +101,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	quiet, err := flags.GetBool("quiet")
+	if err != nil {
+		return nil, err
+	}
 	dryRun, err := flags.GetBool("dry-run")
 	if err != nil {
 		return nil, err
@@ -137,6 +142,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		DNSUpstream:       dnsUpstream,
 		LogFile:           logFile,
 		Verbose:           verbose,
+		Quiet:             quiet,
 		DryRun:            dryRun,
 		HomePath:          home,
 		Command:           cmd.Flags().Args(),
@@ -192,6 +198,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	mergeBoolEnv(flags, &cfg.NoExecRestrict, "no-exec-restrict", "CURB_NO_EXEC_RESTRICT")
 	mergeBoolEnv(flags, &cfg.AllowLocalhost, "allow-localhost", "CURB_ALLOW_LOCALHOST")
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
+	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
 	// Inverted bool flags: CURB_UNSAFE_ALLOW_ECH=1 → BlockECH=false.
 	if !flags.Changed("unsafe-allow-ech") {

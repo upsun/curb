@@ -3,9 +3,7 @@ package netstack
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
-	"os"
 	"time"
 )
 
@@ -211,13 +209,13 @@ func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 
 	remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 	if dialErr != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: tls forward %s: %v\n", dst, dialErr)
+		filter.Logger.Warn("tls forward %s: %v", dst, dialErr)
 		return
 	}
 
 	// Write the buffered data to the remote before relaying.
 	if _, err := remote.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: error: tls forward write %s: %v\n", dst, err)
+		filter.Logger.Warn("tls forward write %s: %v", dst, err)
 		_ = remote.Close()
 		return
 	}

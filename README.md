@@ -87,6 +87,7 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `T
 |------|---------|-------------|
 | `--log-file` | `CURB_LOG_FILE` | Write structured JSON logs to file |
 | `-v`, `--verbose` | `CURB_VERBOSE` | Print filtering decisions to stderr |
+| `-q`, `--quiet` | `CURB_QUIET` | Suppress warnings |
 
 ### Escape Hatches
 

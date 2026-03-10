@@ -32,6 +32,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.String("dns-upstream", "", "")
 	f.String("log-file", "", "")
 	f.BoolP("verbose", "v", false, "")
+	f.BoolP("quiet", "q", false, "")
 	f.Bool("dry-run", false, "")
 	f.String("home", "", "")
 

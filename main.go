@@ -22,7 +22,7 @@ func main() {
 	}
 
 	if err := cmd.NewRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "curb:", err)
+		fmt.Fprintf(os.Stderr, "curb: error: %v\n", err)
 		os.Exit(1)
 	}
 }

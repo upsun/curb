@@ -13,6 +13,7 @@ import (
 
 	"github.com/upsun/curb/policy"
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // ChildInit is the entry point for the re-exec'd child process inside new namespaces.
@@ -38,7 +39,7 @@ func childInit() error {
 	// Network setup: create TAP and send fd to parent before Landlock
 	// (Landlock would block /dev/net/tun access).
 	if cfg.NetEnabled {
-		if err := setupChildNetwork(sockFile); err != nil {
+		if err := setupChildNetwork(sockFile, cfg.Quiet); err != nil {
 			_ = sockFile.Close()
 			return fmt.Errorf("network setup: %w", err)
 		}
@@ -48,7 +49,7 @@ func childInit() error {
 	// Filesystem enforcement: mounts first, then Landlock.
 	// Landlock would block mount syscalls if enforced first.
 	if !cfg.NoFSRestrict {
-		mountsOK := prepareMountNS()
+		mountsOK := prepareMountNS(cfg.Quiet)
 		if mountsOK {
 			if err := hidePaths(cfg.HiddenPaths); err != nil {
 				return fmt.Errorf("hiding paths: %w", err)
@@ -79,12 +80,26 @@ func childInit() error {
 	return syscall.Exec(exe, cfg.Command, cfg.Env)
 }
 
+// childWarn prints a warning to stderr from the child process.
+// Suppressed if quiet is true. Uses color if stderr is a terminal.
+func childWarn(quiet bool, format string, args ...any) {
+	if quiet {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	if term.IsTerminal(int(os.Stderr.Fd())) && os.Getenv("NO_COLOR") == "" {
+		fmt.Fprintf(os.Stderr, "\033[33mcurb: warning:\033[0m %s\n", msg)
+	} else {
+		fmt.Fprintf(os.Stderr, "curb: warning: %s\n", msg)
+	}
+}
+
 // prepareMountNS makes mount propagation slave so overmounts don't propagate to host.
 // Returns false if mount operations are not available (e.g. AppArmor restrictions).
-func prepareMountNS() bool {
+func prepareMountNS(quiet bool) bool {
 	err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: warning: mount namespace restricted (%v); dotfile hiding and hooks protection disabled\n", err)
+		childWarn(quiet, "Dotfile hiding and hooks protection unavailable (mount namespace restricted).")
 		return false
 	}
 	return true
@@ -123,7 +138,7 @@ func protectHooksDir(hooksPath string) error {
 
 // setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
 // fd to the parent, and waits for a ready signal before continuing.
-func setupChildNetwork(sockFile *os.File) error {
+func setupChildNetwork(sockFile *os.File, quiet bool) error {
 	tapFD, err := createTAP()
 	if err != nil {
 		return err
@@ -134,7 +149,7 @@ func setupChildNetwork(sockFile *os.File) error {
 		return err
 	}
 	if err := routeLoopback(ifindex); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: warning: loopback routing failed (%v); DNS and localhost services may not work\n", err)
+		childWarn(quiet, "DNS and localhost services may not work (loopback routing failed).")
 	}
 	if err := SendFD(sockFile, tapFD); err != nil {
 		_ = unix.Close(tapFD)

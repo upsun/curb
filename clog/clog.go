@@ -5,8 +5,19 @@ package clog
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+
+	"golang.org/x/term"
+)
+
+// ANSI color sequences.
+const (
+	ansiRed    = "\033[31m"
+	ansiYellow = "\033[33m"
+	ansiDim    = "\033[2m"
+	ansiReset  = "\033[0m"
 )
 
 // Logger writes structured events to a JSON log file and/or human-readable
@@ -14,13 +25,24 @@ import (
 type Logger struct {
 	json    *slog.Logger // JSON logger for --log-file (nil if unset).
 	verbose bool         // --verbose: human-readable to stderr.
+	quiet   bool         // --quiet: suppress warnings.
+	color   bool         // Whether stderr supports color.
+	w       io.Writer    // Output writer (defaults to os.Stderr).
 	file    *os.File     // Log file handle (nil if unset).
 }
 
 // New creates a Logger. If logFile is non-empty, JSON events are written to
 // that file. If verbose is true, human-readable lines are written to stderr.
-func New(logFile string, verbose bool) (*Logger, error) {
-	l := &Logger{verbose: verbose}
+// If quiet is true, warnings are suppressed.
+func New(logFile string, verbose, quiet bool) (*Logger, error) {
+	l := &Logger{
+		verbose: verbose,
+		quiet:   quiet,
+		w:       os.Stderr,
+	}
+	if f, ok := l.w.(*os.File); ok {
+		l.color = term.IsTerminal(int(f.Fd())) && os.Getenv("NO_COLOR") == ""
+	}
 	if logFile != "" {
 		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
@@ -30,6 +52,39 @@ func New(logFile string, verbose bool) (*Logger, error) {
 		l.json = slog.New(slog.NewJSONHandler(f, nil))
 	}
 	return l, nil
+}
+
+// printLevel writes a prefixed message to stderr with optional color.
+func (l *Logger) printLevel(prefix, color, msg string) {
+	if l.color {
+		_, _ = fmt.Fprintf(l.w, "%scurb: %s:%s %s\n", color, prefix, ansiReset, msg)
+	} else {
+		_, _ = fmt.Fprintf(l.w, "curb: %s: %s\n", prefix, msg)
+	}
+}
+
+// Warn prints a warning to stderr, suppressed if quiet.
+func (l *Logger) Warn(format string, args ...any) {
+	if l == nil || l.quiet {
+		return
+	}
+	l.printLevel("warning", ansiYellow, fmt.Sprintf(format, args...))
+}
+
+// Error prints an error to stderr, never suppressed.
+func (l *Logger) Error(format string, args ...any) {
+	if l == nil {
+		return
+	}
+	l.printLevel("error", ansiRed, fmt.Sprintf(format, args...))
+}
+
+// Info prints an informational message to stderr, suppressed if quiet or not verbose.
+func (l *Logger) Info(format string, args ...any) {
+	if l == nil || l.quiet || !l.verbose {
+		return
+	}
+	l.printLevel("info", ansiDim, fmt.Sprintf(format, args...))
 }
 
 // Event logs a filtering event. Events are written to the JSON log file (if
@@ -56,10 +111,16 @@ func (l *Logger) Event(event, domain, action, reason string) {
 		l.json.LogAttrs(context.Background(), slog.LevelInfo, "", attrs...)
 	}
 	if l.verbose {
+		var msg string
 		if reason != "" {
-			fmt.Fprintf(os.Stderr, "curb: %s %s: %s (%s)\n", event, action, domain, reason)
+			msg = fmt.Sprintf("%s %s: %s (%s)", event, action, domain, reason)
 		} else {
-			fmt.Fprintf(os.Stderr, "curb: %s %s: %s\n", event, action, domain)
+			msg = fmt.Sprintf("%s %s: %s", event, action, domain)
+		}
+		if l.color {
+			_, _ = fmt.Fprintf(l.w, "%scurb:%s %s\n", ansiDim, ansiReset, msg)
+		} else {
+			_, _ = fmt.Fprintf(l.w, "curb: %s\n", msg)
 		}
 	}
 }
@@ -73,4 +134,3 @@ func (l *Logger) Close() {
 		_ = l.file.Close()
 	}
 }
-

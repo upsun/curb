@@ -36,15 +36,15 @@ The target command must follow a -- separator.`,
 			config.MergeEnv(cfg, cmd)
 			cfg.Command = args
 
-			if cfg.EnvPassthroughAll {
-				fmt.Fprintln(os.Stderr, "curb: warning: --env-passthrough passes entire host environment to child")
-			}
-
-			logger, logErr := clog.New(cfg.LogFile, cfg.Verbose)
+			logger, logErr := clog.New(cfg.LogFile, cfg.Verbose, cfg.Quiet)
 			if logErr != nil {
 				return logErr
 			}
 			defer logger.Close()
+
+			if cfg.EnvPassthroughAll {
+				logger.Warn("Entire host environment passed to child (--env-passthrough).")
+			}
 
 			caps := sandbox.ProbeAll()
 			plan, err := sandbox.BuildPlan(cfg, caps)
@@ -59,14 +59,14 @@ The target command must follow a -- separator.`,
 				return nil
 			}
 
-			if cfg.Verbose && cfg.NoExecRestrict {
-				fmt.Fprintln(os.Stderr, "curb: info: executable restrictions disabled")
+			if cfg.NoExecRestrict {
+				logger.Info("Executable restrictions disabled (--no-exec-restrict).")
 			}
 
 			exitCode, err := sandbox.StartSandbox(plan)
 			plan.Cleanup()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "curb: error: %v\n", err)
+				logger.Error("%v", err)
 				os.Exit(sandbox.ExitSetupFailure)
 			}
 			os.Exit(exitCode)
@@ -112,6 +112,7 @@ func registerFlags(cmd *cobra.Command) {
 	// Logging.
 	f.String("log-file", "", "write structured JSON logs to file")
 	f.BoolP("verbose", "v", false, "verbose output")
+	f.BoolP("quiet", "q", false, "suppress warnings")
 
 	// Other.
 	f.Bool("dry-run", false, "print the sandbox plan without running the command")
