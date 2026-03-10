@@ -566,7 +566,7 @@ func TestCurb_Exec_ExecFlagAllows(t *testing.T) {
 
 	cmd := exec.Command(curbBin, "--fs-rw", dir, "--allow-exec", bin, "--", "sh", "-c", bin)
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected --allow-execto allow binary: %s", string(out))
+	require.NoError(t, err, "expected --allow-exec to allow binary: %s", string(out))
 }
 
 // TestCurb_Exec_NoExecRestrict verifies that --no-exec-restrict allows any binary.

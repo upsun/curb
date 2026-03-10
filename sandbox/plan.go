@@ -357,8 +357,10 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	ln("  network:")
 	if p.NetEnabled && len(p.AllowedDomains) > 0 {
 		pr("    allowed:    %s\n", strings.Join(p.AllowedDomains, " "))
+	} else if p.NetEnabled && p.AllowLocalhost {
+		ln("    allowed:    localhost only (non-loopback traffic dropped)")
 	} else if p.NetEnabled {
-		ln("    allowed:    localhost only")
+		ln("    allowed:    none")
 	} else {
 		ln("    allowed:    none (no network interface)")
 	}

@@ -57,6 +57,11 @@ func (f *DNSFilter) checkPacket(packet []byte) (refusedResp []byte, allowed bool
 		return nil, false
 	}
 
+	// Drop packets with no questions (potential information leak).
+	if len(msg.Question) == 0 {
+		return nil, false
+	}
+
 	// Check all question names against the allowlist.
 	for _, q := range msg.Question {
 		if !f.Check(q.Name) {
