@@ -201,7 +201,7 @@ func addRoutePrefix(dst net.IP, dstLen uint8, gw string, ifindex int) error {
 // routeLoopback redirects loopback traffic (127.0.0.0/8) through the TAP
 // device so it reaches the parent's netstack instead of staying on lo.
 // This is needed for DNS (e.g. 127.0.0.53 systemd-resolved) and for
-// --allow-localhost forwarding of 127.0.0.1 connections.
+// --domains localhost forwarding of 127.0.0.1 connections.
 func routeLoopback(ifindex int) error {
 	// Delete the kernel's local-table routes for 127.0.0.0/8. These are
 	// auto-created when lo is brought up and have higher priority than the

@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -12,11 +13,16 @@ var DefaultROPaths = []string{
 	"/lib64",
 	"/bin",
 	"/sbin",
-	"/etc",
 	"/opt",
 	// /proc is safe to expose fully: the user namespace blocks ptrace-guarded
 	// access (e.g. /proc/[pid]/environ) for processes outside the namespace.
 	"/proc",
+	// Granular /etc entries instead of the whole directory.
+	"/etc/ssl",
+	"/etc/ca-certificates",
+	"/etc/pki",
+	"/etc/ld.so.conf.d",
+	"/etc/alternatives",
 }
 
 // DefaultROFiles are individual files made available read-only.
@@ -25,6 +31,17 @@ var DefaultROPaths = []string{
 var DefaultROFiles = []string{
 	"/dev/urandom",
 	"/dev/random",
+	"/etc/ld.so.cache",
+	"/etc/ld.so.conf",
+	"/etc/nsswitch.conf",
+	"/etc/resolv.conf",
+	"/etc/hosts",
+	"/etc/localtime",
+	"/etc/timezone",
+	"/etc/passwd",
+	"/etc/group",
+	"/etc/os-release",
+	"/etc/gai.conf",
 }
 
 // DefaultRWPaths are directories that need write access by default.
@@ -67,8 +84,47 @@ var SystemExecPaths = []string{
 	"/lib64",
 }
 
-// DefaultPath is the default PATH value for sandboxed processes.
-var DefaultPath = strings.Join(SystemExecPaths, ":")
+// ParseExclusions separates args into adds, specific removes, and removeAll.
+// A "!" prefix marks a removal. "!*" removes all defaults. "\!" escapes a
+// literal "!" at the start of a path.
+func ParseExclusions(args []string) (adds, removes []string, removeAll bool) {
+	for _, a := range args {
+		switch {
+		case a == "!*":
+			removeAll = true
+		case strings.HasPrefix(a, "!"):
+			removes = append(removes, a[1:])
+		case strings.HasPrefix(a, `\!`):
+			adds = append(adds, "!"+a[2:])
+		default:
+			adds = append(adds, a)
+		}
+	}
+	return
+}
+
+// ApplyExclusions merges user args with defaults. Args prefixed with ! remove
+// matching defaults. !* removes all defaults. Other args are appended.
+func ApplyExclusions(defaults, args []string) []string {
+	adds, removes, removeAll := ParseExclusions(args)
+	if removeAll {
+		return adds
+	}
+	if len(removes) == 0 {
+		return append(slices.Clone(defaults), adds...)
+	}
+	removeSet := make(map[string]bool, len(removes))
+	for _, r := range removes {
+		removeSet[r] = true
+	}
+	var result []string
+	for _, d := range defaults {
+		if !removeSet[d] {
+			result = append(result, d)
+		}
+	}
+	return append(result, adds...)
+}
 
 // ForcedEnvVars returns the environment variables that are always set in the sandbox.
 // HOME defaults to tmpDir unless homePath overrides it. TMPDIR is always tmpDir.

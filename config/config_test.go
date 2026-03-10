@@ -16,13 +16,12 @@ func newTestCmd(args []string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error { return nil },
 	}
 	f := cmd.Flags()
-	f.StringSlice("allow-domains", nil, "")
-	f.StringSlice("allow-read", nil, "")
-	f.StringSlice("allow-write", nil, "")
+	f.StringSlice("domains", nil, "")
+	f.StringSlice("read", nil, "")
+	f.StringSlice("write", nil, "")
 	f.StringSlice("hide", nil, "")
-	f.StringSlice("allow-exec", nil, "")
-	f.StringSlice("allow-env", nil, "")
-	f.Bool("allow-localhost", false, "")
+	f.StringSlice("exec", nil, "")
+	f.StringSlice("env", nil, "")
 	f.String("ech", "strip", "")
 	f.Bool("allow-no-sni", false, "")
 	f.Bool("allow-http", false, "")
@@ -48,7 +47,6 @@ func TestFromFlags_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.RWPaths)
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
-	assert.False(t, cfg.AllowLocalhost)
 	assert.Equal(t, "strip", cfg.ECHMode, "ECHMode defaults to strip")
 	assert.True(t, cfg.RequireSNI, "RequireSNI defaults to true")
 	assert.False(t, cfg.AllowHTTP, "AllowHTTP defaults to false")
@@ -59,14 +57,13 @@ func TestFromFlags_Defaults(t *testing.T) {
 
 func TestFromFlags_AllFlags(t *testing.T) {
 	cmd := newTestCmd([]string{
-		"--allow-domains", "a.com,b.com",
-		"--allow-read", "/opt",
-		"--allow-write", "/data",
+		"--domains", "a.com,b.com",
+		"--read", "/opt",
+		"--write", "/data",
 		"--hide", "/secret",
-		"--allow-exec", "rg",
-		"--allow-env", "GOPATH",
-		"--allow-env", "FOO=bar",
-		"--allow-localhost",
+		"--exec", "rg",
+		"--env", "GOPATH",
+		"--env", "FOO=bar",
 		"--ech", "allow",
 		"--allow-no-sni",
 		"--allow-http",
@@ -88,7 +85,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
 	assert.False(t, cfg.NoExecRestrict)
-	assert.True(t, cfg.AllowLocalhost)
 	assert.Equal(t, "allow", cfg.ECHMode, "--ech allow sets ECHMode")
 	assert.False(t, cfg.RequireSNI, "--allow-no-sni inverts RequireSNI")
 	assert.True(t, cfg.AllowHTTP, "--allow-http sets AllowHTTP")
@@ -99,7 +95,7 @@ func TestFromFlags_AllFlags(t *testing.T) {
 }
 
 func TestFromFlags_WildcardExec(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow-exec", "*"})
+	cmd := newTestCmd([]string{"--exec", "*"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 	assert.True(t, cfg.NoExecRestrict)
@@ -107,7 +103,7 @@ func TestFromFlags_WildcardExec(t *testing.T) {
 }
 
 func TestFromFlags_WildcardWrite(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow-write", "*"})
+	cmd := newTestCmd([]string{"--write", "*"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 	assert.True(t, cfg.NoFSRestrict)
@@ -115,7 +111,7 @@ func TestFromFlags_WildcardWrite(t *testing.T) {
 }
 
 func TestFromFlags_WildcardEnv(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow-env", "*"})
+	cmd := newTestCmd([]string{"--env", "*"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 	assert.True(t, cfg.EnvPassthroughAll)
@@ -123,18 +119,18 @@ func TestFromFlags_WildcardEnv(t *testing.T) {
 }
 
 func TestFromFlags_WildcardRead(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow-read", "*"})
+	cmd := newTestCmd([]string{"--read", "*"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/"}, cfg.ROPaths)
 }
 
 func TestMergeEnv_ListsAdditive(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow-domains", "b.com"})
+	cmd := newTestCmd([]string{"--domains", "b.com"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_DOMAINS", "a.com")
+	t.Setenv("CURB_DOMAINS", "a.com")
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"b.com", "a.com"}, cfg.AllowedDomains)
@@ -145,7 +141,7 @@ func TestMergeEnv_CommaSeparatedList(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_EXEC", "rg, jq, fd")
+	t.Setenv("CURB_EXEC", "rg, jq, fd")
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"rg", "jq", "fd"}, cfg.ExecAllow)
@@ -191,7 +187,7 @@ func TestMergeEnv_EnvVarClassification(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_ENV", "GOPATH,FOO=bar")
+	t.Setenv("CURB_ENV", "GOPATH,FOO=bar")
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"GOPATH"}, cfg.EnvPassthrough)
@@ -203,7 +199,7 @@ func TestMergeEnv_WildcardExec(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_EXEC", "*")
+	t.Setenv("CURB_EXEC", "*")
 	MergeEnv(cfg, cmd)
 
 	assert.True(t, cfg.NoExecRestrict)
@@ -215,7 +211,7 @@ func TestMergeEnv_WildcardWrite(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_WRITE", "*")
+	t.Setenv("CURB_WRITE", "*")
 	MergeEnv(cfg, cmd)
 
 	assert.True(t, cfg.NoFSRestrict)
@@ -227,7 +223,7 @@ func TestMergeEnv_WildcardEnv(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ALLOW_ENV", "*")
+	t.Setenv("CURB_ENV", "*")
 	MergeEnv(cfg, cmd)
 
 	assert.True(t, cfg.EnvPassthroughAll)
@@ -240,7 +236,7 @@ func TestMergeEnv_WildcardEnvValueNotPassthrough(t *testing.T) {
 	require.NoError(t, err)
 
 	// FOO=* is a set-pair, not a wildcard passthrough.
-	t.Setenv("CURB_ALLOW_ENV", "FOO=*")
+	t.Setenv("CURB_ENV", "FOO=*")
 	MergeEnv(cfg, cmd)
 
 	assert.False(t, cfg.EnvPassthroughAll, "FOO=* should not trigger passthrough-all")
@@ -248,7 +244,7 @@ func TestMergeEnv_WildcardEnvValueNotPassthrough(t *testing.T) {
 }
 
 func TestFromFlags_WildcardEnvValueNotPassthrough(t *testing.T) {
-	cmd := newTestCmd([]string{"--allow-env", "FOO=*"})
+	cmd := newTestCmd([]string{"--env", "FOO=*"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 

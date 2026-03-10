@@ -95,7 +95,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSErrMessage())
 	}
 
-	if len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost {
+	if len(cfg.AllowedDomains) > 0 {
 		if caps.NetNS != nil {
 			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSErrMessage())
 		}
@@ -131,30 +131,46 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	if cfg.NoFSRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "filesystem",
-			Reason: "--allow-write '*'",
+			Reason: "--write '*'",
 			Impact: "Filesystem restrictions disabled by user.",
 		})
 	} else {
-		// Expand tildes and globs in user-supplied paths, then prepend defaults.
-		userRO := slices.Clone(cfg.ROPaths)
+		// Parse exclusions, expand tildes and globs, then merge with defaults.
+		roAdds, roRemoves, roRemoveAll := config.ParseExclusions(cfg.ROPaths)
 		plan.HiddenPaths = slices.Clone(cfg.HiddenPaths)
 		if len(plan.HiddenPaths) > 0 && caps.MountNS != nil {
 			return nil, fmt.Errorf("--hide requires mount namespaces: %w", caps.MountNS)
 		}
 		if realHome != "" {
-			userRO = config.ExpandTildes(userRO, realHome)
+			roAdds = config.ExpandTildes(roAdds, realHome)
 			if len(plan.HiddenPaths) > 0 {
 				plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
 			}
 		}
-		userRO = config.ExpandGlobs(userRO)
+		roAdds = config.ExpandGlobs(roAdds)
 		plan.HiddenPaths = config.ExpandGlobs(plan.HiddenPaths)
-		plan.ROPaths = slices.Concat(config.DefaultROPaths, userRO)
-		plan.ROFiles = append(plan.ROFiles, config.DefaultROFiles...)
-		plan.RWPaths = append(plan.RWPaths, config.DefaultRWPaths...)
-		plan.RWFiles = append(plan.RWFiles, config.DefaultRWFiles...)
+
+		// Apply exclusions to both default RO paths and files.
+		roExcl := excludeArgs(roRemoves)
+		addDirs, addFiles := splitDirsFiles(roAdds)
+		if roRemoveAll {
+			plan.ROPaths = addDirs
+			plan.ROFiles = addFiles
+		} else {
+			plan.ROPaths = append(config.ApplyExclusions(config.DefaultROPaths, roExcl), addDirs...)
+			plan.ROFiles = append(config.ApplyExclusions(config.DefaultROFiles, roExcl), addFiles...)
+		}
+
+		rwAdds, rwRemoves, rwRemoveAll := config.ParseExclusions(cfg.RWPaths)
+		rwExcl := excludeArgs(rwRemoves)
+		rwAddDirs, rwAddFiles := splitDirsFiles(rwAdds)
+		if !rwRemoveAll {
+			plan.RWPaths = config.ApplyExclusions(config.DefaultRWPaths, rwExcl)
+			plan.RWFiles = config.ApplyExclusions(config.DefaultRWFiles, rwExcl)
+		}
+		plan.RWPaths = append(plan.RWPaths, rwAddDirs...)
+		plan.RWFiles = append(plan.RWFiles, rwAddFiles...)
 	}
-	plan.RWPaths = append(plan.RWPaths, cfg.RWPaths...)
 	if realHome != "" {
 		plan.RWPaths = config.ExpandTildes(plan.RWPaths, realHome)
 	}
@@ -178,19 +194,24 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	if cfg.NoExecRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "exec",
-			Reason: "--allow-exec '*'",
+			Reason: "--exec '*'",
 			Impact: "Executable restrictions disabled by user.",
 		})
 	} else {
-		plan.ExecPaths = append(plan.ExecPaths, config.SystemExecPaths...)
-		for _, name := range cfg.ExecAllow {
+		execAdds, execRemoves, execRemoveAll := config.ParseExclusions(cfg.ExecAllow)
+		if execRemoveAll {
+			plan.ExecPaths = nil
+		} else {
+			plan.ExecPaths = config.ApplyExclusions(config.SystemExecPaths, excludeArgs(execRemoves))
+		}
+		for _, name := range execAdds {
 			if filepath.IsAbs(name) {
 				// Expand globs in absolute exec paths (e.g. /usr/bin/python*).
 				plan.ExecPaths = append(plan.ExecPaths, config.ExpandGlobs([]string{name})...)
 			} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
 				plan.ExecPaths = append(plan.ExecPaths, abs)
 			} else {
-				return nil, fmt.Errorf("--allow-exec %s: not found in PATH", name)
+				return nil, fmt.Errorf("--exec %s: not found in PATH", name)
 			}
 		}
 		if len(cfg.Command) > 0 {
@@ -215,7 +236,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 
 	// Network policy.
-	plan.NetEnabled = len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost
+	plan.NetEnabled = len(cfg.AllowedDomains) > 0
 	if plan.NetEnabled && !cfg.NoFSRestrict {
 		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
 		// On systemd systems, /etc/resolv.conf is a symlink to /run/systemd/resolve/,
@@ -230,26 +251,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	// "localhost" is special-cased because clients typically connect to
 	// 127.0.0.1 directly without a DNS lookup, so the DNS cache approach
 	// does not cover it.
-	plan.AllowLocalhost = cfg.AllowLocalhost ||
-		slices.Contains(cfg.AllowedDomains, "*") ||
+	plan.AllowLocalhost = slices.Contains(cfg.AllowedDomains, "*") ||
 		slices.Contains(cfg.AllowedDomains, "localhost")
 	plan.ECHMode = cfg.ECHMode
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
 
 	// Environment policy.
-	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
-	for _, pair := range cfg.EnvSet {
-		k, v, _ := strings.Cut(pair, "=")
-		plan.EnvSet[k] = v
-	}
-
-	if cfg.EnvPassthroughAll {
-		plan.EnvPassthrough = []string{envPassthroughAll}
-	} else {
-		plan.EnvPassthrough = append(plan.EnvPassthrough, config.SafePassthroughVars...)
-		plan.EnvPassthrough = append(plan.EnvPassthrough, cfg.EnvPassthrough...)
-	}
+	applyEnvPolicy(plan, cfg, tmpDir)
 
 	plan.Command = cfg.Command
 
@@ -437,6 +446,55 @@ func (p *SandboxPlan) capUserInfo() string {
 	return ""
 }
 
+// applyEnvPolicy resolves the environment for a sandbox plan from config
+// and the temp directory. Used by both BuildPlan and buildDegradedPlan.
+func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
+	envAdds, envRemoves, envRemoveAll := config.ParseExclusions(cfg.EnvPassthrough)
+	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
+	if envRemoveAll {
+		plan.EnvSet = make(map[string]string)
+	} else if len(envRemoves) > 0 {
+		for _, r := range envRemoves {
+			delete(plan.EnvSet, r)
+		}
+	}
+	for _, pair := range cfg.EnvSet {
+		k, v, _ := strings.Cut(pair, "=")
+		plan.EnvSet[k] = v
+	}
+	if cfg.EnvPassthroughAll {
+		plan.EnvPassthrough = []string{envPassthroughAll}
+	} else if envRemoveAll {
+		plan.EnvPassthrough = envAdds
+	} else {
+		plan.EnvPassthrough = config.ApplyExclusions(config.SafePassthroughVars, excludeArgs(envRemoves))
+		plan.EnvPassthrough = append(plan.EnvPassthrough, envAdds...)
+	}
+}
+
+// splitDirsFiles classifies paths into directories and regular files by stat.
+// Paths that don't exist or can't be stat'd are assumed to be directories.
+func splitDirsFiles(paths []string) (dirs, files []string) {
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err == nil && !info.IsDir() {
+			files = append(files, p)
+		} else {
+			dirs = append(dirs, p)
+		}
+	}
+	return
+}
+
+// excludeArgs converts plain strings into "!"-prefixed exclusion args for ApplyExclusions.
+func excludeArgs(items []string) []string {
+	out := make([]string, len(items))
+	for i, s := range items {
+		out[i] = "!" + s
+	}
+	return out
+}
+
 // appendExecDirs adds parent directories of exec paths to roPaths, skipping
 // directories that are already covered by an existing RO path prefix.
 func appendExecDirs(roPaths, execPaths []string) []string {
@@ -502,7 +560,7 @@ func resolvConfDir() string {
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan := &SandboxPlan{Caps: caps}
 
-	if len(cfg.AllowedDomains) > 0 || cfg.AllowLocalhost {
+	if len(cfg.AllowedDomains) > 0 {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "network filtering",
 			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
@@ -532,17 +590,7 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 	plan.TempDir = tmpDir
 
 	// Environment policy (still enforced on all platforms).
-	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
-	for _, pair := range cfg.EnvSet {
-		k, v, _ := strings.Cut(pair, "=")
-		plan.EnvSet[k] = v
-	}
-	if cfg.EnvPassthroughAll {
-		plan.EnvPassthrough = []string{envPassthroughAll}
-	} else {
-		plan.EnvPassthrough = append(plan.EnvPassthrough, config.SafePassthroughVars...)
-		plan.EnvPassthrough = append(plan.EnvPassthrough, cfg.EnvPassthrough...)
-	}
+	applyEnvPolicy(plan, cfg, tmpDir)
 
 	plan.Command = cfg.Command
 	return plan, nil

@@ -25,19 +25,19 @@ curb make check
 Allow HTTPS access to specific domains:
 
 ```
-curb --allow-domains 'example.com,*.github.com' -- curl https://example.com
+curb --domains 'example.com,*.github.com' -- curl https://example.com
 ```
 
 Allow a build tool to write to the current directory and access specific domains:
 
 ```
-curb --allow-write . --allow-domains 'registry.npmjs.org,*.npmjs.org' -- npm install
+curb --write . --domains 'registry.npmjs.org,*.npmjs.org' -- npm install
 ```
 
 Forward localhost services from the host:
 
 ```
-curb --allow-domains '*' --allow-localhost -- curl http://127.0.0.1:8080/
+curb --domains localhost -- curl http://127.0.0.1:8080/
 ```
 
 Dry run to inspect the sandbox plan:
@@ -52,8 +52,7 @@ curb --dry-run make test
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `--allow-domains` | `CURB_ALLOW_DOMAINS` | Allowed domain patterns (comma-separated). Bare domains match exactly; use `*.example.com` for subdomains, or `*` to allow all. |
-| `--allow-localhost` | `CURB_ALLOW_LOCALHOST` | Forward connections to 127.0.0.0/8 to the host |
+| `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). Bare domains match exactly; use `*.example.com` for subdomains, `*` to allow all, `localhost` for localhost forwarding. |
 | `--allow-http` | `CURB_ALLOW_HTTP` | Allow plaintext HTTP (port 80) when domain filtering is active |
 | `--ech` | `CURB_ECH` | ECH handling mode: `strip` (default, strips ECH from DNS), `allow`, `deny` |
 | `--allow-no-sni` | `CURB_ALLOW_NO_SNI` | Allow TLS connections without SNI (reduces filtering) |
@@ -62,17 +61,19 @@ curb --dry-run make test
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `--allow-read` | `CURB_ALLOW_READ` | Additional readable paths (use `'*'` to allow all reads) |
-| `--allow-write` | `CURB_ALLOW_WRITE` | Additional writable paths (use `'*'` to disable all FS restrictions) |
+| `--read` | `CURB_READ` | Readable paths (`!` prefix removes defaults, `!*` clears all) |
+| `--write` | `CURB_WRITE` | Writable paths (`!` prefix removes defaults, `'*'` disables FS restrictions) |
 | `--hide` | `CURB_HIDE` | Paths to hide (overmounted with empty tmpfs) |
 
-By default, system paths (`/usr`, `/lib`, `/etc`, `/proc`), device nodes (`/dev/null`, `/dev/urandom`, `/dev/pts`), and the current directory are accessible. A private temp directory is created and set as `TMPDIR`. Use `--allow-write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`). Glob patterns are supported (e.g. `--allow-read '~/docs/*.md'`).
+By default, system paths (`/usr`, `/lib`, `/proc`), specific `/etc` files (DNS, TLS certs, timezone, passwd), device nodes (`/dev/null`, `/dev/urandom`, `/dev/pts`), and the current directory are accessible. Sensitive files like `/etc/machine-id` and `/etc/hostname` are not exposed. A private temp directory is created and set as `TMPDIR`. Use `--write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`). Glob patterns are supported (e.g. `--read '~/docs/*.md'`).
+
+Use `!` to exclude specific defaults: `--read !/etc/passwd` removes `/etc/passwd` from the default readable files. Use `--read '!*'` to clear all default read paths. Use `--read /etc` to re-add the whole `/etc` directory.
 
 ### Executable Control
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `--allow-exec` | `CURB_ALLOW_EXEC` | Additional allowed executables (use `'*'` to allow all) |
+| `--exec` | `CURB_EXEC` | Allowed executables (`!` prefix removes defaults, `'*'` allows all) |
 
 By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target command itself have execute permission (via Landlock). Writable directories (TMPDIR) are not executable.
 
@@ -80,9 +81,9 @@ By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target comm
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `--allow-env` | `CURB_ALLOW_ENV` | Pass through (`NAME`) or set (`NAME=VALUE`) env vars (use `'*'` for all) |
+| `--env` | `CURB_ENV` | Pass through (`NAME`) or set (`NAME=VALUE`) env vars (`!` prefix removes defaults, `'*'` for all) |
 
-By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `TERM`, `TZ`, `LANG`, and a few other safe variables are passed through. Secrets (`*_KEY`, `*_TOKEN`, `*_SECRET`, etc.) are blocked.
+By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `TERM`, `TZ`, `LANG`, and a few other safe variables are passed through. Secrets (`*_KEY`, `*_TOKEN`, `*_SECRET`, etc.) are blocked. Use `--env '!USER'` to remove USER from defaults, or `--env '!*'` to clear all default env vars.
 
 ### Output
 

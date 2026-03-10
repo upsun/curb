@@ -22,7 +22,6 @@ type Config struct {
 	EnvPassthroughAll bool
 	NoFSRestrict      bool
 	NoExecRestrict    bool
-	AllowLocalhost    bool
 	ECHMode           string
 	RequireSNI        bool
 	AllowHTTP         bool
@@ -39,15 +38,15 @@ type Config struct {
 func FromFlags(cmd *cobra.Command) (*Config, error) {
 	flags := cmd.Flags()
 
-	allow, err := flags.GetStringSlice("allow-domains")
+	allow, err := flags.GetStringSlice("domains")
 	if err != nil {
 		return nil, err
 	}
-	ro, err := flags.GetStringSlice("allow-read")
+	ro, err := flags.GetStringSlice("read")
 	if err != nil {
 		return nil, err
 	}
-	rw, err := flags.GetStringSlice("allow-write")
+	rw, err := flags.GetStringSlice("write")
 	if err != nil {
 		return nil, err
 	}
@@ -55,15 +54,11 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	execAllow, err := flags.GetStringSlice("allow-exec")
+	execAllow, err := flags.GetStringSlice("exec")
 	if err != nil {
 		return nil, err
 	}
-	env, err := flags.GetStringSlice("allow-env")
-	if err != nil {
-		return nil, err
-	}
-	allowLocalhost, err := flags.GetBool("allow-localhost")
+	env, err := flags.GetStringSlice("env")
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +115,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		ExecAllow:      execAllow,
 		EnvPassthrough: passNames,
 		EnvSet:         setPairs,
-		AllowLocalhost: allowLocalhost,
 		ECHMode:        echMode,
 		RequireSNI:     !allowNoSNI,
 		AllowHTTP:      allowHTTP,
@@ -160,16 +154,16 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	flags := cmd.Flags()
 
 	// List values: always additive, with wildcard detection.
-	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_ALLOW_DOMAINS")
+	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_DOMAINS")
 
-	roEnv := appendEnvList(nil, "CURB_ALLOW_READ")
+	roEnv := appendEnvList(nil, "CURB_READ")
 	if containsStar(roEnv) {
 		cfg.ROPaths = []string{"/"}
 	} else {
 		cfg.ROPaths = append(cfg.ROPaths, roEnv...)
 	}
 
-	rwEnv := appendEnvList(nil, "CURB_ALLOW_WRITE")
+	rwEnv := appendEnvList(nil, "CURB_WRITE")
 	if containsStar(rwEnv) {
 		cfg.NoFSRestrict = true
 		cfg.RWPaths = nil
@@ -179,7 +173,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 
 	cfg.HiddenPaths = appendEnvList(cfg.HiddenPaths, "CURB_HIDE")
 
-	execEnv := appendEnvList(nil, "CURB_ALLOW_EXEC")
+	execEnv := appendEnvList(nil, "CURB_EXEC")
 	if containsStar(execEnv) {
 		cfg.NoExecRestrict = true
 		cfg.ExecAllow = nil
@@ -187,8 +181,8 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 		cfg.ExecAllow = append(cfg.ExecAllow, execEnv...)
 	}
 
-	// --allow-env via CURB_ALLOW_ENV: split and classify like FromFlags.
-	if val, ok := os.LookupEnv("CURB_ALLOW_ENV"); ok {
+	// --env via CURB_ENV: split and classify like FromFlags.
+	if val, ok := os.LookupEnv("CURB_ENV"); ok {
 		envPass, envSet := classifyEnvArgs(splitComma(val))
 		if containsStar(envPass) {
 			cfg.EnvPassthroughAll = true
@@ -212,7 +206,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	}
 
 	// Bool values: env only if flag not explicitly set.
-	mergeBoolEnv(flags, &cfg.AllowLocalhost, "allow-localhost", "CURB_ALLOW_LOCALHOST")
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
 	mergeBoolEnv(flags, &cfg.Debug, "debug", "CURB_DEBUG")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")

@@ -25,12 +25,12 @@ func userNSErrMessage() string {
 
 // netNSErrMessage returns an error message for network namespace errors.
 func netNSErrMessage() string {
-	return `Network namespaces are required for --allow-domains/--allow-localhost but are not available.`
+	return `Network namespaces are required for --domains but are not available.`
 }
 
 // tunDeviceErrMessage returns an error message when /dev/net/tun does not exist.
 func tunDeviceErrMessage() string {
-	return `/dev/net/tun is required for --allow-domains/--allow-localhost but is not available.`
+	return `/dev/net/tun is required for --domains but is not available.`
 }
 
 // tunIoctlErrMessage returns an error message when /dev/net/tun exists but

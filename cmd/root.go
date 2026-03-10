@@ -44,7 +44,7 @@ Use -- before the command when it has its own flags.`,
 			defer logger.Close()
 
 			if cfg.EnvPassthroughAll {
-				logger.Warn("Entire host environment passed to child (--allow-env '*').")
+				logger.Warn("Entire host environment passed to child (--env '*').")
 			}
 
 			caps := sandbox.ProbeAll()
@@ -66,15 +66,15 @@ Use -- before the command when it has its own flags.`,
 			} else if plan.NetEnabled {
 				logger.Info("net: localhost only.")
 			} else {
-				logger.Info("net: disabled (no --allow-domains).")
+				logger.Info("net: disabled (no --domains).")
 			}
 			if plan.NoFSRestrict {
-				logger.Info("fs: disabled (--allow-write '*').")
+				logger.Info("fs: disabled (--write '*').")
 			} else {
 				logger.Info("fs: active.")
 			}
 			if cfg.NoExecRestrict {
-				logger.Info("exec: disabled (--allow-exec '*').")
+				logger.Info("exec: disabled (--exec '*').")
 			} else {
 				logger.Info("exec: active.")
 			}
@@ -105,21 +105,20 @@ func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 
 	// Domain filtering.
-	f.StringSlice("allow-domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
+	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 
-	// Filesystem (supports glob patterns, e.g. ~/projects/*.md).
-	f.StringSlice("allow-read", nil, "additional readable paths (use '*' to allow all reads)")
-	f.StringSlice("allow-write", nil, "additional writable paths (use '*' to disable all FS restrictions)")
+	// Filesystem (supports glob patterns and ! exclusions).
+	f.StringSlice("read", nil, "readable paths (! prefix removes defaults, '!*' clears all)")
+	f.StringSlice("write", nil, "writable paths (! prefix removes defaults, '*' disables FS)")
 	f.StringSlice("hide", nil, "paths to hide from the child process")
 
 	// Executable control.
-	f.StringSlice("allow-exec", nil, "additional allowed executables (use '*' to allow all)")
+	f.StringSlice("exec", nil, "allowed executables (! prefix removes defaults, '*' allows all)")
 
 	// Environment.
-	f.StringSlice("allow-env", nil, "env vars to pass through (NAME) or set (NAME=VALUE) (use '*' for all)")
+	f.StringSlice("env", nil, "env vars to pass/set (! prefix removes defaults, '*' for all)")
 
 	// Network options.
-	f.Bool("allow-localhost", false, "allow child to reach host services via localhost")
 	f.String("ech", "strip", "ECH handling mode: strip, allow, deny")
 	f.Bool("allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
 	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")

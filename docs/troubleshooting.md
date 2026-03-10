@@ -17,7 +17,7 @@ sudo sysctl --system
 
 ## /dev/net/tun not available
 
-`/dev/net/tun` is required for `--allow-domains` and `--allow-localhost`. Without it, curb can only offer all-or-nothing network isolation.
+`/dev/net/tun` is required for `--domains`. Without it, curb can only offer all-or-nothing network isolation.
 
 To create the device node (requires root):
 
@@ -35,7 +35,7 @@ Ubuntu 24.04+ restricts capabilities in user namespaces via the `unprivileged_us
 
 ### TAP creation fails (TUNSETIFF: operation not permitted)
 
-Required for `--allow-domains` / `--allow-localhost`. Comment out `audit deny capability,` in `/etc/apparmor.d/unprivileged_userns`, then add to `/etc/apparmor.d/local/unprivileged_userns`:
+Required for `--domains`. Comment out `audit deny capability,` in `/etc/apparmor.d/unprivileged_userns`, then add to `/etc/apparmor.d/local/unprivileged_userns`:
 
 ```
 capability net_admin,

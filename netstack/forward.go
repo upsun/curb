@@ -39,7 +39,7 @@ func newDNSFilter(filter *FilterConfig) *DNSFilter {
 		df.stripECH = true
 	}
 	// Always wire the IP cache so loopback connections to DNS-resolved
-	// IPs can be allowed without explicit --allow-localhost.
+	// IPs can be allowed without explicit --domains localhost.
 	filter.checkIP = df.isResolvedIP
 	return df
 }
