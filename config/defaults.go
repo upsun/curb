@@ -18,6 +18,7 @@ var DefaultROPaths = []string{
 
 // SafePassthroughVars are environment variables always passed to the child process.
 var SafePassthroughVars = []string{
+	"PATH",
 	"TERM",
 	"COLORTERM",
 	"NO_COLOR",
@@ -56,7 +57,6 @@ func ForcedEnvVars(tmpDir, homePath string) map[string]string {
 	return map[string]string{
 		"HOME":   home,
 		"TMPDIR": tmpDir,
-		"PATH":   DefaultPath,
 		"SHELL":  "/bin/sh",
 	}
 }

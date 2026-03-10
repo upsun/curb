@@ -189,6 +189,12 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 				plan.ExecPaths = append(plan.ExecPaths, abs)
 			}
 		}
+
+		// Ensure directories containing exec paths are readable so the
+		// child can stat() them for path resolution after Landlock.
+		if !cfg.NoFSRestrict {
+			plan.ROPaths = appendExecDirs(plan.ROPaths, plan.ExecPaths)
+		}
 	}
 
 	// Network policy.
@@ -390,6 +396,34 @@ func (p *SandboxPlan) capUserInfo() string {
 		return "kernel " + p.Caps.KernelInfo
 	}
 	return ""
+}
+
+// appendExecDirs adds parent directories of exec paths to roPaths, skipping
+// directories that are already covered by an existing RO path prefix.
+func appendExecDirs(roPaths, execPaths []string) []string {
+	seen := make(map[string]bool, len(roPaths))
+	for _, p := range roPaths {
+		seen[p] = true
+	}
+	for _, p := range execPaths {
+		dir := filepath.Dir(p)
+		if dir == "/" || seen[dir] {
+			continue
+		}
+		// Skip if already covered by a parent RO path.
+		covered := false
+		for _, ro := range roPaths {
+			if strings.HasPrefix(dir, ro+"/") || dir == ro {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			roPaths = append(roPaths, dir)
+			seen[dir] = true
+		}
+	}
+	return roPaths
 }
 
 // resolvConfDir returns the parent directory of /etc/resolv.conf's real path,
