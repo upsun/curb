@@ -8,9 +8,6 @@ import "github.com/upsun/curb/clog"
 type FilterConfig struct {
 	// Check reports whether the given domain name is allowed.
 	Check func(domain string) bool
-	// Upstream overrides the DNS server address. Empty means transparent
-	// forwarding to the original destination.
-	Upstream string
 	// BlockECH blocks TLS connections that include Encrypted Client Hello.
 	BlockECH bool
 	// RequireSNI blocks TLS connections without a Server Name Indication extension.

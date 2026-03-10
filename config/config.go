@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -24,7 +25,6 @@ type Config struct {
 	BlockECH          bool
 	RequireSNI        bool
 	AllowHTTP         bool
-	DNSUpstream       string
 	LogFile           string
 	Verbose           bool
 	Quiet             bool
@@ -41,35 +41,23 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	ro, err := flags.GetStringSlice("fs-ro")
+	ro, err := flags.GetStringSlice("allow-read")
 	if err != nil {
 		return nil, err
 	}
-	rw, err := flags.GetStringSlice("fs-rw")
+	rw, err := flags.GetStringSlice("allow-write")
 	if err != nil {
 		return nil, err
 	}
-	hide, err := flags.GetStringSlice("fs-hide")
+	hide, err := flags.GetStringSlice("hide")
 	if err != nil {
 		return nil, err
 	}
-	exec, err := flags.GetStringSlice("allow-exec")
+	execAllow, err := flags.GetStringSlice("allow-exec")
 	if err != nil {
 		return nil, err
 	}
-	env, err := flags.GetStringSlice("env")
-	if err != nil {
-		return nil, err
-	}
-	envPassthrough, err := flags.GetBool("env-passthrough")
-	if err != nil {
-		return nil, err
-	}
-	noFSRestrict, err := flags.GetBool("no-fs-restrict")
-	if err != nil {
-		return nil, err
-	}
-	noExecRestrict, err := flags.GetBool("no-exec-restrict")
+	env, err := flags.GetStringSlice("allow-env")
 	if err != nil {
 		return nil, err
 	}
@@ -77,19 +65,15 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	unsafeAllowECH, err := flags.GetBool("unsafe-allow-ech")
+	allowECH, err := flags.GetBool("allow-ech")
 	if err != nil {
 		return nil, err
 	}
-	unsafeAllowNoSNI, err := flags.GetBool("unsafe-allow-no-sni")
+	allowNoSNI, err := flags.GetBool("allow-no-sni")
 	if err != nil {
 		return nil, err
 	}
-	unsafeAllowHTTP, err := flags.GetBool("unsafe-allow-http")
-	if err != nil {
-		return nil, err
-	}
-	dnsUpstream, err := flags.GetString("dns-upstream")
+	allowHTTP, err := flags.GetBool("allow-http")
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +98,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		return nil, err
 	}
 
-	// Separate --env values into passthrough names and explicit name=value pairs.
+	// Separate --allow-env values into passthrough names and explicit name=value pairs.
 	var passNames, setPairs []string
 	for _, v := range env {
 		if strings.Contains(v, "=") {
@@ -125,27 +109,40 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	}
 
 	cfg := &Config{
-		AllowedDomains:    allow,
-		ROPaths:           ro,
-		RWPaths:           rw,
-		HiddenPaths:       hide,
-		ExecAllow:         exec,
-		EnvPassthrough:    passNames,
-		EnvSet:            setPairs,
-		EnvPassthroughAll: envPassthrough,
-		NoFSRestrict:      noFSRestrict,
-		NoExecRestrict:    noExecRestrict,
-		AllowLocalhost:    allowLocalhost,
-		BlockECH:          !unsafeAllowECH,
-		RequireSNI:        !unsafeAllowNoSNI,
-		AllowHTTP:         unsafeAllowHTTP,
-		DNSUpstream:       dnsUpstream,
-		LogFile:           logFile,
-		Verbose:           verbose,
-		Quiet:             quiet,
-		DryRun:            dryRun,
-		HomePath:          home,
-		Command:           cmd.Flags().Args(),
+		AllowedDomains: allow,
+		ROPaths:        ro,
+		RWPaths:        rw,
+		HiddenPaths:    hide,
+		ExecAllow:      execAllow,
+		EnvPassthrough: passNames,
+		EnvSet:         setPairs,
+		AllowLocalhost: allowLocalhost,
+		BlockECH:       !allowECH,
+		RequireSNI:     !allowNoSNI,
+		AllowHTTP:      allowHTTP,
+		LogFile:        logFile,
+		Verbose:        verbose,
+		Quiet:          quiet,
+		DryRun:         dryRun,
+		HomePath:       home,
+		Command:        cmd.Flags().Args(),
+	}
+
+	// Wildcard handling: '*' in list flags sets the corresponding escape hatch.
+	if containsStar(cfg.ExecAllow) {
+		cfg.NoExecRestrict = true
+		cfg.ExecAllow = nil
+	}
+	if containsStar(cfg.RWPaths) {
+		cfg.NoFSRestrict = true
+		cfg.RWPaths = nil
+	}
+	if containsStar(passNames) {
+		cfg.EnvPassthroughAll = true
+		cfg.EnvPassthrough = nil
+	}
+	if containsStar(cfg.ROPaths) {
+		cfg.ROPaths = []string{"/"}
 	}
 
 	return cfg, nil
@@ -157,30 +154,52 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	flags := cmd.Flags()
 
-	// List values: always additive.
+	// List values: always additive, with wildcard detection.
 	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_ALLOW_DOMAINS")
-	cfg.ROPaths = appendEnvList(cfg.ROPaths, "CURB_FS_RO")
-	cfg.RWPaths = appendEnvList(cfg.RWPaths, "CURB_FS_RW")
-	cfg.HiddenPaths = appendEnvList(cfg.HiddenPaths, "CURB_FS_HIDE")
-	cfg.ExecAllow = appendEnvList(cfg.ExecAllow, "CURB_ALLOW_EXEC")
 
-	// --env via CURB_ENV: split and classify like FromFlags.
-	if val, ok := os.LookupEnv("CURB_ENV"); ok {
-		for _, v := range splitComma(val) {
-			if strings.Contains(v, "=") {
-				cfg.EnvSet = append(cfg.EnvSet, v)
-			} else {
-				cfg.EnvPassthrough = append(cfg.EnvPassthrough, v)
+	roEnv := appendEnvList(nil, "CURB_ALLOW_READ")
+	if containsStar(roEnv) {
+		cfg.ROPaths = []string{"/"}
+	} else {
+		cfg.ROPaths = append(cfg.ROPaths, roEnv...)
+	}
+
+	rwEnv := appendEnvList(nil, "CURB_ALLOW_WRITE")
+	if containsStar(rwEnv) {
+		cfg.NoFSRestrict = true
+		cfg.RWPaths = nil
+	} else {
+		cfg.RWPaths = append(cfg.RWPaths, rwEnv...)
+	}
+
+	cfg.HiddenPaths = appendEnvList(cfg.HiddenPaths, "CURB_HIDE")
+
+	execEnv := appendEnvList(nil, "CURB_ALLOW_EXEC")
+	if containsStar(execEnv) {
+		cfg.NoExecRestrict = true
+		cfg.ExecAllow = nil
+	} else {
+		cfg.ExecAllow = append(cfg.ExecAllow, execEnv...)
+	}
+
+	// --allow-env via CURB_ALLOW_ENV: split and classify like FromFlags.
+	if val, ok := os.LookupEnv("CURB_ALLOW_ENV"); ok {
+		parts := splitComma(val)
+		if containsStar(parts) {
+			cfg.EnvPassthroughAll = true
+			cfg.EnvPassthrough = nil
+		} else {
+			for _, v := range parts {
+				if strings.Contains(v, "=") {
+					cfg.EnvSet = append(cfg.EnvSet, v)
+				} else {
+					cfg.EnvPassthrough = append(cfg.EnvPassthrough, v)
+				}
 			}
 		}
 	}
 
 	// String values: env only if flag not explicitly set.
-	if !flags.Changed("dns-upstream") {
-		if val, ok := os.LookupEnv("CURB_DNS_UPSTREAM"); ok {
-			cfg.DNSUpstream = val
-		}
-	}
 	if !flags.Changed("home") {
 		if val, ok := os.LookupEnv("CURB_HOME"); ok {
 			cfg.HomePath = val
@@ -193,29 +212,31 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	}
 
 	// Bool values: env only if flag not explicitly set.
-	mergeBoolEnv(flags, &cfg.EnvPassthroughAll, "env-passthrough", "CURB_ENV_PASSTHROUGH")
-	mergeBoolEnv(flags, &cfg.NoFSRestrict, "no-fs-restrict", "CURB_NO_FS_RESTRICT")
-	mergeBoolEnv(flags, &cfg.NoExecRestrict, "no-exec-restrict", "CURB_NO_EXEC_RESTRICT")
 	mergeBoolEnv(flags, &cfg.AllowLocalhost, "allow-localhost", "CURB_ALLOW_LOCALHOST")
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
-	// Inverted bool flags: CURB_UNSAFE_ALLOW_ECH=1 → BlockECH=false.
-	if !flags.Changed("unsafe-allow-ech") {
-		if envBool("CURB_UNSAFE_ALLOW_ECH") {
+	// Inverted bool flags: CURB_ALLOW_ECH=1 → BlockECH=false.
+	if !flags.Changed("allow-ech") {
+		if envBool("CURB_ALLOW_ECH") {
 			cfg.BlockECH = false
 		}
 	}
-	if !flags.Changed("unsafe-allow-no-sni") {
-		if envBool("CURB_UNSAFE_ALLOW_NO_SNI") {
+	if !flags.Changed("allow-no-sni") {
+		if envBool("CURB_ALLOW_NO_SNI") {
 			cfg.RequireSNI = false
 		}
 	}
-	if !flags.Changed("unsafe-allow-http") {
-		if envBool("CURB_UNSAFE_ALLOW_HTTP") {
+	if !flags.Changed("allow-http") {
+		if envBool("CURB_ALLOW_HTTP") {
 			cfg.AllowHTTP = true
 		}
 	}
+}
+
+// containsStar reports whether the slice contains a literal "*" element.
+func containsStar(ss []string) bool {
+	return slices.Contains(ss, "*")
 }
 
 func appendEnvList(existing []string, envKey string) []string {

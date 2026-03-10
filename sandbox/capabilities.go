@@ -3,7 +3,7 @@ package sandbox
 // Capabilities holds the results of probing system capabilities.
 type Capabilities struct {
 	UserNS      error  // nil = ok, non-nil = fatal.
-	MountNS     error  // nil = ok, non-nil = fatal if --fs-hide used.
+	MountNS     error  // nil = ok, non-nil = fatal if --hide used.
 	NetNS       error  // nil = ok, non-nil = fatal if --allow-domains used.
 	TUN         error  // nil = ok, non-nil = fatal if --allow-domains used.
 	LandlockABI int    // 0 = unavailable, 1-5 = version.

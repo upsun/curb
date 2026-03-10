@@ -19,7 +19,7 @@ const (
 
 // BuildLandlockRules constructs Landlock rules from read-only, read-write, and exec path lists.
 // When execPaths is non-empty, RO and RW paths get no EXECUTE permission;
-// only execPaths receive EXECUTE. When execPaths is empty (--no-exec-restrict),
+// only execPaths receive EXECUTE. When execPaths is empty (--allow-exec '*'),
 // the standard RODirs/RWDirs rules are used which include EXECUTE.
 func BuildLandlockRules(roPaths, rwPaths, execPaths []string) []landlock.Rule {
 	var rules []landlock.Rule

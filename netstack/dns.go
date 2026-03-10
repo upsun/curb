@@ -17,9 +17,6 @@ import (
 type DNSFilter struct {
 	// Check reports whether the given domain name is allowed.
 	Check func(domain string) bool
-	// Upstream overrides the DNS server address. Empty means transparent
-	// forwarding to the original destination.
-	Upstream string
 	// Logger for DNS events.
 	Logger *clog.Logger
 	// seenBlocked tracks domains already logged as blocked to avoid repetition.
@@ -84,12 +81,8 @@ func (f *DNSFilter) processPacket(packet []byte, dst string) []byte {
 		return resp
 	}
 
-	// All questions allowed; forward to upstream via UDP.
-	upstream := dst
-	if f.Upstream != "" {
-		upstream = f.Upstream
-	}
-	return f.forward(packet, upstream)
+	// All questions allowed; forward to the original destination via UDP.
+	return f.forward(packet, dst)
 }
 
 // forward sends the raw DNS query to the upstream server and returns the response.
@@ -149,11 +142,7 @@ func (f *DNSFilter) handleTCPQuery(local net.Conn, dst string) {
 		refusedResp, allowed := f.checkPacket(packet)
 		var resp []byte
 		if allowed {
-			upstream := dst
-			if f.Upstream != "" {
-				upstream = f.Upstream
-			}
-			resp = f.forwardTCP(packet, upstream)
+			resp = f.forwardTCP(packet, dst)
 		} else {
 			resp = refusedResp
 		}

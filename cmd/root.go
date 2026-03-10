@@ -14,7 +14,7 @@ import (
 // NewRootCmd creates the curb root command.
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "curb [flags] -- command [args...]",
+		Use:   "curb [flags] command [args...]",
 		Short: "Sandbox a process with filesystem, network, and environment restrictions",
 		Long: `curb runs a command inside an unprivileged sandbox with:
   - Filesystem restrictions (Landlock + mount namespace)
@@ -22,10 +22,10 @@ func NewRootCmd() *cobra.Command {
   - Executable control (Landlock EXECUTE)
   - Environment sanitization (deny-by-default)
 
-The target command must follow a -- separator.`,
+Use -- before the command when it has its own flags.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("requires a command after -- separator")
+				return fmt.Errorf("requires a command to run")
 			}
 			return nil
 		},
@@ -44,7 +44,7 @@ The target command must follow a -- separator.`,
 			defer logger.Close()
 
 			if cfg.EnvPassthroughAll {
-				logger.Warn("Entire host environment passed to child (--env-passthrough).")
+				logger.Warn("Entire host environment passed to child (--allow-env '*').")
 			}
 
 			caps := sandbox.ProbeAll()
@@ -69,12 +69,12 @@ The target command must follow a -- separator.`,
 				logger.Info("net: disabled (no --allow-domains).")
 			}
 			if plan.NoFSRestrict {
-				logger.Info("fs: disabled (--no-fs-restrict).")
+				logger.Info("fs: disabled (--allow-write '*').")
 			} else {
 				logger.Info("fs: active.")
 			}
 			if cfg.NoExecRestrict {
-				logger.Info("exec: disabled (--no-exec-restrict).")
+				logger.Info("exec: disabled (--allow-exec '*').")
 			} else {
 				logger.Info("exec: active.")
 			}
@@ -108,27 +108,21 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("allow-domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 
 	// Filesystem.
-	f.StringSlice("fs-ro", nil, "additional read-only paths")
-	f.StringSlice("fs-rw", nil, "additional read-write paths")
-	f.StringSlice("fs-hide", nil, "paths to hide from the child process")
+	f.StringSlice("allow-read", nil, "additional readable paths (use '*' to allow all reads)")
+	f.StringSlice("allow-write", nil, "additional writable paths (use '*' to disable all FS restrictions)")
+	f.StringSlice("hide", nil, "paths to hide from the child process")
 
 	// Executable control.
-	f.StringSlice("allow-exec", nil, "additional allowed executables")
+	f.StringSlice("allow-exec", nil, "additional allowed executables (use '*' to allow all)")
 
 	// Environment.
-	f.StringSlice("env", nil, "env vars to pass through (NAME) or set (NAME=VALUE)")
-	f.Bool("env-passthrough", false, "pass through the entire host environment")
-
-	// Escape hatches.
-	f.Bool("no-fs-restrict", false, "disable filesystem restrictions")
-	f.Bool("no-exec-restrict", false, "disable executable restrictions")
+	f.StringSlice("allow-env", nil, "env vars to pass through (NAME) or set (NAME=VALUE) (use '*' for all)")
 
 	// Network options.
 	f.Bool("allow-localhost", false, "allow child to reach host services via localhost")
-	f.Bool("unsafe-allow-ech", false, "allow TLS Encrypted Client Hello (reduces filtering)")
-	f.Bool("unsafe-allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
-	f.Bool("unsafe-allow-http", false, "allow plaintext HTTP when domain filtering is active")
-	f.String("dns-upstream", "", "upstream DNS resolver address")
+	f.Bool("allow-ech", false, "allow TLS Encrypted Client Hello (reduces filtering)")
+	f.Bool("allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
+	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")
 
 	// Logging.
 	f.String("log-file", "", "write structured JSON logs to file")

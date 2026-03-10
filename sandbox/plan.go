@@ -49,7 +49,6 @@ type SandboxPlan struct {
 	NetEnabled     bool
 	AllowedDomains []string
 	AllowLocalhost bool
-	DNSUpstream    string
 	BlockECH       bool
 	RequireSNI     bool
 	AllowHTTP      bool
@@ -123,14 +122,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	if cfg.NoFSRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "filesystem",
-			Reason: "--no-fs-restrict",
+			Reason: "--allow-write '*'",
 			Impact: "Filesystem restrictions disabled by user.",
 		})
 	} else {
 		plan.ROPaths = slices.Concat(config.DefaultROPaths, cfg.ROPaths)
 		plan.HiddenPaths = slices.Clone(cfg.HiddenPaths)
 		if len(plan.HiddenPaths) > 0 && caps.MountNS != nil {
-			return nil, fmt.Errorf("--fs-hide requires mount namespaces: %w", caps.MountNS)
+			return nil, fmt.Errorf("--hide requires mount namespaces: %w", caps.MountNS)
 		}
 		if realHome != "" {
 			plan.ROPaths = config.ExpandTildes(plan.ROPaths, realHome)
@@ -144,7 +143,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.RWPaths = config.ExpandTildes(plan.RWPaths, realHome)
 	}
 
-	// CWD: always read-only by default (use --fs-rw . for write access).
+	// CWD: always read-only by default (use --allow-write . for write access).
 	cwd, err := os.Getwd()
 	if err == nil && !cfg.NoFSRestrict {
 		plan.ROPaths = append(plan.ROPaths, cwd)
@@ -162,7 +161,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	if cfg.NoExecRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "exec",
-			Reason: "--no-exec-restrict",
+			Reason: "--allow-exec '*'",
 			Impact: "Executable restrictions disabled by user.",
 		})
 	} else {
@@ -198,7 +197,6 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.AllowLocalhost = cfg.AllowLocalhost
-	plan.DNSUpstream = cfg.DNSUpstream
 	plan.BlockECH = cfg.BlockECH
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
@@ -345,7 +343,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		if p.AllowHTTP {
 			ln("    http (80):  Host filtered")
 		} else {
-			ln("    http (80):  blocked (use --unsafe-allow-http to enable)")
+			ln("    http (80):  blocked (use --allow-http to enable)")
 		}
 		ln("    other:      dropped")
 	}

@@ -33,7 +33,7 @@ func newDNSFilter(filter *FilterConfig) *DNSFilter {
 	if filter == nil || filter.Check == nil {
 		return nil
 	}
-	return &DNSFilter{Check: filter.Check, Upstream: filter.Upstream, Logger: filter.Logger}
+	return &DNSFilter{Check: filter.Check, Logger: filter.Logger}
 }
 
 // isLoopback reports whether the address is in 127.0.0.0/8.

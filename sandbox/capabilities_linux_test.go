@@ -79,7 +79,7 @@ func TestBuildPlan_NoMountNS_NoHide(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	// Without --fs-hide, mount NS unavailability is not degraded.
+	// Without --hide, mount NS unavailability is not degraded.
 	assert.Empty(t, plan.DegradedLayers)
 }
 
@@ -96,7 +96,7 @@ func TestBuildPlan_NoMountNS_WithHide(t *testing.T) {
 
 	_, err := BuildPlan(cfg, caps)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--fs-hide requires mount namespaces")
+	assert.Contains(t, err.Error(), "--hide requires mount namespaces")
 }
 
 func TestBuildPlan_FatalUserNS(t *testing.T) {
