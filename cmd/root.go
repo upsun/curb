@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 	"github.com/upsun/curb/sandbox"
 )
@@ -39,12 +40,19 @@ The target command must follow a -- separator.`,
 				fmt.Fprintln(os.Stderr, "curb: warning: --env-passthrough passes entire host environment to child")
 			}
 
+			logger, logErr := clog.New(cfg.LogFile, cfg.Verbose)
+			if logErr != nil {
+				return logErr
+			}
+			defer logger.Close()
+
 			caps := sandbox.ProbeAll()
 			plan, err := sandbox.BuildPlan(cfg, caps)
 			if err != nil {
 				return err
 			}
 			defer plan.Cleanup()
+			plan.Logger = logger
 
 			if cfg.DryRun {
 				plan.PrintDryRun(os.Stderr)

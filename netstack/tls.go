@@ -176,30 +176,30 @@ func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 
 	// Block non-TLS traffic on port 443.
 	if errors.Is(parseErr, errNotClientHello) {
-		fmt.Fprintf(os.Stderr, "curb: tls blocked: non-TLS data on port 443 to %s\n", dst)
+		filter.Logger.Event("tls_connect", dst, "blocked", "non_tls")
 		return
 	}
 	// Truncated records: block (could be evasion).
 	if errors.Is(parseErr, errTruncated) {
-		fmt.Fprintf(os.Stderr, "curb: tls blocked: truncated ClientHello to %s\n", dst)
+		filter.Logger.Event("tls_connect", dst, "blocked", "truncated")
 		return
 	}
 
 	// Block ECH if configured.
 	if filter.BlockECH && hasECH {
-		fmt.Fprintf(os.Stderr, "curb: tls blocked: ECH detected to %s\n", dst)
+		filter.Logger.Event("tls_connect", dst, "blocked", "ech")
 		return
 	}
 
 	// Require SNI if configured.
 	if filter.RequireSNI && sni == "" {
-		fmt.Fprintf(os.Stderr, "curb: tls blocked: no SNI to %s\n", dst)
+		filter.Logger.Event("tls_connect", dst, "blocked", "no_sni")
 		return
 	}
 
 	// Check domain allowlist.
 	if sni != "" && !filter.Check(sni) {
-		fmt.Fprintf(os.Stderr, "curb: tls blocked: %s\n", sni)
+		filter.Logger.Event("tls_connect", sni, "blocked", "domain")
 		return
 	}
 
@@ -211,13 +211,13 @@ func handleTLSConnection(local net.Conn, dst string, filter *FilterConfig) {
 
 	remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 	if dialErr != nil {
-		fmt.Fprintf(os.Stderr, "curb: tls forward %s: %v\n", dst, dialErr)
+		fmt.Fprintf(os.Stderr, "curb: error: tls forward %s: %v\n", dst, dialErr)
 		return
 	}
 
 	// Write the buffered data to the remote before relaying.
 	if _, err := remote.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: tls forward write %s: %v\n", dst, err)
+		fmt.Fprintf(os.Stderr, "curb: error: tls forward write %s: %v\n", dst, err)
 		_ = remote.Close()
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/upsun/curb/clog"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
@@ -19,6 +20,8 @@ type DNSFilter struct {
 	// Upstream overrides the DNS server address. Empty means transparent
 	// forwarding to the original destination.
 	Upstream string
+	// Logger for DNS events.
+	Logger *clog.Logger
 }
 
 // handleQuery reads a DNS query from the sandbox, checks it against the
@@ -57,7 +60,7 @@ func (f *DNSFilter) checkPacket(packet []byte) (refusedResp []byte, allowed bool
 	// Check all question names against the allowlist.
 	for _, q := range msg.Question {
 		if !f.Check(q.Name) {
-			fmt.Fprintf(os.Stderr, "curb: dns blocked: %s\n", q.Name)
+			f.Logger.Event("dns_query", q.Name, "blocked", "domain")
 			return refused(&msg), false
 		}
 	}
@@ -90,21 +93,21 @@ func (f *DNSFilter) forward(packet []byte, upstream string) []byte {
 
 	conn, err := net.DialTimeout("udp", upstream, dnsForwardTimeout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns forward dial %s: %v\n", upstream, err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns forward dial %s: %v\n", upstream, err)
 		return nil
 	}
 	defer func() { _ = conn.Close() }()
 
 	_ = conn.SetDeadline(time.Now().Add(dnsForwardTimeout))
 	if _, err := conn.Write(packet); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns forward write: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns forward write: %v\n", err)
 		return nil
 	}
 
 	buf := make([]byte, dnsMaxResponseSize)
 	n, err := conn.Read(buf)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns forward read: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns forward read: %v\n", err)
 		return nil
 	}
 	return buf[:n]
@@ -170,7 +173,7 @@ func (f *DNSFilter) forwardTCP(packet []byte, upstream string) []byte {
 
 	conn, err := net.DialTimeout("tcp", upstream, dnsForwardTimeout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns tcp forward dial %s: %v\n", upstream, err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns tcp forward dial %s: %v\n", upstream, err)
 		return nil
 	}
 	defer func() { _ = conn.Close() }()
@@ -180,18 +183,18 @@ func (f *DNSFilter) forwardTCP(packet []byte, upstream string) []byte {
 	// Write 2-byte length prefix + query.
 	length := uint16(len(packet))
 	if err := binary.Write(conn, binary.BigEndian, length); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns tcp forward write length: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns tcp forward write length: %v\n", err)
 		return nil
 	}
 	if _, err := conn.Write(packet); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns tcp forward write: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns tcp forward write: %v\n", err)
 		return nil
 	}
 
 	// Read 2-byte length prefix.
 	var respLen uint16
 	if err := binary.Read(conn, binary.BigEndian, &respLen); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns tcp forward read length: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns tcp forward read length: %v\n", err)
 		return nil
 	}
 	if respLen == 0 || respLen > udpMaxPacketSize {
@@ -200,7 +203,7 @@ func (f *DNSFilter) forwardTCP(packet []byte, upstream string) []byte {
 
 	buf := make([]byte, respLen)
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: dns tcp forward read: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: dns tcp forward read: %v\n", err)
 		return nil
 	}
 	return buf

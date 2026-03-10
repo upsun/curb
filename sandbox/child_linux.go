@@ -20,7 +20,7 @@ import (
 // and execs the target command. It never returns on success.
 func ChildInit() {
 	if err := childInit(); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: child init: %v\n", err)
+		fmt.Fprintf(os.Stderr, "curb: error: child init: %v\n", err)
 		os.Exit(ExitSetupFailure)
 	}
 }
@@ -84,7 +84,7 @@ func childInit() error {
 func prepareMountNS() bool {
 	err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "curb: warning: mount operations unavailable (%v); hiding/hooks skipped\n", err)
+		fmt.Fprintf(os.Stderr, "curb: warning: mount namespace restricted (%v); dotfile hiding and hooks protection disabled\n", err)
 		return false
 	}
 	return true

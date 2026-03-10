@@ -1,5 +1,7 @@
 package netstack
 
+import "github.com/upsun/curb/clog"
+
 // FilterConfig holds the unified filtering configuration for the netstack.
 // When non-nil with a non-nil Check function, traffic is filtered by port:
 // DNS (53), TLS (443), HTTP (80 if AllowHTTP), and all other ports are dropped.
@@ -15,4 +17,8 @@ type FilterConfig struct {
 	RequireSNI bool
 	// AllowHTTP permits filtered plaintext HTTP on port 80.
 	AllowHTTP bool
+	// AllowLocalhost forwards connections to 127.0.0.0/8 to the host.
+	AllowLocalhost bool
+	// Logger for filtering events.
+	Logger *clog.Logger
 }

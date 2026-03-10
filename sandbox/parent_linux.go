@@ -112,11 +112,13 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		if len(plan.AllowedDomains) > 0 {
 			matcher := policy.NewDomainMatcher(plan.AllowedDomains)
 			filter = &netstack.FilterConfig{
-				Check:      matcher.Match,
-				Upstream:   plan.DNSUpstream,
-				BlockECH:   plan.BlockECH,
-				RequireSNI: plan.RequireSNI,
-				AllowHTTP:  plan.AllowHTTP,
+				Check:          matcher.Match,
+				Upstream:       plan.DNSUpstream,
+				BlockECH:       plan.BlockECH,
+				RequireSNI:     plan.RequireSNI,
+				AllowHTTP:      plan.AllowHTTP,
+				AllowLocalhost: plan.AllowLocalhost,
+				Logger:         plan.Logger,
 			}
 		}
 		ns, recvErr = netstack.NewStack(tapFD, filter)

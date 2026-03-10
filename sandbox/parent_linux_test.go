@@ -318,7 +318,7 @@ func requireMountOps(t *testing.T) {
 	// Test if mount operations work inside a user+mount namespace.
 	cmd := exec.Command(curbBin, "--", "sh", "-c", "cat /etc/resolv.conf")
 	out, _ := cmd.CombinedOutput()
-	if strings.Contains(string(out), "mount operations unavailable") {
+	if strings.Contains(string(out), "mount namespace restricted") {
 		t.Skip("mount operations unavailable (AppArmor or similar restriction)")
 	}
 }
@@ -817,10 +817,10 @@ func TestCurb_DNS_StarAllowsEverything(t *testing.T) {
 func TestCurb_DNS_BlockedLogMessage(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "-v", "--allow-domains", "example.com", "--",
 		"getent", "hosts", "blocked.test")
 	out, _ := cmd.CombinedOutput()
-	assert.Contains(t, string(out), "curb: dns blocked:", "expected blocked DNS log message")
+	assert.Contains(t, string(out), "curb: dns_query blocked:", "expected blocked DNS log message")
 }
 
 // --- Adversarial DNS filter bypass tests ---
@@ -837,12 +837,12 @@ func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	// Port 80 is blocked by default (no --unsafe-allow-http), so direct HTTP fails.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "other-domain-not-example.test", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: http blocked: port 80 disabled",
+	assert.Contains(t, outStr, "curb: http_request blocked:",
 		"expected port 80 to be blocked by default")
 	assert.NotContains(t, filterCurbOutput(outStr), "Example Domain",
 		"should not receive content via direct IP")
@@ -872,13 +872,13 @@ func TestCurb_TLS_BlockedDomainFails(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	// Allow only "other.test" but connect via IP with SNI "example.com".
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "other.test", "--",
 		"curl", "-s", "--connect-timeout", "5",
 		"--resolve", fmt.Sprintf("example.com:443:%s", ip), "https://example.com/")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: tls blocked: example.com",
+	assert.Contains(t, outStr, "curb: tls_connect blocked: example.com",
 		"expected TLS SNI block log message")
 }
 
@@ -890,7 +890,7 @@ func TestCurb_TLS_DirectIPBlocked(t *testing.T) {
 
 	// Connect to IP directly via HTTPS. curl sends SNI if a hostname is given,
 	// so use -k and the IP as the URL to avoid sending a hostname SNI.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "other.test", "--",
 		"curl", "-sk", "--connect-timeout", "5", fmt.Sprintf("https://%s/", ip))
 	out, _ := cmd.CombinedOutput()
@@ -898,7 +898,7 @@ func TestCurb_TLS_DirectIPBlocked(t *testing.T) {
 	// curl sends the IP as SNI, which doesn't match "other.test".
 	// Or RequireSNI blocks it because the SNI is an IP not a hostname.
 	assert.True(t,
-		strings.Contains(outStr, "curb: tls blocked:"),
+		strings.Contains(outStr, "curb: tls_connect blocked:"),
 		"expected TLS block log message, got: %s", outStr)
 }
 
@@ -909,12 +909,12 @@ func TestCurb_TLS_PlaintextOn443Blocked(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	// Send plaintext HTTP to port 443. The TLS parser should reject it.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s:443/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: tls blocked: non-TLS data on port 443",
+	assert.Contains(t, outStr, "curb: tls_connect blocked:",
 		"expected non-TLS block on port 443")
 }
 
@@ -957,12 +957,12 @@ func TestCurb_HTTP_BlockedByDefault(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: http blocked: port 80 disabled",
+	assert.Contains(t, outStr, "curb: http_request blocked:",
 		"expected HTTP port 80 to be blocked by default")
 	assert.NotContains(t, filterCurbOutput(outStr), "Example Domain",
 		"should not receive content when HTTP is blocked")
@@ -1303,7 +1303,7 @@ func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
 
 	// PTR query for 8.8.8.8 → 8.8.8.8.in-addr.arpa.
 	// This should be blocked since "8.8.8.8.in-addr.arpa" is not in the allowlist.
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "-x", "8.8.8.8")
 	out, err := cmd.CombinedOutput()
@@ -1314,7 +1314,7 @@ func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
 		t.Fatal("SECURITY FLAW: PTR query bypassed DNS filter — reverse DNS for arbitrary IPs should be blocked")
 	}
 	// Verify the block log message mentions in-addr.arpa.
-	assert.Contains(t, string(out), "curb: dns blocked:",
+	assert.Contains(t, string(out), "curb: dns_query blocked:",
 		"expected DNS blocked log for PTR query")
 }
 
@@ -1324,7 +1324,7 @@ func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
 func TestCurb_DNS_Bypass_ANYQuery(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "--no-exec-restrict", "-v",
 		"--allow-domains", "example.com", "--",
 		"dig", "+notcp", "+time=3", "+tries=1", "evil.com", "ANY")
 	out, _ := cmd.CombinedOutput()
@@ -1333,7 +1333,7 @@ func TestCurb_DNS_Bypass_ANYQuery(t *testing.T) {
 	// Should be REFUSED.
 	assert.True(t,
 		strings.Contains(outStr, "REFUSED") ||
-			strings.Contains(outStr, "curb: dns blocked:"),
+			strings.Contains(outStr, "curb: dns_query blocked:"),
 		"expected ANY query for blocked domain to be refused, got: %s", outStr)
 }
 
@@ -1476,7 +1476,7 @@ except Exception as e:
 func TestCurb_DNS_Bypass_SubdomainOfBlockedViaAllowed(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--no-fs-restrict", "--allow-domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--no-fs-restrict", "-v", "--allow-domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "example.com.evil.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1486,7 +1486,7 @@ func TestCurb_DNS_Bypass_SubdomainOfBlockedViaAllowed(t *testing.T) {
 	if err == nil && net.ParseIP(strings.TrimSpace(outStr)) != nil {
 		t.Fatal("SECURITY FLAW: 'example.com.evil.com' bypassed the DNS filter by appearing to contain 'example.com'")
 	}
-	assert.Contains(t, string(out), "curb: dns blocked:",
+	assert.Contains(t, string(out), "curb: dns_query blocked:",
 		"expected DNS blocked log for example.com.evil.com")
 }
 

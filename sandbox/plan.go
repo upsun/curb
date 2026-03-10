@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 )
 
@@ -61,6 +62,7 @@ type SandboxPlan struct {
 	NoFSRestrict   bool
 	Command        []string
 	Caps           *Capabilities
+	Logger         *clog.Logger
 }
 
 // ChildConfig is the serializable config sent from parent to child over a pipe.

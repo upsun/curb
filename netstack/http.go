@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	httpMaxRead      = 8192
-	httpReadTimeout  = 10 * time.Second
-	http403Response  = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+	httpMaxRead     = 8192
+	httpReadTimeout = 10 * time.Second
+	http403Response = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
 )
 
 // parseHTTPHost extracts the Host header value from an HTTP request.
@@ -60,13 +60,13 @@ func handleHTTPConnection(local net.Conn, dst string, filter *FilterConfig) {
 
 	host, _, parseErr := parseHTTPHost(data)
 	if parseErr != nil {
-		fmt.Fprintf(os.Stderr, "curb: http blocked: %v to %s\n", parseErr, dst)
+		filter.Logger.Event("http_request", dst, "blocked", "no_host")
 		_, _ = local.Write([]byte(http403Response))
 		return
 	}
 
 	if !filter.Check(host) {
-		fmt.Fprintf(os.Stderr, "curb: http blocked: %s\n", host)
+		filter.Logger.Event("http_request", host, "blocked", "domain")
 		_, _ = local.Write([]byte(http403Response))
 		return
 	}
@@ -76,13 +76,13 @@ func handleHTTPConnection(local net.Conn, dst string, filter *FilterConfig) {
 
 	remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 	if dialErr != nil {
-		fmt.Fprintf(os.Stderr, "curb: http forward %s: %v\n", dst, dialErr)
+		fmt.Fprintf(os.Stderr, "curb: error: http forward %s: %v\n", dst, dialErr)
 		return
 	}
 
 	// Write the buffered data to remote before relaying.
 	if _, err := remote.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "curb: http forward write %s: %v\n", dst, err)
+		fmt.Fprintf(os.Stderr, "curb: error: http forward write %s: %v\n", dst, err)
 		_ = remote.Close()
 		return
 	}

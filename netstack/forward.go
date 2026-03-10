@@ -33,7 +33,7 @@ func newDNSFilter(filter *FilterConfig) *DNSFilter {
 	if filter == nil || filter.Check == nil {
 		return nil
 	}
-	return &DNSFilter{Check: filter.Check, Upstream: filter.Upstream}
+	return &DNSFilter{Check: filter.Check, Upstream: filter.Upstream, Logger: filter.Logger}
 }
 
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
@@ -64,7 +64,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 				if filter.AllowHTTP {
 					go handleHTTPConnection(local, dst, filter)
 				} else {
-					fmt.Fprintf(os.Stderr, "curb: http blocked: port 80 disabled (use --unsafe-allow-http)\n")
+					filter.Logger.Event("http_request", dst, "blocked", "port_80_disabled")
 					_ = local.Close()
 				}
 			default:
@@ -75,7 +75,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 
 		remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 		if dialErr != nil {
-			fmt.Fprintf(os.Stderr, "curb: tcp forward %s: %v\n", dst, dialErr)
+			fmt.Fprintf(os.Stderr, "curb: error: tcp forward %s: %v\n", dst, dialErr)
 			_ = local.Close()
 			return
 		}
@@ -111,7 +111,7 @@ func setupUDPForwarding(s *stack.Stack, dnsFilter *DNSFilter) {
 
 		remote, dialErr := net.Dial("udp", dst)
 		if dialErr != nil {
-			fmt.Fprintf(os.Stderr, "curb: udp forward %s: %v\n", dst, dialErr)
+			fmt.Fprintf(os.Stderr, "curb: error: udp forward %s: %v\n", dst, dialErr)
 			ep.Close()
 			return true
 		}
