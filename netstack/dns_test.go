@@ -106,7 +106,7 @@ func TestProcessECHStrip_HTTPS(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	result := f.processECHStrip(packed)
+	result := f.processResponse(packed)
 
 	var out dns.Msg
 	require.NoError(t, out.Unpack(result))
@@ -137,7 +137,7 @@ func TestProcessECHStrip_SVCB(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	result := f.processECHStrip(packed)
+	result := f.processResponse(packed)
 
 	var out dns.Msg
 	require.NoError(t, out.Unpack(result))
@@ -167,14 +167,14 @@ func TestProcessECHStrip_NoECH(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	result := f.processECHStrip(packed)
+	result := f.processResponse(packed)
 	assert.Equal(t, packed, result, "response without ECH should be returned unchanged")
 }
 
 func TestProcessECHStrip_InvalidDNS(t *testing.T) {
 	f := newStripFilter()
 	data := []byte{0x00, 0x01, 0x02}
-	result := f.processECHStrip(data)
+	result := f.processResponse(data)
 	assert.Equal(t, data, result, "invalid DNS should be returned unchanged")
 }
 
@@ -198,7 +198,7 @@ func TestProcessECHStrip_Extra(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	result := f.processECHStrip(packed)
+	result := f.processResponse(packed)
 
 	var out dns.Msg
 	require.NoError(t, out.Unpack(result))
@@ -227,7 +227,7 @@ func TestProcessECHStrip_CachesIPs(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	f.processECHStrip(packed)
+	f.processResponse(packed)
 
 	assert.True(t, f.isResolvedIP("93.184.216.34"))
 	assert.True(t, f.isResolvedIP("2606:2800:220:1:248:1893:25c8:1946"))
@@ -261,7 +261,7 @@ func TestProcessECHStrip_MinTTL(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	f.processECHStrip(packed)
+	f.processResponse(packed)
 
 	// The entry should exist and not expire for at least minCacheTTL.
 	val, ok := f.resolvedIPs.Load("1.2.3.4")

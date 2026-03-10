@@ -27,6 +27,19 @@ type FilterConfig struct {
 	Logger *clog.Logger
 
 	// checkIP reports whether the given IP was resolved for an allowed domain.
-	// Set internally by newDNSFilter when ECHMode is ECHStrip.
+	// Set internally by newDNSFilter.
 	checkIP func(ip string) bool
+}
+
+// allowsLoopback reports whether a connection to the given loopback IP
+// should be forwarded. True if AllowLocalhost is set explicitly, or if
+// the IP was resolved from an allowed domain via DNS.
+func (f *FilterConfig) allowsLoopback(ip string) bool {
+	if f == nil {
+		return false
+	}
+	if f.AllowLocalhost {
+		return true
+	}
+	return f.checkIP != nil && f.checkIP(ip)
 }

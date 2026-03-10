@@ -46,17 +46,17 @@ func (f *DNSFilter) isResolvedIP(ip string) bool {
 	return true
 }
 
-// processECHStrip parses a DNS response, caches A/AAAA IPs,
-// and strips ECH SvcParams from HTTPS/SVCB records. It returns the
-// (possibly modified) response. This single-parse approach avoids
-// unpacking the DNS message twice.
-func (f *DNSFilter) processECHStrip(response []byte) []byte {
+// processResponse parses a DNS response, caches A/AAAA IPs for loopback
+// and ECH validation, and optionally strips ECH SvcParams from HTTPS/SVCB
+// records. It returns the (possibly modified) response.
+func (f *DNSFilter) processResponse(response []byte) []byte {
 	var msg dns.Msg
 	if err := msg.Unpack(response); err != nil {
 		return response
 	}
 
-	// Cache A/AAAA IPs for residual ECH validation.
+	// Cache A/AAAA IPs so connections to these IPs can be validated
+	// (ECH residual check, loopback allowlisting).
 	for _, rr := range msg.Answer {
 		var ip string
 		switch r := rr.(type) {
@@ -69,6 +69,10 @@ func (f *DNSFilter) processECHStrip(response []byte) []byte {
 		}
 		ttl := max(time.Duration(rr.Header().Ttl)*time.Second, minCacheTTL)
 		f.resolvedIPs.Store(ip, time.Now().Add(ttl))
+	}
+
+	if !f.stripECH {
+		return response
 	}
 
 	// Strip ECH SvcParams from HTTPS/SVCB records.
@@ -168,8 +172,8 @@ func (f *DNSFilter) processPacket(packet []byte, dst string) []byte {
 
 	// All questions allowed; forward to the original destination via UDP.
 	resp = f.forward(packet, dst)
-	if resp != nil && f.stripECH {
-		resp = f.processECHStrip(resp)
+	if resp != nil {
+		resp = f.processResponse(resp)
 	}
 	return resp
 }
@@ -232,8 +236,8 @@ func (f *DNSFilter) handleTCPQuery(local net.Conn, dst string) {
 		var resp []byte
 		if allowed {
 			resp = f.forwardTCP(packet, dst)
-			if resp != nil && f.stripECH {
-				resp = f.processECHStrip(resp)
+			if resp != nil {
+				resp = f.processResponse(resp)
 			}
 		} else {
 			resp = refusedResp

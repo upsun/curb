@@ -220,7 +220,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		}
 	}
 	plan.AllowedDomains = cfg.AllowedDomains
-	plan.AllowLocalhost = cfg.AllowLocalhost
+	// Wildcard or "localhost" in allowed domains implies localhost access:
+	// if all external traffic is allowed, blocking localhost is inconsistent.
+	// "localhost" is special-cased because clients typically connect to
+	// 127.0.0.1 directly without a DNS lookup, so the DNS cache approach
+	// does not cover it.
+	plan.AllowLocalhost = cfg.AllowLocalhost ||
+		slices.Contains(cfg.AllowedDomains, "*") ||
+		slices.Contains(cfg.AllowedDomains, "localhost")
 	plan.ECHMode = cfg.ECHMode
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP

@@ -37,8 +37,10 @@ func newDNSFilter(filter *FilterConfig) *DNSFilter {
 	df := &DNSFilter{Check: filter.Check, Logger: filter.Logger}
 	if filter.ECHMode == ECHStrip {
 		df.stripECH = true
-		filter.checkIP = df.isResolvedIP
 	}
+	// Always wire the IP cache so loopback connections to DNS-resolved
+	// IPs can be allowed without explicit --allow-localhost.
+	filter.checkIP = df.isResolvedIP
 	return df
 }
 
@@ -77,7 +79,8 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 		}
 		r.Complete(false)
 
-		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
+		dstIP := addrString(id.LocalAddress)
+		dst := net.JoinHostPort(dstIP, fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewTCPConn(&wq, ep)
 		if logger.IsDebug() {
 			logger.Debug("tcp accept: %s:%d → %s", addrString(id.RemoteAddress), id.RemotePort, dst)
@@ -85,25 +88,16 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 
 		// Loopback traffic handling.
 		if isLoopback(id.LocalAddress) {
-			// DNS port 53: use DNS filter if available, otherwise raw forward if AllowLocalhost.
-			if id.LocalPort == dnsPort {
-				if dnsFilter != nil {
-					go dnsFilter.handleTCPQuery(local, dst)
-					return
-				}
-				if filter != nil && filter.AllowLocalhost {
-					hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
-					go forwardTCP(local, hostDst, logger)
-					return
-				}
+			if id.LocalPort == dnsPort && dnsFilter != nil {
+				go dnsFilter.handleTCPQuery(local, dst)
+				return
 			}
-			// Other loopback ports: forward if AllowLocalhost.
-			if filter != nil && filter.AllowLocalhost {
+			if filter.allowsLoopback(dstIP) {
 				hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
 				go forwardTCP(local, hostDst, logger)
 				return
 			}
-			logger.Debug("tcp loopback dropped: %s (no AllowLocalhost)", dst)
+			logger.Debug("tcp loopback dropped: %s", dst)
 			_ = local.Close()
 			return
 		}
@@ -173,31 +167,17 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			return false
 		}
 
-		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
+		dstIP := addrString(id.LocalAddress)
+		dst := net.JoinHostPort(dstIP, fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewUDPConn(&wq, ep)
 
 		// Loopback traffic handling.
 		if isLoopback(id.LocalAddress) {
-			// DNS port 53: use DNS filter if available, otherwise raw forward if AllowLocalhost.
-			if id.LocalPort == dnsPort {
-				if dnsFilter != nil {
-					go dnsFilter.handleQuery(local, dst)
-					return true
-				}
-				if filter != nil && filter.AllowLocalhost {
-					hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
-					remote, dialErr := net.Dial("udp", hostDst)
-					if dialErr != nil {
-						logger.Warn("localhost udp forward %s: %v", hostDst, dialErr)
-						ep.Close()
-						return true
-					}
-					go relayUDP(local, remote)
-					return true
-				}
+			if id.LocalPort == dnsPort && dnsFilter != nil {
+				go dnsFilter.handleQuery(local, dst)
+				return true
 			}
-			// Other loopback ports: forward if AllowLocalhost.
-			if filter != nil && filter.AllowLocalhost {
+			if filter.allowsLoopback(dstIP) {
 				hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
 				remote, dialErr := net.Dial("udp", hostDst)
 				if dialErr != nil {
