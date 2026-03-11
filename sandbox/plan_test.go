@@ -219,6 +219,79 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 	assert.True(t, hasDegradedLayer(plan, "filesystem"))
 }
 
+// --- isExcluded ---
+
+func TestIsExcluded(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		path     string
+		excludes []string
+		want     bool
+	}{
+		{"exact match", "/usr/lib", []string{"/usr/lib"}, true},
+		{"no match", "/usr/lib", []string{"/usr/bin"}, false},
+		{"relative dot resolves to cwd", cwd, []string{"."}, true},
+		{"empty excludes", "/usr/lib", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isExcluded(tt.path, tt.excludes))
+		})
+	}
+}
+
+// --- BuildPlan CWD ---
+
+func TestBuildPlan_CWDIncludedByDefault(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	plan, err := BuildPlan(minCfg(), minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Contains(t, plan.ROPaths, cwd)
+}
+
+func TestBuildPlan_CWDExcludedByRemoveAll(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{"!*"}}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.NotContains(t, plan.ROPaths, cwd)
+}
+
+func TestBuildPlan_CWDExcludedByName(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{"!" + cwd}}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.NotContains(t, plan.ROPaths, cwd)
+}
+
+func TestBuildPlan_CWDExcludedByDot(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{"!."}}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.NotContains(t, plan.ROPaths, cwd)
+}
+
 // --- applyEnvPolicy ---
 
 func TestApplyEnvPolicy_EnvRemoveAll(t *testing.T) {

@@ -174,12 +174,12 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		}
 		plan.RWPaths = append(plan.RWPaths, rwAddDirs...)
 		plan.RWFiles = append(plan.RWFiles, rwAddFiles...)
-	}
 
-	// CWD: always read-only by default (use --allow-write . for write access).
-	cwd, err := os.Getwd()
-	if err == nil && !cfg.NoFSRestrict {
-		plan.ROPaths = append(plan.ROPaths, cwd)
+		// CWD: read-only by default (use --write . for write access).
+		// Respects --read '!.' and --read '!*'.
+		if cwd, err := os.Getwd(); err == nil && !roRemoveAll && !isExcluded(cwd, roRemoves) {
+			plan.ROPaths = append(plan.ROPaths, cwd)
+		}
 	}
 
 	// Temp directory.
@@ -487,6 +487,21 @@ func splitDirsFiles(paths []string) (dirs, files []string) {
 }
 
 // excludeArgs converts plain strings into "!"-prefixed exclusion args for ApplyExclusions.
+// isExcluded checks whether path matches any of the exclusion entries,
+// resolving relative entries to absolute paths for comparison.
+func isExcluded(path string, excludes []string) bool {
+	for _, e := range excludes {
+		abs, err := filepath.Abs(e)
+		if err != nil {
+			continue
+		}
+		if abs == path {
+			return true
+		}
+	}
+	return false
+}
+
 func excludeArgs(items []string) []string {
 	out := make([]string, len(items))
 	for i, s := range items {

@@ -557,6 +557,36 @@ func TestCurb_FS_EtcRestored(t *testing.T) {
 	require.NoError(t, err, "expected read of /etc/hostname with --read /etc to succeed: %s", string(out))
 }
 
+// TestCurb_FS_ExcludeCWDRead verifies --read '!.' blocks reading the CWD.
+func TestCurb_FS_ExcludeCWDRead(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "secret.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("secret"), 0o644))
+
+	cmd := exec.Command(curbBin, "--read", "!.", "--", "cat", testFile)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected --read '!.' to block CWD read: %s", string(out))
+}
+
+// TestCurb_FS_NoDefaultReadBlocksCWD verifies --read '!*' also blocks the CWD.
+func TestCurb_FS_NoDefaultReadBlocksCWD(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "secret.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("secret"), 0o644))
+
+	cmd := exec.Command(curbBin, "--read", "!*", "--read", "/etc/hosts", "--", "cat", testFile)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected --read '!*' to block CWD read: %s", string(out))
+}
+
 // TestCurb_FS_NoDefaultRead verifies --read '!*' clears all default read paths.
 func TestCurb_FS_NoDefaultRead(t *testing.T) {
 	requireUserNS(t)
