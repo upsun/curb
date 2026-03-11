@@ -42,6 +42,7 @@ var DefaultROFiles = []string{
 	"/etc/group",
 	"/etc/os-release",
 	"/etc/gai.conf",
+	"/etc/bash.bashrc",
 }
 
 // DefaultRWPaths are directories that need write access by default.
