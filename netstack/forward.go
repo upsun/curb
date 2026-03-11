@@ -118,10 +118,8 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 		// Early rejection: send TCP RST for connections that can be blocked
 		// by port/IP alone, without reading data.
 		if reason := rejectReason(id, filter, dnsFilter); reason != "" {
-			if logger.IsDebug() {
-				dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
-				logger.Debug("tcp rejected (%s): %s", reason, dst)
-			}
+			dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
+			logger.Event("tcp_connect", dst, "blocked", reason)
 			r.Complete(true) // TCP RST
 			return
 		}
@@ -167,7 +165,7 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			case httpPort:
 				go handleHTTPConnection(local, dst, filter)
 			default:
-				// Should not reach here: canRejectEarly handles non-standard ports.
+				// Should not reach here: rejectReason handles non-standard ports.
 				_ = local.Close()
 			}
 			return
