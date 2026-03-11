@@ -219,6 +219,25 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 	assert.True(t, hasDegradedLayer(plan, "filesystem"))
 }
 
+// --- isSubpath ---
+
+func TestIsSubpath(t *testing.T) {
+	tests := []struct {
+		child, parent string
+		want          bool
+	}{
+		{"/home/user/.ssh", "/home/user", true},
+		{"/home/user", "/home/user", false},  // not strict
+		{"/home/user2", "/home/user", false}, // different prefix
+		{"/etc/passwd", "/home/user", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.child+"_under_"+tt.parent, func(t *testing.T) {
+			assert.Equal(t, tt.want, isSubpath(tt.child, tt.parent))
+		})
+	}
+}
+
 // --- isExcluded ---
 
 func TestIsExcluded(t *testing.T) {

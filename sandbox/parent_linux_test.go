@@ -557,6 +557,24 @@ func TestCurb_FS_EtcRestored(t *testing.T) {
 	require.NoError(t, err, "expected read of /etc/hostname with --read /etc to succeed: %s", string(out))
 }
 
+// TestCurb_FS_SubpathExclusionWarns verifies that excluding a subdirectory
+// of an allowed path emits a warning recommending --hide.
+func TestCurb_FS_SubpathExclusionWarns(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "secret")
+	require.NoError(t, os.Mkdir(sub, 0o755))
+
+	cmd := exec.Command(curbBin, "--read", "!"+sub, "--", "true")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "command should still succeed: %s", string(out))
+	assert.Contains(t, string(out), "has no effect")
+	assert.Contains(t, string(out), "--hide")
+}
+
 // TestCurb_FS_ExcludeCWDRead verifies --read '!.' blocks reading the CWD.
 func TestCurb_FS_ExcludeCWDRead(t *testing.T) {
 	requireUserNS(t)

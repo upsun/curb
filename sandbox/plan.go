@@ -128,6 +128,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 	// Filesystem policy.
 	plan.NoFSRestrict = cfg.NoFSRestrict
+	var roRemoves, rwRemoves []string
 	if cfg.NoFSRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "filesystem",
@@ -136,7 +137,9 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		})
 	} else {
 		// Parse exclusions, expand tildes and globs, then merge with defaults.
-		roAdds, roRemoves, roRemoveAll := config.ParseExclusions(cfg.ROPaths)
+		var roAdds []string
+		var roRemoveAll bool
+		roAdds, roRemoves, roRemoveAll = config.ParseExclusions(cfg.ROPaths)
 		plan.HiddenPaths = slices.Clone(cfg.HiddenPaths)
 		if len(plan.HiddenPaths) > 0 && caps.MountNS != nil {
 			return nil, fmt.Errorf("--hide requires mount namespaces: %w", caps.MountNS)
@@ -161,7 +164,9 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			plan.ROFiles = append(config.ApplyExclusions(config.DefaultROFiles, roExcl), addFiles...)
 		}
 
-		rwAdds, rwRemoves, rwRemoveAll := config.ParseExclusions(cfg.RWPaths)
+		var rwAdds []string
+		var rwRemoveAll bool
+		rwAdds, rwRemoves, rwRemoveAll = config.ParseExclusions(cfg.RWPaths)
 		if realHome != "" {
 			rwAdds = config.ExpandTildes(rwAdds, realHome)
 		}
@@ -180,6 +185,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		if cwd, err := os.Getwd(); err == nil && !roRemoveAll && !isExcluded(cwd, roRemoves) {
 			plan.ROPaths = append(plan.ROPaths, cwd)
 		}
+
 	}
 
 	// Temp directory.
@@ -261,6 +267,13 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	applyEnvPolicy(plan, cfg, tmpDir)
 
 	plan.Command = cfg.Command
+
+	// Warn about sub-path exclusions that Landlock cannot enforce.
+	// Checked after all path assembly (RO, RW, exec dirs, resolv.conf).
+	if !cfg.NoFSRestrict {
+		warnSubpathExclusions("--read", roRemoves, plan.ROPaths, plan.RWPaths)
+		warnSubpathExclusions("--write", rwRemoves, plan.ROPaths, plan.RWPaths)
+	}
 
 	return plan, nil
 }
@@ -486,7 +499,37 @@ func splitDirsFiles(paths []string) (dirs, files []string) {
 	return
 }
 
-// excludeArgs converts plain strings into "!"-prefixed exclusion args for ApplyExclusions.
+// warnSubpathExclusions emits a warning for each exclusion that is a
+// subdirectory of an allowed path, since Landlock cannot deny access to
+// subdirectories of an allowed parent.
+func warnSubpathExclusions(flag string, removes []string, dirSets ...[]string) {
+	for _, r := range removes {
+		abs, err := filepath.Abs(r)
+		if err != nil {
+			continue
+		}
+		for _, dirs := range dirSets {
+			found := false
+			for _, dir := range dirs {
+				if isSubpath(abs, dir) {
+					clog.Warnf("%s '!%s' has no effect: parent directory %s is allowed. Use --hide %s, or exclude the parent and re-add specific paths.", flag, r, dir, r)
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+	}
+}
+
+// isSubpath reports whether child is strictly under parent.
+func isSubpath(child, parent string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != "." && !strings.HasPrefix(rel, "..")
+}
+
 // isExcluded checks whether path matches any of the exclusion entries,
 // resolving relative entries to absolute paths for comparison.
 func isExcluded(path string, excludes []string) bool {
@@ -502,6 +545,7 @@ func isExcluded(path string, excludes []string) bool {
 	return false
 }
 
+// excludeArgs converts plain strings into "!"-prefixed exclusion args for ApplyExclusions.
 func excludeArgs(items []string) []string {
 	out := make([]string, len(items))
 	for i, s := range items {
@@ -525,7 +569,7 @@ func appendExecDirs(roPaths, execPaths []string) []string {
 		// Skip if already covered by a parent RO path.
 		covered := false
 		for _, ro := range roPaths {
-			if strings.HasPrefix(dir, ro+"/") || dir == ro {
+			if dir == ro || isSubpath(dir, ro) {
 				covered = true
 				break
 			}
