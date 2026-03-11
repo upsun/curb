@@ -103,6 +103,12 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if home != "" {
+		home, err = expandHome(home)
+		if err != nil {
+			return nil, fmt.Errorf("--home: %w", err)
+		}
+	}
 
 	// Separate --allow-env values into passthrough names and explicit name=value pairs.
 	passNames, setPairs := classifyEnvArgs(env)
@@ -196,6 +202,9 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	// String values: env only if flag not explicitly set.
 	if !flags.Changed("home") {
 		if val, ok := os.LookupEnv("CURB_HOME"); ok {
+			if h, err := expandHome(val); err == nil {
+				val = h
+			}
 			cfg.HomePath = val
 		}
 	}
@@ -278,4 +287,16 @@ func mergeBoolEnv(flags *pflag.FlagSet, target *bool, flagName, envKey string) {
 func envBool(key string) bool {
 	val := os.Getenv(key)
 	return val == "1" || strings.EqualFold(val, "true")
+}
+
+// expandHome resolves a leading ~ or ~/ to the user's home directory.
+func expandHome(path string) (string, error) {
+	if !strings.HasPrefix(path, "~") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return ExpandTildes([]string{path}, home)[0], nil
 }

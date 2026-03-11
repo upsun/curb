@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -250,6 +251,39 @@ func TestFromFlags_WildcardEnvValueNotPassthrough(t *testing.T) {
 
 	assert.False(t, cfg.EnvPassthroughAll, "FOO=* should not trigger passthrough-all")
 	assert.Equal(t, []string{"FOO=*"}, cfg.EnvSet)
+}
+
+func TestFromFlags_HomeTildeExpansion(t *testing.T) {
+	cmd := newTestCmd([]string{"--home", "~"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, home, cfg.HomePath)
+}
+
+func TestFromFlags_HomeTildeSlashExpansion(t *testing.T) {
+	cmd := newTestCmd([]string{"--home", "~/sandbox"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, home+"/sandbox", cfg.HomePath)
+}
+
+func TestMergeEnv_HomeTildeExpansion(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_HOME", "~")
+	MergeEnv(cfg, cmd)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, home, cfg.HomePath)
 }
 
 func TestSplitComma(t *testing.T) {

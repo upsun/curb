@@ -169,11 +169,13 @@ func hasGlobMeta(path string) bool {
 	return strings.ContainsAny(path, "*?[")
 }
 
-// ExpandTildes replaces a leading ~/ in each path with the given home directory.
+// ExpandTildes replaces a leading ~ or ~/ in each path with the given home directory.
 func ExpandTildes(paths []string, home string) []string {
 	out := make([]string, len(paths))
 	for i, p := range paths {
-		if strings.HasPrefix(p, "~/") {
+		if p == "~" {
+			out[i] = home
+		} else if strings.HasPrefix(p, "~/") {
 			out[i] = home + p[1:]
 		} else {
 			out[i] = p

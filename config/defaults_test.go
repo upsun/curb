@@ -46,8 +46,8 @@ func TestExpandGlobs_MixedLiteralAndGlob(t *testing.T) {
 }
 
 func TestExpandTildes(t *testing.T) {
-	result := ExpandTildes([]string{"~/docs", "/abs/path", "relative"}, "/home/user")
-	assert.Equal(t, []string{"/home/user/docs", "/abs/path", "relative"}, result)
+	result := ExpandTildes([]string{"~", "~/docs", "/abs/path", "relative"}, "/home/user")
+	assert.Equal(t, []string{"/home/user", "/home/user/docs", "/abs/path", "relative"}, result)
 }
 
 func TestParseExclusions(t *testing.T) {
