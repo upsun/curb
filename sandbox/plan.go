@@ -186,6 +186,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			plan.ROPaths = append(plan.ROPaths, cwd)
 		}
 
+		// Resolve symlinks so Landlock covers both the symlink and its
+		// target inode. Without this, paths like /etc/resolv.conf ->
+		// /run/systemd/resolve/stub-resolv.conf would be inaccessible.
+		plan.ROPaths = resolveSymlinks(plan.ROPaths)
+		plan.ROFiles = resolveSymlinks(plan.ROFiles)
+		plan.RWPaths = resolveSymlinks(plan.RWPaths)
+		plan.RWFiles = resolveSymlinks(plan.RWFiles)
+		plan.HiddenPaths = resolveSymlinks(plan.HiddenPaths)
 	}
 
 	// Temp directory.
@@ -232,7 +240,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		// Resolve symlinks in exec paths so Landlock covers the target
 		// inodes. Without this, symlinked binaries (e.g. ~/.local/bin/foo
 		// -> ~/.local/share/foo/binary) fail with permission denied.
-		plan.ExecPaths = resolveExecSymlinks(plan.ExecPaths)
+		plan.ExecPaths = resolveSymlinks(plan.ExecPaths)
 
 		// Ensure directories containing exec paths are readable so the
 		// child can stat() them for path resolution after Landlock.
@@ -582,10 +590,10 @@ func appendExecDirs(roPaths, execPaths []string) []string {
 	return roPaths
 }
 
-// resolveExecSymlinks evaluates symlinks in exec paths and appends any resolved
-// paths that differ from the original, so Landlock covers both the symlink and
-// its target. Errors are silently ignored (the path may not exist yet).
-func resolveExecSymlinks(paths []string) []string {
+// resolveSymlinks evaluates symlinks in paths and appends any resolved paths
+// that differ from the original, so Landlock covers both the symlink and its
+// target. Errors are silently ignored (the path may not exist yet).
+func resolveSymlinks(paths []string) []string {
 	seen := make(map[string]bool, len(paths))
 	for _, p := range paths {
 		seen[p] = true

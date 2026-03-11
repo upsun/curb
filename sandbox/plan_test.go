@@ -73,18 +73,53 @@ func TestAppendExecDirs(t *testing.T) {
 	}
 }
 
-// --- resolveExecSymlinks ---
+// --- resolveSymlinks ---
 
-func TestResolveExecSymlinks_WithSymlink(t *testing.T) {
+func TestResolveSymlinks_WithSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real-binary")
 	link := filepath.Join(dir, "link-binary")
 	require.NoError(t, os.WriteFile(target, nil, 0o755))
 	require.NoError(t, os.Symlink(target, link))
 
-	result := resolveExecSymlinks([]string{link})
+	result := resolveSymlinks([]string{link})
 	assert.Contains(t, result, link)
 	assert.Contains(t, result, target)
+}
+
+func TestResolveSymlinks_DirectorySymlink(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real-dir")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(dir, "link-dir")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	result := resolveSymlinks([]string{link})
+	assert.Contains(t, result, link)
+	assert.Contains(t, result, realDir)
+}
+
+func TestResolveSymlinks_NoSymlink(t *testing.T) {
+	dir := t.TempDir()
+	result := resolveSymlinks([]string{dir})
+	assert.Equal(t, []string{dir}, result, "non-symlink path unchanged")
+}
+
+func TestResolveSymlinks_NonExistentPath(t *testing.T) {
+	result := resolveSymlinks([]string{"/nonexistent/path/xyz"})
+	assert.Equal(t, []string{"/nonexistent/path/xyz"}, result, "non-existent path kept")
+}
+
+func TestResolveSymlinks_NoDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real")
+	require.NoError(t, os.Mkdir(target, 0o755))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(target, link))
+
+	// Both the symlink and its target are already in the list.
+	result := resolveSymlinks([]string{link, target})
+	assert.Equal(t, []string{link, target}, result, "no duplicates added")
 }
 
 // --- Cleanup ---
@@ -260,6 +295,40 @@ func TestIsExcluded(t *testing.T) {
 			assert.Equal(t, tt.want, isExcluded(tt.path, tt.excludes))
 		})
 	}
+}
+
+// --- BuildPlan symlink resolution ---
+
+func TestBuildPlan_ResolvesROSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{link}}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Contains(t, plan.ROPaths, link, "original symlink kept")
+	assert.Contains(t, plan.ROPaths, realDir, "resolved target added")
+}
+
+func TestBuildPlan_ResolvesRWSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	cfg := &config.Config{ECHMode: "strip", RWPaths: []string{link}}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Contains(t, plan.RWPaths, link, "original symlink kept")
+	assert.Contains(t, plan.RWPaths, realDir, "resolved target added")
 }
 
 // --- BuildPlan CWD ---
