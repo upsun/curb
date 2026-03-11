@@ -98,7 +98,7 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `T
 | Flag | Description |
 |------|-------------|
 | `--dry-run` | Print the sandbox plan without running the command |
-| `--home` | Custom writable home directory path |
+| `--home` | Set HOME environment variable for the sandboxed process |
 
 ## Platform Support
 

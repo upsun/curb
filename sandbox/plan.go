@@ -176,13 +176,6 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.RWFiles = append(plan.RWFiles, rwAddFiles...)
 	}
 
-	// Home directory: --home adds the path as read-only so the sandboxed
-	// process can read its configuration files. Use --write for specific
-	// subdirectories that need write access.
-	if cfg.HomePath != "" && !cfg.NoFSRestrict {
-		plan.ROPaths = append(plan.ROPaths, cfg.HomePath)
-	}
-
 	// CWD: always read-only by default (use --allow-write . for write access).
 	cwd, err := os.Getwd()
 	if err == nil && !cfg.NoFSRestrict {

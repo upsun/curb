@@ -671,6 +671,30 @@ func TestCurb_FS_WriteHomeBlocked(t *testing.T) {
 	assert.Contains(t, string(out), "Permission denied")
 }
 
+// TestCurb_FS_HomeNotAutoReadable verifies --home does not make the home
+// directory readable (it only sets the HOME env var).
+func TestCurb_FS_HomeNotAutoReadable(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	// Find a file that exists in the home directory.
+	testFile := filepath.Join(home, ".bashrc")
+	if _, statErr := os.Stat(testFile); statErr != nil {
+		testFile = filepath.Join(home, ".profile")
+		if _, statErr := os.Stat(testFile); statErr != nil {
+			t.Skip("no .bashrc or .profile in home directory")
+		}
+	}
+
+	cmd := exec.Command(curbBin, "--home", home, "--", "cat", testFile)
+	out, runErr := cmd.CombinedOutput()
+	require.Error(t, runErr, "expected read of %s with --home to fail: %s", testFile, string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
 // TestCurb_Net_LoopbackDNSRouted verifies DNS works inside the sandbox via
 // route_localnet (loopback nameservers are routed through the TAP to the netstack).
 func TestCurb_Net_LoopbackDNSRouted(t *testing.T) {

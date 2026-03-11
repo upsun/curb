@@ -131,5 +131,5 @@ func registerFlags(cmd *cobra.Command) {
 
 	// Other.
 	f.Bool("dry-run", false, "print the sandbox plan without running the command")
-	f.String("home", "", "custom writable home directory path")
+	f.String("home", "", "set HOME environment variable for the sandboxed process")
 }
