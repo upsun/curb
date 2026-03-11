@@ -79,6 +79,61 @@ func TestProcessPacket_MultipleQuestions(t *testing.T) {
 	assert.Equal(t, dns.RcodeRefused, resp.Rcode, "any blocked question should REFUSE the entire query")
 }
 
+func TestCheckPacket_SubdomainExfiltration(t *testing.T) {
+	f := &DNSFilter{
+		Check: func(domain string) bool { return domain == "good.com." },
+	}
+
+	query := new(dns.Msg)
+	query.SetQuestion("data.evil.com.", dns.TypeA)
+	packed, err := query.Pack()
+	require.NoError(t, err)
+
+	resp, allowed := f.checkPacket(packed)
+	assert.False(t, allowed)
+	assert.NotNil(t, resp)
+
+	var msg dns.Msg
+	require.NoError(t, msg.Unpack(resp))
+	assert.Equal(t, dns.RcodeRefused, msg.Rcode)
+}
+
+func TestCheckPacket_NoQuestions(t *testing.T) {
+	f := &DNSFilter{
+		Check: func(string) bool { return true },
+	}
+
+	query := new(dns.Msg)
+	query.Id = 1111
+	// No questions set.
+	packed, err := query.Pack()
+	require.NoError(t, err)
+
+	resp, allowed := f.checkPacket(packed)
+	assert.False(t, allowed)
+	assert.Nil(t, resp, "no-questions packet should be dropped (nil response)")
+}
+
+func TestCheckPacket_CasePassthrough(t *testing.T) {
+	var checkedName string
+	f := &DNSFilter{
+		Check: func(domain string) bool {
+			checkedName = domain
+			return true
+		},
+	}
+
+	query := new(dns.Msg)
+	query.SetQuestion("EVIL.COM.", dns.TypeA)
+	packed, err := query.Pack()
+	require.NoError(t, err)
+
+	_, allowed := f.checkPacket(packed)
+	assert.True(t, allowed)
+	// The dns library preserves case from the wire format in Question[].Name.
+	assert.Equal(t, "EVIL.COM.", checkedName, "raw QNAME case should be passed to Check")
+}
+
 // newStripFilter creates a DNSFilter with ECH stripping enabled for testing.
 func newStripFilter() *DNSFilter {
 	return &DNSFilter{Check: func(string) bool { return true }, stripECH: true}

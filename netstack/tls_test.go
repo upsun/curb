@@ -294,6 +294,124 @@ func TestHandleTLSConnection_ECHStripWithUnknownIP(t *testing.T) {
 	<-done
 }
 
+func TestHandleTLSConnection_BlockedSNI(t *testing.T) {
+	exts := buildSNIExtension("blocked.com")
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check: func(domain string) bool { return domain != "blocked.com" },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "93.184.216.34:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	buf := make([]byte, 1)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed for blocked SNI")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_NoSNI_RequireSNI(t *testing.T) {
+	data := buildClientHello(nil) // No extensions, no SNI.
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check:      func(string) bool { return true },
+		RequireSNI: true,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "93.184.216.34:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	buf := make([]byte, 1)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed when RequireSNI and no SNI")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_NonTLSData(t *testing.T) {
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check: func(string) bool { return true },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "93.184.216.34:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write([]byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+	buf := make([]byte, 1)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed for non-TLS data on 443")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_TruncatedRecord(t *testing.T) {
+	// TLS record header claiming more data than provided.
+	data := []byte{0x16, 0x03, 0x01, 0x00, 0x10, 0x01}
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check: func(string) bool { return true },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handleTLSConnection(server, "93.184.216.34:443", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	buf := make([]byte, 1)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := client.Read(buf)
+	assert.Error(t, err, "connection should be closed for truncated TLS record")
+	_ = client.Close()
+	<-done
+}
+
+func TestHandleTLSConnection_AllowedSNI(t *testing.T) {
+	exts := buildSNIExtension("allowed.com")
+	data := buildClientHello(exts)
+
+	client, server := net.Pipe()
+	filter := &FilterConfig{
+		Check: func(string) bool { return true },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// Dial will fail (no real server), but the handler should not block the SNI.
+		handleTLSConnection(server, "127.0.0.1:1", filter)
+		close(done)
+	}()
+
+	_, _ = client.Write(data)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	_, _ = client.Read(buf)
+	// Connection closes after dial failure, not from filtering.
+	_ = client.Close()
+	<-done
+}
+
 func TestHandleTLSConnection_ECHStripNilCheckIP(t *testing.T) {
 	exts := append(buildSNIExtension("example.com"), buildECHExtension()...)
 	data := buildClientHello(exts)
