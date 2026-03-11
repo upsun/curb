@@ -58,14 +58,74 @@ func filterLogger(filter *FilterConfig) *clog.Logger {
 	return filter.Logger
 }
 
+// rejectReason returns a non-empty string if the TCP connection can be
+// rejected with RST before accepting, based on port and IP alone. The
+// returned string describes why the connection was rejected (for logging).
+func rejectReason(id stack.TransportEndpointID, filter *FilterConfig, dnsFilter *DNSFilter) string {
+	// No filtering active: accept everything.
+	if filter == nil {
+		return ""
+	}
+
+	loopback := isLoopback(id.LocalAddress)
+
+	// Localhost-only mode (filter set, no Check): reject all non-loopback.
+	if filter.Check == nil {
+		if loopback {
+			return ""
+		}
+		return "localhost-only mode"
+	}
+
+	// Loopback: reject if not allowed (except DNS, which is always filtered).
+	if loopback {
+		if id.LocalPort == dnsPort && dnsFilter != nil {
+			return ""
+		}
+		if filter.allowsLoopback(addrString(id.LocalAddress)) {
+			return ""
+		}
+		return "loopback not allowed"
+	}
+
+	// Domain filtering active: only accept ports that need data inspection.
+	if dnsFilter != nil {
+		switch id.LocalPort {
+		case dnsPort, tlsPort:
+			return ""
+		case httpPort:
+			if filter.AllowHTTP {
+				return ""
+			}
+			return "port 80 disabled"
+		default:
+			return "port not allowed"
+		}
+	}
+
+	return ""
+}
+
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
 // If filter is active, traffic is routed by port:
-// 53 → DNS filter, 443 → TLS SNI filter, 80 → HTTP filter (if AllowHTTP), others → drop.
+// 53 → DNS filter, 443 → TLS SNI filter, 80 → HTTP filter (if AllowHTTP), others → RST.
 // Loopback destinations (127.0.0.0/8) are forwarded to the host if AllowLocalhost is set.
 func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilter) {
 	logger := filterLogger(filter)
 	fwd := tcp.NewForwarder(s, 0, maxTCPInFlight, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
+
+		// Early rejection: send TCP RST for connections that can be blocked
+		// by port/IP alone, without reading data.
+		if reason := rejectReason(id, filter, dnsFilter); reason != "" {
+			if logger.IsDebug() {
+				dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
+				logger.Debug("tcp rejected (%s): %s", reason, dst)
+			}
+			r.Complete(true) // TCP RST
+			return
+		}
+
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
@@ -86,19 +146,14 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			logger.Debug("tcp accept: %s:%d → %s", addrString(id.RemoteAddress), id.RemotePort, dst)
 		}
 
-		// Loopback traffic handling.
+		// Loopback traffic handling (loopback rejections handled above).
 		if isLoopback(id.LocalAddress) {
 			if id.LocalPort == dnsPort && dnsFilter != nil {
 				go dnsFilter.handleTCPQuery(local, dst)
 				return
 			}
-			if filter.allowsLoopback(dstIP) {
-				hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
-				go forwardTCP(local, hostDst, logger)
-				return
-			}
-			logger.Debug("tcp loopback dropped: %s", dst)
-			_ = local.Close()
+			hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
+			go forwardTCP(local, hostDst, logger)
 			return
 		}
 
@@ -110,27 +165,15 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			case tlsPort:
 				go handleTLSConnection(local, dst, filter)
 			case httpPort:
-				if filter.AllowHTTP {
-					go handleHTTPConnection(local, dst, filter)
-				} else {
-					filter.Logger.Event("http_request", dst, "blocked", "port_80_disabled")
-					_ = local.Close()
-				}
+				go handleHTTPConnection(local, dst, filter)
 			default:
-				logger.Debug("tcp port %d dropped (not 53/80/443): %s", id.LocalPort, dst)
+				// Should not reach here: canRejectEarly handles non-standard ports.
 				_ = local.Close()
 			}
 			return
 		}
 
-		// If a filter is set but has no Check function (localhost-only mode),
-		// drop all non-loopback traffic.
-		if filter != nil {
-			logger.Debug("tcp dropped (localhost-only mode): %s", dst)
-			_ = local.Close()
-			return
-		}
-
+		// No filtering: forward directly.
 		remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
 		if dialErr != nil {
 			logger.Warn("tcp forward %s: %v", dst, dialErr)

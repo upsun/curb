@@ -1033,16 +1033,17 @@ func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	// Port 80 is blocked by default (no --allow-http), so direct HTTP fails.
+	// Port 80 is blocked by default (no --allow-http), so direct HTTP gets RST.
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*", "-v",
 		"--domains", "other-domain-not-example.test", "--",
-		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
+		"curl", "-sS", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: http_request blocked:",
-		"expected port 80 to be blocked by default")
 	assert.NotContains(t, filterCurbOutput(outStr), "Example Domain",
 		"should not receive content via direct IP")
+	// Connection should fail (RST).
+	assert.Contains(t, outStr, "Failed to connect",
+		"expected connection failure for blocked port 80")
 }
 
 // --- TLS SNI filter tests ---
@@ -1156,13 +1157,14 @@ func TestCurb_HTTP_BlockedByDefault(t *testing.T) {
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
-		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
+		"curl", "-sS", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: http_request blocked:",
-		"expected HTTP port 80 to be blocked by default")
 	assert.NotContains(t, filterCurbOutput(outStr), "Example Domain",
 		"should not receive content when HTTP is blocked")
+	// Connection should fail (RST), not accepted then closed.
+	assert.Contains(t, outStr, "Failed to connect",
+		"expected connection failure for blocked port 80")
 }
 
 // TestCurb_HTTP_NoHostHeader verifies that HTTP without a Host header is rejected.
@@ -1193,15 +1195,15 @@ s.close()
 
 // --- Port blocking tests ---
 
-// TestCurb_Net_NonStandardPortDropped verifies that non-standard TCP ports are dropped
-// when domain filtering is active.
+// TestCurb_Net_NonStandardPortDropped verifies that non-standard TCP ports are rejected
+// with RST when domain filtering is active, causing connect() to fail.
 func TestCurb_Net_NonStandardPortDropped(t *testing.T) {
 	requireNetNS(t)
 
 	ip := resolveForTest(t, "example.com")
 
-	// Try to connect on port 8080 (non-standard). The netstack accepts the TCP
-	// connection then closes it immediately, so curl gets an empty reply.
+	// Try to connect on port 8080 (non-standard). The netstack sends RST,
+	// so connect() fails with "connection refused".
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "3", fmt.Sprintf("http://%s:8080/", ip))
@@ -1209,6 +1211,36 @@ func TestCurb_Net_NonStandardPortDropped(t *testing.T) {
 	outStr := filterCurbOutput(string(out))
 	assert.NotContains(t, outStr, "Example Domain",
 		"non-standard port should not serve content")
+}
+
+// TestCurb_Net_BlockedPortRefused verifies that blocked TCP connections get RST,
+// causing connect() to fail with "connection refused" instead of succeeding.
+func TestCurb_Net_BlockedPortRefused(t *testing.T) {
+	requireNetNS(t)
+
+	ip := resolveForTest(t, "example.com")
+
+	// Use python to test that connect() itself fails, not just data transfer.
+	script := fmt.Sprintf(`python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(5)
+try:
+    s.connect(('%s', 8080))
+    print('CONNECTED')
+except ConnectionRefusedError:
+    print('REFUSED')
+except Exception as e:
+    print('ERROR: ' + str(e))
+s.close()
+"`, ip)
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--domains", "example.com", "--",
+		"sh", "-c", script)
+	out, _ := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	assert.Contains(t, outStr, "REFUSED",
+		"expected connect() to fail with connection refused for blocked port")
 }
 
 // TestCurb_Net_UDPNonDNSDropped verifies that non-DNS UDP is dropped when filtering is active.
