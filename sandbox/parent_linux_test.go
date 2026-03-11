@@ -326,6 +326,7 @@ func TestCurb_EnvOnlyExpectedVars(t *testing.T) {
 		"HOME": true, "TMPDIR": true, "PATH": true, "SHELL": true,
 		"TERM": true, "COLORTERM": true, "LANG": true, "LC_ALL": true,
 		"LC_CTYPE": true, "TZ": true, "USER": true, "LOGNAME": true,
+		"IS_SANDBOX": true,
 	}
 	for _, line := range lines {
 		name, _, ok := strings.Cut(line, "=")
@@ -616,10 +617,11 @@ func TestCurb_EnvExcludeAll(t *testing.T) {
 	cmd := exec.Command(curbBin, "--env", "!*", "--", "/usr/bin/env")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "curb --env '!*' -- env failed: %s", string(out))
-	// Should have no HOME, SHELL, or any other vars.
+	// Should have no HOME, SHELL, IS_SANDBOX, or any other vars.
 	assert.NotContains(t, string(out), "HOME=")
 	assert.NotContains(t, string(out), "SHELL=")
 	assert.NotContains(t, string(out), "PATH=")
+	assert.NotContains(t, string(out), "IS_SANDBOX=")
 }
 
 // TestCurb_EnvExcludeAllThenSet verifies --env '!*' --env 'LANG' passes only LANG.
@@ -632,6 +634,26 @@ func TestCurb_EnvExcludeAllThenSet(t *testing.T) {
 	require.NoError(t, err, "curb --env '!*' --env LANG -- env failed: %s", string(out))
 	assert.Contains(t, string(out), "LANG=en_US.UTF-8")
 	assert.NotContains(t, string(out), "HOME=")
+}
+
+// TestCurb_EnvIsSandbox verifies IS_SANDBOX=1 is set in the default environment.
+func TestCurb_EnvIsSandbox(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--", "env")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "curb -- env failed: %s", string(out))
+	assert.Contains(t, string(out), "IS_SANDBOX=1")
+}
+
+// TestCurb_EnvExcludeIsSandbox verifies --env '!IS_SANDBOX' removes IS_SANDBOX.
+func TestCurb_EnvExcludeIsSandbox(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--env", "!IS_SANDBOX", "--", "env")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "curb --env '!IS_SANDBOX' -- env failed: %s", string(out))
+	assert.NotContains(t, string(out), "IS_SANDBOX=")
 }
 
 // TestCurb_FS_WriteHomeBlocked verifies the real home directory is not writable.

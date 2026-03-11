@@ -173,6 +173,7 @@ func TestBuildPlan_EnvPolicy(t *testing.T) {
 	defer plan.Cleanup()
 
 	assert.Equal(t, "bar", plan.EnvSet["FOO"])
+	assert.Equal(t, "1", plan.EnvSet["IS_SANDBOX"])
 	assert.Contains(t, plan.EnvPassthrough, "GOPATH")
 	assert.Contains(t, plan.EnvPassthrough, "TERM")
 }

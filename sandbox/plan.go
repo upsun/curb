@@ -450,7 +450,7 @@ func (p *SandboxPlan) capUserInfo() string {
 // and the temp directory. Used by both BuildPlan and buildDegradedPlan.
 func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	envAdds, envRemoves, envRemoveAll := config.ParseExclusions(cfg.EnvPassthrough)
-	plan.EnvSet = config.ForcedEnvVars(tmpDir, cfg.HomePath)
+	plan.EnvSet = config.DefaultEnvVars(tmpDir, cfg.HomePath)
 	if envRemoveAll {
 		plan.EnvSet = make(map[string]string)
 	} else if len(envRemoves) > 0 {
@@ -591,6 +591,8 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 
 	// Environment policy (still enforced on all platforms).
 	applyEnvPolicy(plan, cfg, tmpDir)
+	// Remove IS_SANDBOX: no user namespace isolation on this platform.
+	delete(plan.EnvSet, "IS_SANDBOX")
 
 	plan.Command = cfg.Command
 	return plan, nil
