@@ -2,6 +2,8 @@ package clog
 
 import (
 	"bytes"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -91,4 +93,33 @@ func TestNew(t *testing.T) {
 	require.NoError(t, err)
 	defer l.Close()
 	assert.NotNil(t, l)
+}
+
+func TestNew_WithLogFile(t *testing.T) {
+	dir := t.TempDir()
+	logPath := dir + "/test.log"
+
+	l, err := New(logPath, true, false, false)
+	require.NoError(t, err)
+
+	l.Event("dns_query", "example.com", "allowed", "")
+	l.Event("tls_connect", "blocked.com", "blocked", "domain")
+	l.Close()
+
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	s := string(data)
+	assert.Contains(t, s, `"event":"dns_query"`)
+	assert.Contains(t, s, `"action":"allowed"`)
+	assert.Contains(t, s, `"event":"tls_connect"`)
+	assert.Contains(t, s, `"reason":"domain"`)
+	// First event has no reason, so no "reason" key in that line.
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	require.Len(t, lines, 2)
+	assert.NotContains(t, lines[0], `"reason"`)
+}
+
+func TestNew_InvalidLogFile(t *testing.T) {
+	_, err := New("/nonexistent/directory/logfile.json", false, false, false)
+	require.Error(t, err)
 }

@@ -286,6 +286,99 @@ func TestMergeEnv_HomeTildeExpansion(t *testing.T) {
 	assert.Equal(t, home, cfg.HomePath)
 }
 
+func TestFromFlags_InvalidECH(t *testing.T) {
+	cmd := newTestCmd([]string{"--ech", "invalid"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--ech must be strip, allow, or deny")
+}
+
+func TestMergeEnv_WildcardRead(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_READ", "*")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, []string{"/"}, cfg.ROPaths)
+}
+
+func TestMergeEnv_AllowNoSNI(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.RequireSNI)
+	t.Setenv("CURB_ALLOW_NO_SNI", "1")
+	MergeEnv(cfg, cmd)
+
+	assert.False(t, cfg.RequireSNI)
+}
+
+func TestMergeEnv_HomeNotOverriddenWhenFlagSet(t *testing.T) {
+	cmd := newTestCmd([]string{"--home", "/cli/home"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_HOME", "/env/home")
+	MergeEnv(cfg, cmd)
+
+	// CLI flag takes precedence.
+	assert.Equal(t, "/cli/home", cfg.HomePath)
+}
+
+func TestMergeEnv_LogFileNotOverriddenWhenFlagSet(t *testing.T) {
+	cmd := newTestCmd([]string{"--log-file", "/cli/log"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_LOG_FILE", "/env/log")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, "/cli/log", cfg.LogFile)
+}
+
+func TestMergeEnv_LogFileFromEnv(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_LOG_FILE", "/env/log")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, "/env/log", cfg.LogFile)
+}
+
+func TestMergeEnv_ECHNotOverriddenWhenFlagSet(t *testing.T) {
+	cmd := newTestCmd([]string{"--ech", "allow"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_ECH", "deny")
+	MergeEnv(cfg, cmd)
+
+	// CLI flag takes precedence.
+	assert.Equal(t, "allow", cfg.ECHMode)
+}
+
+func TestMergeEnv_AllowHTTP(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_ALLOW_HTTP", "true")
+	MergeEnv(cfg, cmd)
+
+	assert.True(t, cfg.AllowHTTP)
+}
+
+func TestExpandHome_NonTilde(t *testing.T) {
+	result, err := expandHome("/absolute/path")
+	require.NoError(t, err)
+	assert.Equal(t, "/absolute/path", result)
+}
+
 func TestSplitComma(t *testing.T) {
 	tests := []struct {
 		name string
