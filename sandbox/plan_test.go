@@ -194,7 +194,7 @@ func TestBuildPlan_NoExecRestrict(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	assert.True(t, hasDegradedLayer(plan, "exec"))
+	assert.False(t, hasDegradedLayer(plan, "exec"), "user-chosen --exec '*' should not be a degraded layer")
 }
 
 func TestBuildPlan_ExecRemoveAll(t *testing.T) {
@@ -257,7 +257,7 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	assert.True(t, hasDegradedLayer(plan, "filesystem"))
+	assert.False(t, hasDegradedLayer(plan, "filesystem"), "user-chosen --write '*' should not be a degraded layer")
 }
 
 // --- isSubpath ---

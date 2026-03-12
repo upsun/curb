@@ -140,13 +140,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	// Filesystem policy.
 	plan.NoFSRestrict = cfg.NoFSRestrict
 	var roRemoves, rwRemoves []string
-	if cfg.NoFSRestrict {
-		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-			Layer:  "filesystem",
-			Reason: "--write '*'",
-			Impact: "Filesystem restrictions disabled by user.",
-		})
-	} else {
+	if !cfg.NoFSRestrict {
 		// Parse exclusions, expand tildes and globs, then merge with defaults.
 		var roAdds []string
 		var roRemoveAll bool
@@ -216,13 +210,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan.RWPaths = append(plan.RWPaths, tmpDir)
 
 	// Exec policy.
-	if cfg.NoExecRestrict {
-		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-			Layer:  "exec",
-			Reason: "--exec '*'",
-			Impact: "Executable restrictions disabled by user.",
-		})
-	} else {
+	if !cfg.NoExecRestrict {
 		execAdds, execRemoves, execRemoveAll := config.ParseExclusions(cfg.ExecAllow)
 		if execRemoveAll {
 			plan.ExecPaths = nil
