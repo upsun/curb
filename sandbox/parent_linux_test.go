@@ -76,7 +76,7 @@ func TestChildConfig_Serialization(t *testing.T) {
 		ROPaths:        []string{"/usr", "/lib"},
 		NetEnabled:     true,
 		AllowedDomains: []string{"example.com"},
-		TempDir: "/tmp/curb-test",
+		TempDir:        "/tmp/curb-test",
 	}
 
 	data, err := json.Marshal(cfg)
@@ -251,7 +251,7 @@ func TestCurb_EnvDefault(t *testing.T) {
 	assert.Contains(t, envOut, "HOME=")
 	assert.Contains(t, envOut, "PATH=")
 	assert.Contains(t, envOut, "TMPDIR=")
-	assert.Contains(t, envOut, "SHELL=/bin/sh")
+	assert.Contains(t, envOut, "SHELL=")
 }
 
 func TestCurb_EnvPassthroughName(t *testing.T) {
@@ -283,8 +283,8 @@ func TestCurb_EnvPassthroughAll(t *testing.T) {
 
 	envOut := string(out)
 	assert.Contains(t, envOut, "CUSTOM_HOST_VAR=visible")
-	// Forced vars still override host values.
-	assert.Contains(t, envOut, "SHELL=/bin/sh")
+	// Safe passthrough vars must be present.
+	assert.Contains(t, envOut, "SHELL=")
 	// _CURB_INIT must not leak even with passthrough.
 	assert.NotContains(t, envOut, InitEnvKey+"=")
 }
@@ -331,7 +331,7 @@ func TestCurb_EnvOnlyExpectedVars(t *testing.T) {
 		"HOME": true, "TMPDIR": true, "PATH": true, "SHELL": true,
 		"TERM": true, "COLORTERM": true, "LANG": true, "LC_ALL": true,
 		"LC_CTYPE": true, "TZ": true, "USER": true, "LOGNAME": true,
-		"IS_SANDBOX": true,
+		"IS_SANDBOX": true, "PS1": true,
 	}
 	for _, line := range lines {
 		name, _, ok := strings.Cut(line, "=")
@@ -339,6 +339,23 @@ func TestCurb_EnvOnlyExpectedVars(t *testing.T) {
 			continue
 		}
 		assert.True(t, allowed[name], "unexpected env var in default mode: %s", name)
+	}
+}
+
+func TestCurb_PS1(t *testing.T) {
+	requireUserNS(t)
+
+	// PS1 env var is set for all commands.
+	cmd := exec.Command(curbBin, "--", "env")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "curb -- env failed: %s", string(out))
+
+	envOut := string(out)
+	assert.Contains(t, envOut, "PS1=")
+	for line := range strings.SplitSeq(envOut, "\n") {
+		if strings.HasPrefix(line, "PS1=") {
+			assert.Contains(t, line, "(curb)")
+		}
 	}
 }
 

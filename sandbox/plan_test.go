@@ -388,6 +388,65 @@ func TestBuildPlan_CWDExcludedByDot(t *testing.T) {
 	assert.NotContains(t, plan.ROPaths, cwd)
 }
 
+// --- setupShellInit ---
+
+func TestSetupShellInit_Bash(t *testing.T) {
+	tmpDir := t.TempDir()
+	plan := &SandboxPlan{
+		Command: []string{"/bin/bash"},
+		EnvSet:  map[string]string{},
+	}
+	require.NoError(t, setupShellInit(plan, tmpDir))
+	assert.Equal(t, "/bin/bash", plan.Command[0])
+	assert.Equal(t, "--rcfile", plan.Command[1])
+	rcFile := plan.Command[2]
+	content, err := os.ReadFile(rcFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "(curb)")
+	assert.Contains(t, string(content), ".bashrc")
+}
+
+func TestSetupShellInit_BashSkipDashC(t *testing.T) {
+	tmpDir := t.TempDir()
+	plan := &SandboxPlan{
+		Command: []string{"bash", "-c", "echo hi"},
+		EnvSet:  map[string]string{},
+	}
+	require.NoError(t, setupShellInit(plan, tmpDir))
+	// -c means non-interactive: no --rcfile should be inserted.
+	assert.Equal(t, []string{"bash", "-c", "echo hi"}, plan.Command)
+}
+
+func TestSetupShellInit_Zsh(t *testing.T) {
+	tmpDir := t.TempDir()
+	plan := &SandboxPlan{
+		Command: []string{"/usr/bin/zsh"},
+		EnvSet:  map[string]string{},
+	}
+	require.NoError(t, setupShellInit(plan, tmpDir))
+	assert.Equal(t, tmpDir, plan.EnvSet["ZDOTDIR"])
+	// Command is not modified for zsh.
+	assert.Equal(t, []string{"/usr/bin/zsh"}, plan.Command)
+	// .zshrc should exist and contain (curb).
+	content, err := os.ReadFile(filepath.Join(tmpDir, ".zshrc"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "(curb)")
+	// .zshenv should forward the original.
+	_, err = os.Stat(filepath.Join(tmpDir, ".zshenv"))
+	assert.NoError(t, err)
+}
+
+func TestSetupShellInit_OtherShell(t *testing.T) {
+	tmpDir := t.TempDir()
+	plan := &SandboxPlan{
+		Command: []string{"/bin/sh"},
+		EnvSet:  map[string]string{},
+	}
+	require.NoError(t, setupShellInit(plan, tmpDir))
+	// No modifications for unknown shells.
+	assert.Equal(t, []string{"/bin/sh"}, plan.Command)
+}
+
 // --- applyEnvPolicy ---
 
 func TestApplyEnvPolicy_EnvRemoveAll(t *testing.T) {

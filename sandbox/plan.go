@@ -298,6 +298,9 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	applyEnvPolicy(plan, cfg, tmpDir)
 
 	plan.Command = cfg.Command
+	if err := setupShellInit(plan, tmpDir); err != nil {
+		return nil, err
+	}
 
 	// Collect denied sub-paths from exclusions.
 	// A denial is an exclusion that is a sub-path of an allowed parent.
@@ -532,6 +535,9 @@ func (p *SandboxPlan) capUserInfo() string {
 func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	envAdds, envRemoves, envRemoveAll := config.ParseExclusions(cfg.EnvPassthrough)
 	plan.EnvSet = config.DefaultEnvVars(tmpDir, cfg.HomePath)
+	if len(cfg.Command) > 0 {
+		plan.EnvSet["PS1"] = config.DefaultPS1(cfg.Command[0], os.Getenv("NO_COLOR") != "")
+	}
 	if envRemoveAll {
 		plan.EnvSet = make(map[string]string)
 	} else if len(envRemoves) > 0 {
@@ -551,6 +557,82 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 		plan.EnvPassthrough = config.ApplyExclusions(config.SafePassthroughVars, excludeArgs(envRemoves))
 		plan.EnvPassthrough = append(plan.EnvPassthrough, envAdds...)
 	}
+}
+
+// setupShellInit writes shell init files into tmpDir so the (curb) PS1 prefix
+// survives rc file processing. For bash, a custom --rcfile is injected. For
+// zsh, ZDOTDIR is redirected to tmpDir with forwarding init files.
+func setupShellInit(plan *SandboxPlan, tmpDir string) error {
+	if len(plan.Command) == 0 {
+		return nil
+	}
+	shell := filepath.Base(plan.Command[0])
+	noColor := os.Getenv("NO_COLOR") != ""
+
+	// Resolve the user's original home directory for sourcing rc files.
+	// Inside the sandbox HOME is typically tmpDir, so using $HOME would
+	// cause the init files to source themselves (infinite recursion).
+	origHome := os.Getenv("ZDOTDIR")
+	if origHome == "" {
+		origHome = os.Getenv("HOME")
+	}
+
+	switch shell {
+	case "bash":
+		// Skip if non-interactive or user already controls rc file loading.
+		for _, a := range plan.Command[1:] {
+			if a == "-c" || a == "--rcfile" || a == "--init-file" || a == "--norc" {
+				return nil
+			}
+		}
+		rcFile := filepath.Join(tmpDir, ".curb.bashrc")
+		var ps1Expr string
+		if noColor {
+			ps1Expr = `(curb) $PS1`
+		} else {
+			ps1Expr = `\[\033[36m\](curb)\[\033[0m\] $PS1`
+		}
+		var content string
+		if origHome != "" {
+			// Source user's bashrc if accessible (may be blocked by sandbox).
+			content = ". " + origHome + "/.bashrc 2>/dev/null\n"
+		}
+		content += "PS1=\"" + ps1Expr + "\"\n"
+		if err := os.WriteFile(rcFile, []byte(content), 0o644); err != nil {
+			return err
+		}
+		plan.Command = slices.Insert(plan.Command, 1, "--rcfile", rcFile)
+		delete(plan.EnvSet, "PS1")
+
+	case "zsh":
+		// Redirect ZDOTDIR to tmpDir with forwarding init files.
+		plan.EnvSet["ZDOTDIR"] = tmpDir
+
+		// Forward .zshenv so the user's environment setup is preserved.
+		var zshenv string
+		if origHome != "" {
+			zshenv = ". " + origHome + "/.zshenv 2>/dev/null\n"
+		}
+		_ = os.WriteFile(filepath.Join(tmpDir, ".zshenv"), []byte(zshenv), 0o644)
+
+		// Forward .zshrc, then set PS1.
+		var ps1Expr string
+		if noColor {
+			ps1Expr = `(curb) $PS1`
+		} else {
+			ps1Expr = `%F{cyan}(curb)%f $PS1`
+		}
+		var zshrc string
+		if origHome != "" {
+			zshrc = ". " + origHome + "/.zshrc 2>/dev/null\n"
+		}
+		zshrc += "PS1=\"" + ps1Expr + "\"\n"
+		if err := os.WriteFile(filepath.Join(tmpDir, ".zshrc"), []byte(zshrc), 0o644); err != nil {
+			return err
+		}
+		delete(plan.EnvSet, "PS1")
+	}
+	return nil
 }
 
 // splitDirsFiles classifies paths into directories and regular files by stat.

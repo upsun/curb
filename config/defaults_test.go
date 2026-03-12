@@ -50,6 +50,38 @@ func TestExpandTildes(t *testing.T) {
 	assert.Equal(t, []string{"/home/user", "/home/user/docs", "/abs/path", "relative"}, result)
 }
 
+func TestDefaultEnvVars_NoSHELL(t *testing.T) {
+	env := DefaultEnvVars("/tmp", "")
+	_, ok := env["SHELL"]
+	assert.False(t, ok, "SHELL should not be in default env vars (it is a passthrough)")
+}
+
+func TestDefaultPS1(t *testing.T) {
+	tests := []struct {
+		command string
+		noColor bool
+		contains string
+		notContains string
+	}{
+		{"/bin/bash", false, `\[`, ""},
+		{"/bin/bash", true, `\u:\w`, `\[`},
+		{"/usr/bin/zsh", false, "%F{cyan}", ""},
+		{"/usr/bin/zsh", true, "%n:%~", "%F"},
+		{"/bin/sh", false, "(curb) $ ", ""},
+		{"fish", false, "(curb) $ ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			ps1 := DefaultPS1(tt.command, tt.noColor)
+			assert.Contains(t, ps1, "(curb)")
+			assert.Contains(t, ps1, tt.contains)
+			if tt.notContains != "" {
+				assert.NotContains(t, ps1, tt.notContains)
+			}
+		})
+	}
+}
+
 func TestParseExclusions(t *testing.T) {
 	tests := []struct {
 		name      string

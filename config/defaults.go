@@ -70,6 +70,7 @@ var SafePassthroughVars = []string{
 	"TZ",
 	"USER",
 	"LOGNAME",
+	"SHELL",
 }
 
 // SystemExecPaths are directories from which executables are allowed by default.
@@ -140,8 +141,27 @@ func DefaultEnvVars(tmpDir, homePath string) map[string]string {
 	return map[string]string{
 		"HOME":       home,
 		"TMPDIR":     tmpDir,
-		"SHELL":      "/bin/sh",
 		"IS_SANDBOX": "1",
+	}
+}
+
+// DefaultPS1 returns a PS1 prompt with a (curb) prefix, using the correct
+// escape syntax for the given shell. Set noColor to suppress ANSI escapes.
+func DefaultPS1(command string, noColor bool) string {
+	shell := filepath.Base(command)
+	switch shell {
+	case "zsh":
+		if noColor {
+			return "(curb) %n:%~%# "
+		}
+		return "%F{cyan}(curb)%f %n:%~%# "
+	case "bash":
+		if noColor {
+			return `(curb) \u:\w\$ `
+		}
+		return `\[\033[36m\](curb)\[\033[0m\] \u:\w\$ `
+	default:
+		return "(curb) $ "
 	}
 }
 

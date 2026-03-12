@@ -13,7 +13,7 @@ import (
 // NewRootCmd creates the curb root command.
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "curb [flags] [--] command [args...]",
+		Use:   "curb [flags] [--] [command [args...]]",
 		Short: "Sandbox a process with filesystem, network, and environment restrictions",
 		Long: `curb runs a command inside an unprivileged sandbox with:
   - Filesystem restrictions (Landlock + mount namespace)
@@ -22,13 +22,7 @@ func NewRootCmd() *cobra.Command {
   - Environment sanitization (deny-by-default)
 
 Use -- before the command when it has its own flags.`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				_ = cmd.Help()
-				os.Exit(0)
-			}
-			return nil
-		},
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.FromFlags(cmd)
 			if err != nil {
@@ -36,6 +30,13 @@ Use -- before the command when it has its own flags.`,
 			}
 			config.MergeEnv(cfg, cmd)
 			cfg.Command = args
+			if len(cfg.Command) == 0 {
+				shell := os.Getenv("SHELL")
+				if shell == "" {
+					shell = "/bin/sh"
+				}
+				cfg.Command = []string{shell}
+			}
 
 			logger, logErr := clog.New(cfg.LogFile, cfg.Verbose, cfg.Debug, cfg.Quiet)
 			if logErr != nil {

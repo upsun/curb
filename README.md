@@ -16,6 +16,12 @@ Requires Go 1.26+ and Linux kernel 3.8+ (user namespaces). Landlock (kernel 5.13
 
 ## Quick Start
 
+Start an interactive shell inside the sandbox (uses `$SHELL`, falling back to `/bin/sh`):
+
+```
+curb
+```
+
 Run a command with default restrictions (filesystem read-only, no network, sanitized environment):
 
 ```
@@ -82,7 +88,7 @@ By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target comm
 |------|---------|-------------|
 | `--env` | `CURB_ENV` | Pass through (`NAME`) or set (`NAME=VALUE`) env vars (`!` prefix removes defaults, `'*'` for all) |
 
-By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `TERM`, `TZ`, `LANG`, and a few other safe variables are passed through. Secrets (`*_KEY`, `*_TOKEN`, `*_SECRET`, etc.) are blocked. Use `--env '!USER'` to remove USER from defaults, or `--env '!*'` to clear all default env vars.
+By default, the environment is deny-by-default: only `HOME`, `PATH`, `TMPDIR`, `TERM`, `TZ`, `LANG`, and a few other safe variables are passed through. `SHELL` is passed through from the host. `PS1` is set to show a `(curb)` prefix (respects `NO_COLOR`). Secrets (`*_KEY`, `*_TOKEN`, `*_SECRET`, etc.) are blocked. Use `--env '!USER'` to remove USER from defaults, or `--env '!*'` to clear all default env vars.
 
 ### Output
 
