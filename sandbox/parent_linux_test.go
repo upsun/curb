@@ -1986,6 +1986,99 @@ s.close()
 	assert.Contains(t, outStr, "LOCALHOST_OK", "expected test server response")
 }
 
+// requirePidNS skips the test if PID namespaces are unavailable.
+func requirePidNS(t *testing.T) {
+	t.Helper()
+	requireUserNS(t)
+	if testCaps.PidNS != nil {
+		t.Skipf("PID namespaces unavailable: %v", testCaps.PidNS)
+	}
+}
+
+// TestCurb_PidNS_Isolation verifies the sandboxed process is in a different PID namespace.
+func TestCurb_PidNS_Isolation(t *testing.T) {
+	requirePidNS(t)
+
+	// Read the host PID namespace.
+	hostNS, err := os.Readlink("/proc/self/ns/pid")
+	require.NoError(t, err)
+
+	cmd := exec.Command(curbBin, "--", "readlink", "/proc/self/ns/pid")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "readlink /proc/self/ns/pid failed: %s", string(out))
+	childNS := strings.TrimSpace(filterCurbOutput(string(out)))
+	assert.NotEqual(t, hostNS, childNS, "child should be in a different PID namespace")
+}
+
+// TestCurb_PidNS_ZombieReap verifies that the init process reaps orphaned children.
+func TestCurb_PidNS_ZombieReap(t *testing.T) {
+	requirePidNS(t)
+
+	// Create orphans reparented to init and verify no new zombies appear.
+	// Without a fresh /proc mount, we see host PIDs, so we compare before/after
+	// counts to filter out pre-existing host zombies.
+	script := `
+before=$(cat /proc/[0-9]*/status 2>/dev/null | grep -c '^State:.*zombie' || echo 0)
+sh -c 'sleep 0.05 & exit 0'
+sh -c 'sleep 0.05 & exit 0'
+sh -c 'sleep 0.05 & exit 0'
+sleep 0.3
+after=$(cat /proc/[0-9]*/status 2>/dev/null | grep -c '^State:.*zombie' || echo 0)
+if [ "$after" -gt "$before" ]; then echo "FAIL: zombies $before -> $after"; exit 1; fi
+echo OK
+`
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--read", "/proc", "--", "sh", "-c", script)
+	out, err := cmd.CombinedOutput()
+	outStr := strings.TrimSpace(filterCurbOutput(string(out)))
+	require.NoError(t, err, "zombie reap failed: %s", outStr)
+	assert.Contains(t, outStr, "OK")
+}
+
+// TestCurb_PidNS_CleanShutdown verifies that background processes are killed
+// when PID 1 exits (kernel behavior for PID namespaces).
+func TestCurb_PidNS_CleanShutdown(t *testing.T) {
+	requirePidNS(t)
+
+	// The target spawns a background sleep and exits. If PID NS is active,
+	// the kernel sends SIGKILL to all processes in the namespace when PID 1
+	// exits — the background sleep cannot outlive the sandbox.
+	// We verify the curb process exits cleanly (no hang).
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*", "--",
+		"sh", "-c", "sleep 3600 & echo done")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected clean exit despite background process: %s", string(out))
+	assert.Contains(t, filterCurbOutput(string(out)), "done")
+}
+
+// TestCurb_PidNS_FreshProc verifies that with both PID NS and mount NS,
+// /proc only shows the namespace's own PIDs.
+func TestCurb_PidNS_FreshProc(t *testing.T) {
+	requirePidNS(t)
+	requireMountOps(t)
+
+	hideDir := t.TempDir()
+	cmd := exec.Command(curbBin, "--hide", hideDir, "--write", "*", "--exec", "*", "--",
+		"sh", "-c", "ls /proc | grep -c '^[0-9]'")
+	out, err := cmd.CombinedOutput()
+	outStr := strings.TrimSpace(filterCurbOutput(string(out)))
+	if err != nil {
+		// Only skip for expected mount failures (hidepid, permission denied).
+		if strings.Contains(string(out), "/proc mount failed") ||
+			strings.Contains(string(out), "Operation not permitted") {
+			t.Skipf("fresh /proc mount not available: %s", outStr)
+		}
+		require.NoError(t, err, "unexpected failure: %s", outStr)
+	}
+	// With a fresh /proc in a PID namespace, there should be very few PIDs
+	// (just the init and the sh pipeline). Certainly far fewer than host PIDs.
+	// We check it's a small number (< 10).
+	var count int
+	_, scanErr := fmt.Sscanf(outStr, "%d", &count)
+	require.NoError(t, scanErr, "unexpected output: %s", outStr)
+	assert.Less(t, count, 10, "expected few PIDs in fresh /proc, got %d", count)
+}
+
 // filterCurbOutput removes lines starting with "curb:" from output.
 func filterCurbOutput(s string) string {
 	var lines []string

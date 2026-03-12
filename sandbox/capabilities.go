@@ -14,6 +14,7 @@ type Capabilities struct {
 	MountNS     error  // nil = ok, non-nil = fatal if --hide used.
 	NetNS       error  // nil = ok, non-nil = fatal if --allow-domains used.
 	TUN         error  // nil = ok, non-nil = fatal if --allow-domains used.
+	PidNS       error  // nil = ok, non-nil = degraded (no PID isolation).
 	LandlockABI int    // 0 = unavailable, 1-5 = version.
 	KernelInfo  string // e.g., "6.8.0-100-generic".
 }

@@ -19,6 +19,7 @@ func ProbeAll() *Capabilities {
 	caps.UserNS = probeNS(syscall.CLONE_NEWUSER, "user namespace")
 	caps.MountNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNS, "mount namespace")
 	caps.NetNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNET, "network namespace")
+	caps.PidNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWPID, "PID namespace")
 	caps.TUN = probeTUN()
 	caps.LandlockABI = probeLandlock()
 	return caps

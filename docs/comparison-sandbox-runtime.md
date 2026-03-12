@@ -76,14 +76,16 @@ though it also means legitimate programs that do not support proxies will fail.
 
 |  | srt | curb |
 |---|---|---|
-| PID namespace | Yes (`bwrap --unshare-pid` + fresh `/proc`) | No |
+| PID namespace | Yes (`bwrap --unshare-pid` + fresh `/proc`) | Yes (fresh `/proc` where mount NS is active) |
 | User namespace | Implicit via bubblewrap | Explicit `CLONE_NEWUSER` with UID/GID mapping |
 | Mount namespace | Always (bubblewrap requires it) | Only when `--hide` is used |
 | Seccomp | BPF filter blocking `AF_UNIX` socket creation (applied via custom binary after socat starts) | None |
 
-**srt advantage**: PID namespace isolation prevents the sandboxed process from
-seeing or signalling host processes. curb does not create a PID namespace
-(it would require additional capabilities).
+Both create PID namespaces. curb mounts a fresh `/proc` when a mount namespace
+is also active (`--hide`), so the sandboxed process only sees its own PIDs.
+Without a mount namespace, host PIDs are visible via the inherited `/proc`.
+Cross-namespace signal delivery is restricted by user namespace UID boundaries
+(only same-UID processes can be signaled).
 
 **srt advantage**: seccomp BPF provides an additional layer of defense by
 blocking `AF_UNIX` socket creation, preventing the sandboxed process from

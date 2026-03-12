@@ -68,6 +68,11 @@ Use -- before the command when it has its own flags.`,
 			} else {
 				logger.Info("net: disabled (no --domains).")
 			}
+			if plan.PidNS {
+				logger.Info("pid: isolated.")
+			} else {
+				logger.Info("pid: unavailable (no PID namespace).")
+			}
 			if plan.NoFSRestrict {
 				logger.Info("fs: disabled (--write '*').")
 			} else {

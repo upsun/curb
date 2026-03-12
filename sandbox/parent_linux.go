@@ -54,6 +54,9 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// fds inside a mount namespace ("disconnected path"). Skipping CLONE_NEWNS
 	// when not needed avoids this.
 	cloneFlags := uintptr(syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET)
+	if plan.PidNS {
+		cloneFlags |= syscall.CLONE_NEWPID
+	}
 	if len(plan.HiddenPaths) > 0 {
 		cloneFlags |= syscall.CLONE_NEWNS
 	}

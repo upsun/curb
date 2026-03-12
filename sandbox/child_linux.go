@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -56,6 +57,15 @@ func childInit() error {
 			if err := hidePaths(cfg.HiddenPaths); err != nil {
 				return fmt.Errorf("hiding paths: %w", err)
 			}
+			// Best-effort: mount a fresh /proc so the child only sees its own PIDs.
+			// Requires both PID NS (for meaningful isolation) and mount NS (to
+			// avoid affecting the host). Fails on some hosts (e.g. hidepid=invisible).
+			if cfg.PidNS {
+				if err := syscall.Mount("proc", "/proc", "proc",
+					syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
+					childWarn(cfg.Quiet, "Fresh /proc mount failed (host PIDs remain visible): %v", err)
+				}
+			}
 		}
 		rules := policy.BuildLandlockRules(policy.LandlockPaths{
 			RODirs:  cfg.ROPaths,
@@ -80,7 +90,83 @@ func childInit() error {
 		return err
 	}
 
+	if cfg.PidNS {
+		return pidNSInit(exe, cfg.Command, cfg.Env)
+	}
 	return syscall.Exec(exe, cfg.Command, cfg.Env)
+}
+
+// pidNSInit acts as PID 1 inside the PID namespace: it forks the target
+// command, forwards signals to it, and reaps orphaned children.
+func pidNSInit(exe string, argv, env []string) error {
+	// Fork+exec the target.
+	pid, err := syscall.ForkExec(exe, argv, &syscall.ProcAttr{
+		Env:   env,
+		Files: []uintptr{0, 1, 2},
+	})
+	if err != nil {
+		return fmt.Errorf("fork+exec %s: %w", exe, err)
+	}
+
+	// Forward all catchable signals (except SIGCHLD) to the target.
+	// SIGCHLD is handled by the reap loop below.
+	sigs := catchableSignals()
+	filtered := make([]os.Signal, 0, len(sigs))
+	for _, s := range sigs {
+		if s != os.Signal(syscall.SIGCHLD) {
+			filtered = append(filtered, s)
+		}
+	}
+	sigCh := make(chan os.Signal, 32)
+	signal.Notify(sigCh, filtered...)
+	go func() {
+		for sig := range sigCh {
+			_ = syscall.Kill(pid, sig.(syscall.Signal))
+		}
+	}()
+
+	// Reap loop: wait for the target to exit, silently reaping orphans.
+	// Once the target exits, drain remaining zombies (non-blocking) before
+	// exiting. The kernel SIGKILLs any still-running processes in the PID
+	// namespace when PID 1 exits.
+	var targetStatus syscall.WaitStatus
+	targetFound := false
+	for {
+		var ws syscall.WaitStatus
+		wpid, waitErr := syscall.Wait4(-1, &ws, 0, nil)
+		if waitErr != nil {
+			break // ECHILD: no more children.
+		}
+		if wpid == pid {
+			targetStatus = ws
+			targetFound = true
+			break
+		}
+	}
+	// Drain any zombies that arrived between the target exiting and now.
+	for {
+		var ws syscall.WaitStatus
+		wpid, waitErr := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+		if waitErr != nil || wpid <= 0 {
+			break
+		}
+	}
+
+	signal.Stop(sigCh)
+	close(sigCh)
+
+	if !targetFound {
+		os.Exit(1)
+	}
+	if targetStatus.Signaled() {
+		// Re-raise the signal so the parent sees the correct wait status.
+		signal.Reset(targetStatus.Signal())
+		_ = syscall.Kill(syscall.Getpid(), targetStatus.Signal())
+		// Fallback if re-raise doesn't kill us.
+		os.Exit(128 + int(targetStatus.Signal()))
+	}
+	os.Exit(targetStatus.ExitStatus())
+	return nil // Unreachable.
 }
 
 // childWarn prints a warning to stderr from the child process.

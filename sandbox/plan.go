@@ -49,6 +49,7 @@ type SandboxPlan struct {
 	RWFiles        []string
 	HiddenPaths    []string
 	ExecPaths      []string
+	PidNS          bool
 	NetEnabled     bool
 	AllowedDomains []string
 	AllowLocalhost bool
@@ -77,6 +78,7 @@ type ChildConfig struct {
 	HiddenPaths    []string `json:"hidden_paths,omitempty"`
 	ExecPaths      []string `json:"exec_paths,omitempty"`
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
+	PidNS          bool     `json:"pid_ns,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	Quiet          bool     `json:"quiet,omitempty"`
@@ -112,7 +114,19 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		Caps: caps,
 	}
 
+	// PID namespace.
+	if caps.PidNS == nil {
+		plan.PidNS = true
+	}
+
 	// Record degraded layers.
+	if caps.PidNS != nil {
+		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+			Layer:  "pid namespace",
+			Reason: caps.PidNS.Error(),
+			Impact: "PID isolation unavailable: the sandboxed process can see host PIDs.",
+		})
+	}
 	if caps.LandlockABI == 0 {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "landlock",
@@ -298,6 +312,7 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		HiddenPaths:    p.HiddenPaths,
 		ExecPaths:      p.ExecPaths,
 		NoFSRestrict:   p.NoFSRestrict,
+		PidNS:          p.PidNS,
 		NetEnabled:     p.NetEnabled,
 		AllowedDomains: p.AllowedDomains,
 		Quiet:          p.Quiet,
@@ -364,6 +379,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 
 	ln("curb: system capabilities")
 	printCap(w, "user namespaces", p.Caps.UserNS, p.capUserInfo())
+	printCap(w, "PID namespaces", p.Caps.PidNS, "")
 	printCap(w, "network namespaces", p.Caps.NetNS, "")
 	printCap(w, "/dev/net/tun", p.Caps.TUN, "")
 	if p.Caps.LandlockABI > 0 {
