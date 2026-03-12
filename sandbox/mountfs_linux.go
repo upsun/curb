@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -14,6 +15,7 @@ import (
 type mountEntry struct {
 	src      string
 	isFile   bool
+	isDev    bool // Character or block device node.
 	readOnly bool
 	noExec   bool
 }
@@ -78,6 +80,7 @@ func buildMountPlan(cfg *ChildConfig) []mountEntry {
 			continue
 		}
 		e.isFile = !info.IsDir()
+		e.isDev = info.Mode()&os.ModeDevice != 0
 		result = append(result, *e)
 	}
 
@@ -139,7 +142,12 @@ func enforceMountNS(cfg *ChildConfig) error {
 
 		// Remount with desired flags. The kernel ignores MS_RDONLY on the
 		// initial bind mount, so a remount is required.
-		flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_NOSUID | syscall.MS_NODEV)
+		// MS_NODEV is skipped for device nodes: the kernel blocks open()
+		// on character/block devices when MNT_NODEV is set on the mount.
+		flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_NOSUID)
+		if !m.isDev {
+			flags |= syscall.MS_NODEV
+		}
 		if m.readOnly {
 			flags |= syscall.MS_RDONLY
 		}
@@ -198,6 +206,12 @@ func enforceMountNS(cfg *ChildConfig) error {
 			syscall.MS_NOSUID|syscall.MS_NOEXEC, "newinstance,ptmxmode=0666")
 	}
 
+	// Synthesize /etc/passwd and /etc/group so that UID 0 (the user
+	// namespace mapping) resolves to the original username, not "root".
+	if err := synthesizePasswd(cfg, newRoot); err != nil {
+		return err
+	}
+
 	// Save CWD before pivot.
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -230,6 +244,60 @@ func enforceMountNS(cfg *ChildConfig) error {
 		_ = syscall.Chdir("/")
 	}
 
+	return nil
+}
+
+// synthesizePasswd creates synthetic /etc/passwd and /etc/group files that map
+// UID/GID 0 to the original username. Inside a user namespace the host UID is
+// mapped to 0, so without this, tools resolve UID 0 to "root".
+func synthesizePasswd(cfg *ChildConfig, newRoot string) error {
+	username, home, shell := "user", "/", "/bin/sh"
+	for _, e := range cfg.Env {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			switch k {
+			case "USER":
+				username = v
+			case "HOME":
+				home = v
+			case "SHELL":
+				shell = v
+			}
+		}
+	}
+
+	type synthFile struct {
+		path    string
+		content string
+	}
+	files := []synthFile{
+		{
+			path: filepath.Join(newRoot, "etc", "passwd"),
+			content: fmt.Sprintf("%s:x:0:0::%s:%s\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n",
+				username, home, shell),
+		},
+		{
+			path:    filepath.Join(newRoot, "etc", "group"),
+			content: fmt.Sprintf("%s:x:0:\nnogroup:x:65534:\n", username),
+		},
+	}
+
+	for _, f := range files {
+		if _, err := os.Stat(f.path); err != nil {
+			continue // Not in the mount plan.
+		}
+		tmp := f.path + ".curb"
+		if err := os.WriteFile(tmp, []byte(f.content), 0o644); err != nil {
+			return fmt.Errorf("writing synthetic %s: %w", filepath.Base(f.path), err)
+		}
+		if err := syscall.Mount(tmp, f.path, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("mounting synthetic %s: %w", filepath.Base(f.path), err)
+		}
+		_ = os.Remove(tmp) // Bind mount holds the inode; remove the visible name.
+		flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+		if err := syscall.Mount("", f.path, "", flags, ""); err != nil {
+			return fmt.Errorf("remounting synthetic %s: %w", filepath.Base(f.path), err)
+		}
+	}
 	return nil
 }
 

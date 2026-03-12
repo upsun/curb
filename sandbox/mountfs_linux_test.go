@@ -100,3 +100,40 @@ func TestBuildMountPlan_FileDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildMountPlan_DeviceDetection(t *testing.T) {
+	cfg := &ChildConfig{
+		RWFiles: []string{"/dev/null"},
+		ROFiles: []string{"/dev/urandom"},
+	}
+	plan := buildMountPlan(cfg)
+
+	for _, m := range plan {
+		assert.True(t, m.isFile, "%s should be detected as file", m.src)
+		assert.True(t, m.isDev, "%s should be detected as device", m.src)
+	}
+}
+
+// TestSynthesizePasswd verifies content generation. The bind-mount step
+// requires a mount namespace, so it is covered by integration tests
+// (TestCurb_MountFS_UsernameNotRoot).
+func TestSynthesizePasswd(t *testing.T) {
+	dir := t.TempDir()
+	etcDir := filepath.Join(dir, "etc")
+	require.NoError(t, os.Mkdir(etcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(etcDir, "passwd"), []byte("root:x:0:0:root:/root:/bin/bash\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(etcDir, "group"), []byte("root:x:0:\n"), 0o644))
+
+	cfg := &ChildConfig{
+		Env: []string{"HOME=/app", "SHELL=/bin/bash", "USER=web"},
+	}
+	// synthesizePasswd writes .curb temp files then bind-mounts them.
+	// The mount fails without a mount NS, but the temp files are written.
+	_ = synthesizePasswd(cfg, dir)
+
+	passwd, err := os.ReadFile(filepath.Join(etcDir, "passwd.curb"))
+	require.NoError(t, err)
+	assert.Contains(t, string(passwd), "web:x:0:0::/app:/bin/bash")
+	assert.Contains(t, string(passwd), "nobody:x:65534:65534:")
+	assert.NotContains(t, string(passwd), "root")
+}

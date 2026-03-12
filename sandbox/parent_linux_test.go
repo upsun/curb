@@ -2209,6 +2209,44 @@ func TestCurb_MountFS_DenyExecSubpath(t *testing.T) {
 	assert.Contains(t, string(out), "Permission denied")
 }
 
+// TestCurb_MountFS_DevNullWritable verifies /dev/null is usable as a device node.
+// Regression test: MS_NODEV on the bind mount previously blocked open().
+func TestCurb_MountFS_DevNullWritable(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "echo test > /dev/null")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected write to /dev/null to succeed: %s", string(out))
+}
+
+// TestCurb_MountFS_DevUrandomReadable verifies /dev/urandom is usable as a device node.
+func TestCurb_MountFS_DevUrandomReadable(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "head -c 1 /dev/urandom > /dev/null")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected read from /dev/urandom to succeed: %s", string(out))
+}
+
+// TestCurb_MountFS_UsernameNotRoot verifies that whoami returns the original
+// username, not "root", inside the user namespace.
+func TestCurb_MountFS_UsernameNotRoot(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "id", "-un")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected id -un to succeed: %s", string(out))
+	username := filterCurbOutput(strings.TrimSpace(string(out)))
+	assert.NotEqual(t, "root", username, "username should not be 'root' inside user namespace")
+	expected := os.Getenv("USER")
+	if expected != "" {
+		assert.Equal(t, expected, username, "username should match host USER")
+	}
+}
+
 // filterCurbOutput removes lines starting with "curb:" from output.
 func filterCurbOutput(s string) string {
 	var lines []string
