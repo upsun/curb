@@ -1,0 +1,7 @@
+applications:
+  app:
+    type: golang:1.26
+    hooks:
+      build: |
+        make build
+        mv curb .global/bin
