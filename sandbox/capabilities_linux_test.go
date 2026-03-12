@@ -43,13 +43,15 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 	defer plan.Cleanup()
 
 	assert.Empty(t, plan.DegradedLayers, "full caps should have no degraded layers")
+	assert.True(t, plan.UsePivotRoot, "mount NS available means pivot_root")
+	assert.True(t, plan.UseLandlock, "landlock available means landlock hardening")
 	assert.Contains(t, plan.ROPaths, "/extra")
 	assert.Contains(t, plan.ExecPaths, "/usr/bin/rg")
 	assert.NotEmpty(t, plan.TempDir)
 	assert.False(t, plan.NetEnabled, "no --allow means no network")
 }
 
-func TestBuildPlan_NoLandlock_Fatal(t *testing.T) {
+func TestBuildPlan_NoLandlock_MountNSAvailable(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		MountNS:     nil,
@@ -58,12 +60,28 @@ func TestBuildPlan_NoLandlock_Fatal(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	_, err := BuildPlan(cfg, caps)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "landlock unavailable")
+	plan, err := BuildPlan(cfg, caps)
+	require.NoError(t, err, "mount NS available: should use pivot_root without landlock")
+	defer plan.Cleanup()
+	assert.True(t, plan.UsePivotRoot)
+	assert.False(t, plan.UseLandlock)
 }
 
-func TestBuildPlan_NoMountNS_NoHide(t *testing.T) {
+func TestBuildPlan_BothUnavailable_Fatal(t *testing.T) {
+	caps := &Capabilities{
+		UserNS:      nil,
+		MountNS:     assert.AnError,
+		LandlockABI: 0,
+		KernelInfo:  "4.0.0-test",
+	}
+	cfg := &config.Config{}
+
+	_, err := BuildPlan(cfg, caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mount namespaces and landlock both unavailable")
+}
+
+func TestBuildPlan_NoMountNS_LandlockOnly(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		MountNS:     assert.AnError,
@@ -76,24 +94,31 @@ func TestBuildPlan_NoMountNS_NoHide(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	// Without --hide, mount NS unavailability is not degraded.
-	assert.Empty(t, plan.DegradedLayers)
+	assert.False(t, plan.UsePivotRoot)
+	assert.True(t, plan.UseLandlock)
+	assert.False(t, hasDegradedLayer(plan, "mount namespace"),
+		"mount namespace unavailability is not a degraded layer")
 }
 
-func TestBuildPlan_NoMountNS_WithHide(t *testing.T) {
+// TestBuildPlan_NoMountNS_SubpathDenialWarns verifies that sub-path denials
+// warn (not error) when mount namespaces are unavailable.
+func TestBuildPlan_NoMountNS_SubpathDenialWarns(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		MountNS:     assert.AnError,
 		LandlockABI: 4,
 		KernelInfo:  "6.8.0-test",
 	}
+	// --read /etc --read '!/etc/shadow': the denial is a sub-path of /etc.
 	cfg := &config.Config{
-		HiddenPaths: []string{"/tmp/test"},
+		ROPaths: []string{"/etc", "!/etc/shadow"},
 	}
 
-	_, err := BuildPlan(cfg, caps)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--hide requires mount namespaces")
+	plan, err := BuildPlan(cfg, caps)
+	require.NoError(t, err, "sub-path denials should warn, not error")
+	defer plan.Cleanup()
+	assert.Contains(t, plan.HiddenPaths, "/etc/shadow")
+	assert.False(t, plan.UsePivotRoot)
 }
 
 func TestBuildPlan_FatalUserNS(t *testing.T) {
@@ -206,7 +231,8 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 	assert.Contains(t, output, "network:")
 	assert.Contains(t, output, "example.com")
 	assert.Contains(t, output, "environment:")
-	assert.Contains(t, output, "enforcement: full")
+	assert.Contains(t, output, "method:     pivot_root + landlock")
+	assert.Contains(t, output, "status:     full")
 }
 
 func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
@@ -226,6 +252,6 @@ func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	plan.PrintDryRun(&buf)
 	output := buf.String()
 
-	assert.Contains(t, output, "enforcement: degraded")
+	assert.Contains(t, output, "status:     degraded")
 	assert.Contains(t, output, "warning: pid namespace:")
 }

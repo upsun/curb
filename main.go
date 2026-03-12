@@ -15,6 +15,12 @@ func main() {
 		os.Exit(sandbox.ExitSetupFailure) // Unreachable: ChildInit execs the target or exits on error.
 	}
 
+	// Mount probe child: test mount operations inside a user+mount namespace.
+	if os.Getenv(sandbox.MountProbeEnvKey) != "" {
+		sandbox.RunMountProbe()
+		return
+	}
+
 	// TUN probe child: test TUNSETIFF inside a user+net namespace.
 	if os.Getenv(sandbox.TUNProbeEnvKey) != "" {
 		sandbox.RunTUNProbe()

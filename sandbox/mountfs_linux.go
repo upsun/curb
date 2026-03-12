@@ -1,0 +1,256 @@
+//go:build linux
+
+package sandbox
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"syscall"
+)
+
+// mountEntry represents a single bind-mount in the new root.
+type mountEntry struct {
+	src      string
+	isFile   bool
+	readOnly bool
+	noExec   bool
+}
+
+// buildMountPlan collects, deduplicates, and sorts mount entries shortest-first.
+// When execPaths is non-empty, all other paths get MS_NOEXEC; exec paths override.
+// When execPaths is empty (no exec restriction), noExec is false for all entries.
+func buildMountPlan(cfg *ChildConfig) []mountEntry {
+	hasExecRestrict := len(cfg.ExecPaths) > 0
+
+	entries := make(map[string]*mountEntry)
+
+	// Helper to add an entry, merging permissions if already present.
+	// isFile is determined later by os.Stat, not by the caller.
+	add := func(path string, readOnly, noExec bool) {
+		if e, ok := entries[path]; ok {
+			// RW wins over RO.
+			if !readOnly {
+				e.readOnly = false
+			}
+			// noExec=false wins (exec-allowed overrides).
+			if !noExec {
+				e.noExec = false
+			}
+			return
+		}
+		entries[path] = &mountEntry{
+			src:      path,
+			readOnly: readOnly,
+			noExec:   noExec,
+		}
+	}
+
+	// RO paths.
+	for _, p := range cfg.ROPaths {
+		add(p, true, hasExecRestrict)
+	}
+	for _, p := range cfg.ROFiles {
+		add(p, true, hasExecRestrict)
+	}
+	// RW paths.
+	for _, p := range cfg.RWPaths {
+		add(p, false, hasExecRestrict)
+	}
+	for _, p := range cfg.RWFiles {
+		add(p, false, hasExecRestrict)
+	}
+	// Exec paths: noExec=false, readOnly=true by default.
+	for _, p := range cfg.ExecPaths {
+		add(p, true, false)
+	}
+
+	// Filter out entries whose source doesn't exist.
+	// Skip /proc: enforceMountNS mounts a fresh procfs unconditionally.
+	var result []mountEntry
+	for _, e := range entries {
+		if e.src == "/proc" {
+			continue
+		}
+		info, err := os.Stat(e.src)
+		if err != nil {
+			continue
+		}
+		e.isFile = !info.IsDir()
+		result = append(result, *e)
+	}
+
+	// Sort by path length (shortest first) so parents are mounted before children.
+	sort.Slice(result, func(i, j int) bool {
+		if len(result[i].src) != len(result[j].src) {
+			return len(result[i].src) < len(result[j].src)
+		}
+		return result[i].src < result[j].src
+	})
+
+	return result
+}
+
+// enforceMountNS restricts filesystem access by building a new root from
+// allowed paths using bind mounts and pivot_root.
+func enforceMountNS(cfg *ChildConfig) error {
+	if err := prepareMountNS(); err != nil {
+		return fmt.Errorf("setting slave propagation: %w", err)
+	}
+
+	// Create tmpfs as new root.
+	const newRoot = "/tmp/curb-newroot"
+	if err := os.MkdirAll(newRoot, 0o755); err != nil {
+		return fmt.Errorf("creating new root: %w", err)
+	}
+	if err := syscall.Mount("tmpfs", newRoot, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "size=1M"); err != nil {
+		return fmt.Errorf("mounting tmpfs on new root: %w", err)
+	}
+
+	// Build the mount plan.
+	mounts := buildMountPlan(cfg)
+
+	// Bind-mount allowed paths into the new root.
+	for _, m := range mounts {
+		dst := filepath.Join(newRoot, m.src)
+		if m.isFile {
+			// Create parent directory and empty file for file bind mounts.
+			// Skip creation if the file already exists (e.g. from a parent
+			// bind mount that was remounted read-only).
+			if _, statErr := os.Stat(dst); statErr != nil {
+				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+					return fmt.Errorf("creating parent for %s: %w", m.src, err)
+				}
+				f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0o644)
+				if err != nil {
+					return fmt.Errorf("creating mount point for %s: %w", m.src, err)
+				}
+				_ = f.Close()
+			}
+		} else {
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return fmt.Errorf("creating mount point for %s: %w", m.src, err)
+			}
+		}
+		if err := syscall.Mount(m.src, dst, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("bind-mounting %s: %w", m.src, err)
+		}
+
+		// Remount with desired flags. The kernel ignores MS_RDONLY on the
+		// initial bind mount, so a remount is required.
+		flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_NOSUID | syscall.MS_NODEV)
+		if m.readOnly {
+			flags |= syscall.MS_RDONLY
+		}
+		if m.noExec {
+			flags |= syscall.MS_NOEXEC
+		}
+		if err := syscall.Mount("", dst, "", flags, ""); err != nil {
+			return fmt.Errorf("remounting %s: %w", m.src, err)
+		}
+	}
+
+	// Overmount denied read paths: empty tmpfs for directories, /dev/null for files.
+	// This runs before pivot_root, so host paths (e.g. /dev/null) are still accessible.
+	for _, p := range cfg.HiddenPaths {
+		dst := filepath.Join(newRoot, p)
+		info, err := os.Stat(dst)
+		if err != nil {
+			continue // Path doesn't exist in new root (not under any allowed path).
+		}
+		if info.IsDir() {
+			if err := syscall.Mount("tmpfs", dst, "tmpfs",
+				syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "size=0"); err != nil {
+				return fmt.Errorf("hiding %s: %w", p, err)
+			}
+		} else {
+			if err := syscall.Mount("/dev/null", dst, "", syscall.MS_BIND, ""); err != nil {
+				return fmt.Errorf("hiding %s: %w", p, err)
+			}
+		}
+	}
+
+	// Overmount denied write paths (MS_RDONLY) and exec paths (MS_NOEXEC).
+	if err := overmountDeny(newRoot, cfg.DenyWritePaths, syscall.MS_RDONLY, "deny-write"); err != nil {
+		return err
+	}
+	if err := overmountDeny(newRoot, cfg.DenyExecPaths, syscall.MS_NOEXEC, "deny-exec"); err != nil {
+		return err
+	}
+
+	// Mount /proc (best-effort: fails on hidepid=invisible and similar restrictions).
+	procDst := filepath.Join(newRoot, "proc")
+	if err := os.MkdirAll(procDst, 0o755); err != nil {
+		return fmt.Errorf("creating /proc: %w", err)
+	}
+	if err := syscall.Mount("proc", procDst, "proc",
+		syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
+		// Not fatal: /proc is useful but not required for FS enforcement.
+		_ = os.Remove(procDst)
+	}
+
+	// Mount /dev/pts if it's in the allowed paths.
+	devptsDst := filepath.Join(newRoot, "dev", "pts")
+	if _, err := os.Stat(devptsDst); err == nil {
+		// Remount devpts with newinstance so the child gets its own PTY namespace.
+		_ = syscall.Mount("devpts", devptsDst, "devpts",
+			syscall.MS_NOSUID|syscall.MS_NOEXEC, "newinstance,ptmxmode=0666")
+	}
+
+	// Save CWD before pivot.
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+
+	// Create old_root mount point for pivot_root.
+	oldRoot := filepath.Join(newRoot, ".old_root")
+	if err := os.MkdirAll(oldRoot, 0o755); err != nil {
+		return fmt.Errorf("creating old root: %w", err)
+	}
+
+	// pivot_root.
+	if err := syscall.PivotRoot(newRoot, oldRoot); err != nil {
+		return fmt.Errorf("pivot_root: %w", err)
+	}
+	if err := syscall.Chdir("/"); err != nil {
+		return fmt.Errorf("chdir /: %w", err)
+	}
+
+	// Unmount old root.
+	if err := syscall.Unmount("/.old_root", syscall.MNT_DETACH); err != nil {
+		return fmt.Errorf("unmounting old root: %w", err)
+	}
+	_ = os.Remove("/.old_root")
+
+	// Restore CWD.
+	if err := syscall.Chdir(cwd); err != nil {
+		// CWD may not exist in new root; fall back to /.
+		_ = syscall.Chdir("/")
+	}
+
+	return nil
+}
+
+// overmountDeny self-bind-mounts each path and remounts with the given extra
+// flag (e.g. MS_RDONLY or MS_NOEXEC). Paths that don't exist are skipped.
+// MS_RDONLY is always included: deny paths are at least read-only (deny-write
+// adds it explicitly; deny-exec must preserve it to avoid widening permissions).
+func overmountDeny(newRoot string, paths []string, extraFlag uintptr, label string) error {
+	for _, p := range paths {
+		dst := filepath.Join(newRoot, p)
+		if _, err := os.Stat(dst); err != nil {
+			continue
+		}
+		if err := syscall.Mount(dst, dst, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("%s %s: %w", label, p, err)
+		}
+		flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_RDONLY)
+		flags |= extraFlag
+		if err := syscall.Mount("", dst, "", flags, ""); err != nil {
+			return fmt.Errorf("%s remount %s: %w", label, p, err)
+		}
+	}
+	return nil
+}

@@ -31,40 +31,74 @@ In containers, `/dev/net/tun` must be provided by the container runtime (e.g. `-
 
 ## AppArmor on Ubuntu 24.04+
 
-Ubuntu 24.04+ restricts capabilities in user namespaces via the `unprivileged_userns` AppArmor profile. The default profile contains `audit deny capability,` which blocks all capability-gated operations. `deny` rules in AppArmor are final and cannot be overridden by `allow` rules in local includes -- the `deny` line must be commented out first.
+Ubuntu 24.04+ restricts capabilities in user namespaces via the `unprivileged_userns` AppArmor profile. The default profile contains `audit deny capability,` which blocks all capability-gated operations including mount and TAP device creation.
 
-### TAP creation fails (TUNSETIFF: operation not permitted)
+The recommended fix is a dedicated AppArmor profile for curb. This is safer than modifying the global `unprivileged_userns` profile, which affects all programs.
 
-Required for `--domains`. Comment out `audit deny capability,` in `/etc/apparmor.d/unprivileged_userns`, then add to `/etc/apparmor.d/local/unprivileged_userns`:
+### Dedicated profile (recommended)
 
-```
-capability net_admin,
-```
-
-For mount namespace features (`--hide`, DNS via mount), also add:
+Create `/etc/apparmor.d/curb` (adjust the binary path as needed):
 
 ```
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile curb /usr/local/bin/curb {
+  include <abstractions/base>
+
+  # Allow user namespace creation.
+  userns,
+
+  # Mount operations inside user namespaces (pivot_root enforcement).
+  capability sys_admin,
+
+  # TAP device for network filtering (--domains).
+  capability net_admin,
+
+  # curb needs broad host file access for sandbox setup (bind mounts).
+  # The sandboxed child is restricted by the namespace, not AppArmor.
+  /** rwlkm,
+  /dev/net/tun rw,
+  /proc/** r,
+  /sys/** r,
+
+  # devpts nodes appear as disconnected paths in user namespaces.
+  owner file rw dev/pts/[0-9]*,
+}
+```
+
+Load the profile:
+
+```
+sudo apparmor_parser -r /etc/apparmor.d/curb
+```
+
+### Alternative: modifying the global profile
+
+If a dedicated profile is not practical, modify the global `unprivileged_userns` profile. `deny` rules in AppArmor are final, so the `audit deny capability,` line must be commented out first.
+
+Edit `/etc/apparmor.d/unprivileged_userns` to comment out `audit deny capability,`, then add to `/etc/apparmor.d/local/unprivileged_userns`:
+
+```
+# Mount operations (pivot_root enforcement).
 capability sys_admin,
-```
 
-### fstat errors on terminal devices
+# TAP device for network filtering (--domains).
+capability net_admin,
 
-The AppArmor profile only allows file access on absolute paths (`/**`). In user namespaces, devpts nodes appear as disconnected paths (`dev/pts/0` without leading `/`), causing `fstat()` to fail with EACCES.
-
-This affects programs that call `fstat()` on inherited terminal file descriptors (e.g. Bun, Node.js). Programs that only `write()` (echo, printf) are unaffected.
-
-Add to `/etc/apparmor.d/local/unprivileged_userns`:
-
-```
+# devpts nodes appear as disconnected paths in user namespaces.
 owner file rw dev/pts/[0-9]*,
 ```
 
-### Reloading AppArmor
-
-After editing, reload the profile:
+Reload:
 
 ```
 sudo apparmor_parser -r /etc/apparmor.d/unprivileged_userns
 ```
 
-Note: SentinelOne or other endpoint security tools may silently block `apparmor_parser -r` on managed machines.
+Note: this grants `sys_admin` and `net_admin` to **all** programs using unprivileged user namespaces, not just curb.
+
+### Reloading AppArmor
+
+SentinelOne or other endpoint security tools may silently block `apparmor_parser -r` on managed machines.

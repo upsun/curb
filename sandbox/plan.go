@@ -32,6 +32,9 @@ const (
 
 	// envPassthroughAll is the sentinel value indicating all env vars pass through.
 	envPassthroughAll = "(all)"
+
+	// TestNoLandlockEnvKey disables Landlock in tests to exercise mount-NS-only path.
+	TestNoLandlockEnvKey = "_CURB_TEST_NO_LANDLOCK"
 )
 
 // DegradedLayer records a sandbox layer that cannot be fully enforced.
@@ -48,7 +51,11 @@ type SandboxPlan struct {
 	RWPaths        []string
 	RWFiles        []string
 	HiddenPaths    []string
+	DenyWritePaths []string
+	DenyExecPaths  []string
 	ExecPaths      []string
+	UsePivotRoot   bool
+	UseLandlock    bool
 	PidNS          bool
 	NetEnabled     bool
 	AllowedDomains []string
@@ -76,7 +83,11 @@ type ChildConfig struct {
 	RWPaths        []string `json:"rw_paths,omitempty"`
 	RWFiles        []string `json:"rw_files,omitempty"`
 	HiddenPaths    []string `json:"hidden_paths,omitempty"`
+	DenyWritePaths []string `json:"deny_write_paths,omitempty"`
+	DenyExecPaths  []string `json:"deny_exec_paths,omitempty"`
 	ExecPaths      []string `json:"exec_paths,omitempty"`
+	UsePivotRoot   bool     `json:"use_pivot_root,omitempty"`
+	UseLandlock    bool     `json:"use_landlock,omitempty"`
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	PidNS          bool     `json:"pid_ns,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
@@ -127,9 +138,20 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			Impact: "PID isolation unavailable: the sandboxed process can see host PIDs.",
 		})
 	}
-	// TODO: fall back to mount namespace restrictions when Landlock is unavailable.
-	if caps.LandlockABI == 0 && (!cfg.NoFSRestrict || !cfg.NoExecRestrict) {
-		return nil, fmt.Errorf("landlock unavailable: filesystem and exec restrictions cannot be enforced; use --write '*' --exec '*' to disable them")
+	// FS/exec enforcement routing: pivot_root (mount NS) is primary for FS,
+	// Landlock hardens on top when available. pivot_root is only useful when
+	// FS restriction is active (it restricts paths via bind mounts).
+	if !cfg.NoFSRestrict || !cfg.NoExecRestrict {
+		if caps.MountNS == nil && !cfg.NoFSRestrict {
+			plan.UsePivotRoot = true
+			if caps.LandlockABI > 0 {
+				plan.UseLandlock = true
+			}
+		} else if caps.LandlockABI > 0 {
+			plan.UseLandlock = true
+		} else {
+			return nil, fmt.Errorf("mount namespaces and landlock both unavailable: filesystem and exec restrictions cannot be enforced; use --write '*' --exec '*' to disable them")
+		}
 	}
 
 	plan.Quiet = cfg.Quiet
@@ -139,24 +161,18 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 	// Filesystem policy.
 	plan.NoFSRestrict = cfg.NoFSRestrict
-	var roRemoves, rwRemoves []string
+	var roRemoves, rwRemoves, execRemoves []string
 	if !cfg.NoFSRestrict {
 		// Parse exclusions, expand tildes and globs, then merge with defaults.
 		var roAdds []string
 		var roRemoveAll bool
 		roAdds, roRemoves, roRemoveAll = config.ParseExclusions(cfg.ROPaths)
-		plan.HiddenPaths = slices.Clone(cfg.HiddenPaths)
-		if len(plan.HiddenPaths) > 0 && caps.MountNS != nil {
-			return nil, fmt.Errorf("--hide requires mount namespaces: %w", caps.MountNS)
-		}
 		if realHome != "" {
 			roAdds = config.ExpandTildes(roAdds, realHome)
-			if len(plan.HiddenPaths) > 0 {
-				plan.HiddenPaths = config.ExpandTildes(plan.HiddenPaths, realHome)
-			}
+			roRemoves = config.ExpandTildes(roRemoves, realHome)
 		}
 		roAdds = config.ExpandGlobs(roAdds)
-		plan.HiddenPaths = config.ExpandGlobs(plan.HiddenPaths)
+		roRemoves = config.ExpandGlobs(roRemoves)
 
 		// Apply exclusions to both default RO paths and files.
 		roExcl := excludeArgs(roRemoves)
@@ -174,8 +190,10 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		rwAdds, rwRemoves, rwRemoveAll = config.ParseExclusions(cfg.RWPaths)
 		if realHome != "" {
 			rwAdds = config.ExpandTildes(rwAdds, realHome)
+			rwRemoves = config.ExpandTildes(rwRemoves, realHome)
 		}
 		rwAdds = config.ExpandGlobs(rwAdds)
+		rwRemoves = config.ExpandGlobs(rwRemoves)
 		rwExcl := excludeArgs(rwRemoves)
 		rwAddDirs, rwAddFiles := splitDirsFiles(rwAdds)
 		if !rwRemoveAll {
@@ -198,7 +216,6 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		plan.ROFiles = resolveSymlinks(plan.ROFiles)
 		plan.RWPaths = resolveSymlinks(plan.RWPaths)
 		plan.RWFiles = resolveSymlinks(plan.RWFiles)
-		plan.HiddenPaths = resolveSymlinks(plan.HiddenPaths)
 	}
 
 	// Temp directory.
@@ -211,7 +228,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 	// Exec policy.
 	if !cfg.NoExecRestrict {
-		execAdds, execRemoves, execRemoveAll := config.ParseExclusions(cfg.ExecAllow)
+		var execAdds []string
+		var execRemoveAll bool
+		execAdds, execRemoves, execRemoveAll = config.ParseExclusions(cfg.ExecAllow)
+		if realHome != "" {
+			execAdds = config.ExpandTildes(execAdds, realHome)
+			execRemoves = config.ExpandTildes(execRemoves, realHome)
+		}
+		execRemoves = config.ExpandGlobs(execRemoves)
 		if execRemoveAll {
 			plan.ExecPaths = nil
 		} else {
@@ -275,11 +299,24 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 	plan.Command = cfg.Command
 
-	// Warn about sub-path exclusions that Landlock cannot enforce.
-	// Checked after all path assembly (RO, RW, exec dirs, resolv.conf).
+	// Collect denied sub-paths from exclusions.
+	// A denial is an exclusion that is a sub-path of an allowed parent.
+	// With pivot_root, these are enforced via overmount; without, warn.
 	if !cfg.NoFSRestrict {
-		warnSubpathExclusions("--read", roRemoves, plan.ROPaths, plan.RWPaths)
-		warnSubpathExclusions("--write", rwRemoves, plan.ROPaths, plan.RWPaths)
+		plan.HiddenPaths = subpathDenials(roRemoves, plan.ROPaths, plan.RWPaths)
+		plan.DenyWritePaths = subpathDenials(rwRemoves, plan.ROPaths, plan.RWPaths)
+		plan.HiddenPaths = resolveSymlinks(plan.HiddenPaths)
+		plan.DenyWritePaths = resolveSymlinks(plan.DenyWritePaths)
+	}
+	if !cfg.NoExecRestrict {
+		plan.DenyExecPaths = subpathDenials(execRemoves, plan.ExecPaths)
+		plan.DenyExecPaths = resolveSymlinks(plan.DenyExecPaths)
+	}
+	if !plan.UsePivotRoot {
+		allDenials := len(plan.HiddenPaths) + len(plan.DenyWritePaths) + len(plan.DenyExecPaths)
+		if allDenials > 0 {
+			clog.Warnf("sub-path denials (! exclusions) cannot be enforced without mount namespaces: %v", caps.MountNS)
+		}
 	}
 
 	return plan, nil
@@ -295,7 +332,11 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		RWPaths:        p.RWPaths,
 		RWFiles:        p.RWFiles,
 		HiddenPaths:    p.HiddenPaths,
+		DenyWritePaths: p.DenyWritePaths,
+		DenyExecPaths:  p.DenyExecPaths,
 		ExecPaths:      p.ExecPaths,
+		UsePivotRoot:   p.UsePivotRoot,
+		UseLandlock:    p.UseLandlock,
 		NoFSRestrict:   p.NoFSRestrict,
 		PidNS:          p.PidNS,
 		NetEnabled:     p.NetEnabled,
@@ -364,6 +405,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 
 	ln("curb: system capabilities")
 	printCap(w, "user namespaces", p.Caps.UserNS, p.capUserInfo())
+	printCap(w, "mount namespaces", p.Caps.MountNS, "")
 	printCap(w, "PID namespaces", p.Caps.PidNS, "")
 	printCap(w, "network namespaces", p.Caps.NetNS, "")
 	printCap(w, "/dev/net/tun", p.Caps.TUN, "")
@@ -385,7 +427,13 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		pr("    read-write: %s\n", strings.Join(p.RWPaths, " "))
 	}
 	if len(p.HiddenPaths) > 0 {
-		pr("    hidden:     %s\n", strings.Join(p.HiddenPaths, " "))
+		pr("    deny read:  %s\n", strings.Join(p.HiddenPaths, " "))
+	}
+	if len(p.DenyWritePaths) > 0 {
+		pr("    deny write: %s\n", strings.Join(p.DenyWritePaths, " "))
+	}
+	if len(p.DenyExecPaths) > 0 {
+		pr("    deny exec:  %s\n", strings.Join(p.DenyExecPaths, " "))
 	}
 	if len(p.ExecPaths) > 0 {
 		pr("    exec:       %s\n", strings.Join(p.ExecPaths, " "))
@@ -450,14 +498,25 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	}
 	ln("    blocked:    everything else")
 
-	// Enforcement level.
+	// Enforcement method.
+	ln("  enforcement:")
+	switch {
+	case p.UsePivotRoot && p.UseLandlock:
+		ln("    method:     pivot_root + landlock")
+	case p.UsePivotRoot:
+		ln("    method:     pivot_root")
+	case p.UseLandlock:
+		ln("    method:     landlock")
+	default:
+		ln("    method:     none (env-only)")
+	}
 	if len(p.DegradedLayers) > 0 {
-		ln("  enforcement: degraded")
+		ln("    status:     degraded")
 		for _, d := range p.DegradedLayers {
 			pr("    warning: %s: %s\n", d.Layer, d.Impact)
 		}
 	} else {
-		ln("  enforcement: full")
+		ln("    status:     full")
 	}
 }
 
@@ -508,10 +567,11 @@ func splitDirsFiles(paths []string) (dirs, files []string) {
 	return
 }
 
-// warnSubpathExclusions emits a warning for each exclusion that is a
-// subdirectory of an allowed path, since Landlock cannot deny access to
-// subdirectories of an allowed parent.
-func warnSubpathExclusions(flag string, removes []string, dirSets ...[]string) {
+// subpathDenials returns exclusions that are sub-paths of any allowed parent
+// directory. These are paths that need active denial (overmount) because
+// pivot_root's default-deny doesn't cover them.
+func subpathDenials(removes []string, dirSets ...[]string) []string {
+	var denials []string
 	for _, r := range removes {
 		abs, err := filepath.Abs(r)
 		if err != nil {
@@ -521,7 +581,7 @@ func warnSubpathExclusions(flag string, removes []string, dirSets ...[]string) {
 			found := false
 			for _, dir := range dirs {
 				if isSubpath(abs, dir) {
-					clog.Warnf("%s '!%s' has no effect: parent directory %s is allowed. Use --hide %s, or exclude the parent and re-add specific paths.", flag, r, dir, r)
+					denials = append(denials, abs)
 					found = true
 					break
 				}
@@ -531,6 +591,7 @@ func warnSubpathExclusions(flag string, removes []string, dirSets ...[]string) {
 			}
 		}
 	}
+	return denials
 }
 
 // isSubpath reports whether child is strictly under parent.

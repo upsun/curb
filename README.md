@@ -12,7 +12,7 @@ On non-Linux platforms, curb applies environment sanitization only and warns abo
 go install github.com/upsun/curb@latest
 ```
 
-Requires Go 1.26+ and Linux kernel 5.13+ (for Landlock). Network filtering requires kernel 4.18+ (user + network namespaces) and `/dev/net/tun`.
+Requires Go 1.26+ and Linux kernel 3.8+ (user namespaces). Landlock (kernel 5.13+) provides additional hardening when available. Network filtering requires kernel 4.18+ (user + network namespaces) and `/dev/net/tun`.
 
 ## Quick Start
 
@@ -61,13 +61,12 @@ curb --dry-run make test
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `--read` | `CURB_READ` | Readable paths (`!` prefix removes defaults, `!*` clears all) |
-| `--write` | `CURB_WRITE` | Writable paths (`!` prefix removes defaults, `'*'` disables FS restrictions) |
-| `--hide` | `CURB_HIDE` | Paths to hide (overmounted with empty tmpfs) |
+| `--read` | `CURB_READ` | Readable paths (`!` prefix denies access, `!*` clears all defaults) |
+| `--write` | `CURB_WRITE` | Writable paths (`!` prefix makes read-only, `'*'` disables FS restrictions) |
 
-By default, system paths (`/usr`, `/lib`, `/proc`), specific `/etc` files (DNS, TLS certs, timezone, passwd), device nodes (`/dev/null`, `/dev/urandom`, `/dev/pts`), and the current directory are accessible. Sensitive files like `/etc/machine-id` and `/etc/hostname` are not exposed. A private temp directory is created and set as `TMPDIR`. Use `--write .` to grant write access to the current directory. Use `--hide` to hide sensitive paths (e.g. `--hide ~/.ssh`). Glob patterns are supported (e.g. `--read '~/docs/*.md'`).
+By default, system paths (`/usr`, `/lib`, `/proc`), specific `/etc` files (DNS, TLS certs, timezone, passwd), device nodes (`/dev/null`, `/dev/urandom`, `/dev/pts`), and the current directory are accessible. Sensitive files like `/etc/machine-id` and `/etc/hostname` are not exposed. A private temp directory is created and set as `TMPDIR`. Use `--write .` to grant write access to the current directory. Glob patterns are supported (e.g. `--read '~/docs/*.md'`).
 
-Use `!` to exclude specific defaults: `--read !/etc/passwd` removes `/etc/passwd` from the default readable files. Use `--read '!*'` to clear all default read paths. Use `--read /etc` to re-add the whole `/etc` directory.
+Use `!` to deny access to specific paths. When the denied path is under an allowed parent, it is actively blocked via overmount (empty tmpfs for directories, `/dev/null` for files). Examples: `--read /etc --read '!/etc/shadow'` hides `/etc/shadow`. `--write /data --write '!/data/config'` makes `/data/config` read-only. `--exec '!/usr/bin/curl'` blocks executing curl. Use `--read '!*'` to clear all default read paths.
 
 ### Executable Control
 
@@ -75,7 +74,7 @@ Use `!` to exclude specific defaults: `--read !/etc/passwd` removes `/etc/passwd
 |------|---------|-------------|
 | `--exec` | `CURB_EXEC` | Allowed executables (`!` prefix removes defaults, `'*'` allows all) |
 
-By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target command itself have execute permission (via Landlock). Writable directories (TMPDIR) are not executable.
+By default, only system binaries in `/usr/bin`, `/bin`, etc. and the target command itself have execute permission (via `MS_NOEXEC` mount flags and Landlock). Writable directories (TMPDIR) are not executable.
 
 ### Environment
 
@@ -104,8 +103,10 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `SHELL`, `T
 
 | Platform | Restrictions | Notes |
 |----------|-------------|-------|
-| Linux (kernel 5.13+) | Full | Landlock + namespaces + netstack |
-| Linux (kernel 4.18-5.12) | Degraded | No Landlock; mount/seccomp only |
+| Linux (kernel 5.13+, mount ops) | Full | pivot_root + Landlock + netstack |
+| Linux (kernel 5.13+, no mount ops) | Strong | Landlock only (no pivot_root); blocked paths return EACCES not ENOENT |
+| Linux (kernel 3.8-5.12, mount ops) | Strong | pivot_root only (no Landlock hardening) |
+| Linux (kernel 3.8+, network only) | Network + env | User + network namespaces + netstack |
 | macOS / Windows | Environment only | Sanitized env; all other restrictions unavailable |
 
 ## Troubleshooting
@@ -116,8 +117,8 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common i
 
 1. **Environment sanitization**: deny-by-default environment with only safe variables passed through.
 2. **User namespace**: the child runs as uid 0 in an isolated namespace (no host privileges).
-3. **Mount namespace**: paths specified with `--hide` are hidden via tmpfs overmounts.
-4. **Landlock LSM**: filesystem access restricted to declared read-only, read-write, and execute paths.
+3. **Mount namespace + pivot_root** (primary FS enforcement): a new root is built from bind-mounted allowed paths. Unmounted paths don't exist (ENOENT). `MS_RDONLY` and `MS_NOEXEC` enforce read-only and no-exec. `!` denials are enforced via overmount (empty tmpfs/`/dev/null` for read denials, `MS_RDONLY` for write denials, `MS_NOEXEC` for exec denials).
+4. **Landlock LSM** (optional hardening): when available, Landlock is layered on top of pivot_root for defense-in-depth. On systems where mount operations are blocked (e.g. AppArmor), Landlock is used as the sole FS enforcement (degraded mode).
 5. **Network namespace + TAP**: child gets an isolated network with a virtual Ethernet device. A userspace TCP/IP stack (gvisor netstack) on the parent side filters traffic:
    - DNS queries checked against the domain allowlist
    - TLS connections validated via SNI

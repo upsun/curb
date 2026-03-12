@@ -4,7 +4,6 @@ package sandbox
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -47,36 +46,26 @@ func childInit() error {
 	}
 	_ = sockFile.Close()
 
-	// Filesystem enforcement: mounts first, then Landlock.
-	// Landlock would block mount syscalls if enforced first.
+	// Filesystem enforcement: pivot_root first, then Landlock.
+	// pivot_root provides default-deny via bind mounts; Landlock hardens on top.
 	if !cfg.NoFSRestrict {
-		if len(cfg.HiddenPaths) > 0 {
-			if err := prepareMountNS(); err != nil {
-				return fmt.Errorf("mount namespace setup: %w", err)
-			}
-			if err := hidePaths(cfg.HiddenPaths); err != nil {
-				return fmt.Errorf("hiding paths: %w", err)
-			}
-			// Best-effort: mount a fresh /proc so the child only sees its own PIDs.
-			// Requires both PID NS (for meaningful isolation) and mount NS (to
-			// avoid affecting the host). Fails on some hosts (e.g. hidepid=invisible).
-			if cfg.PidNS {
-				if err := syscall.Mount("proc", "/proc", "proc",
-					syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
-					childWarn(cfg.Quiet, "Fresh /proc mount failed (host PIDs remain visible): %v", err)
-				}
+		if cfg.UsePivotRoot {
+			if err := enforceMountNS(&cfg); err != nil {
+				return fmt.Errorf("mount namespace enforcement: %w", err)
 			}
 		}
-		rules := policy.BuildLandlockRules(policy.LandlockPaths{
-			RODirs:  cfg.ROPaths,
-			ROFiles: cfg.ROFiles,
-			RWDirs:  cfg.RWPaths,
-			RWFiles: cfg.RWFiles,
-			Exec:    cfg.ExecPaths,
-		})
-		if len(rules) > 0 {
-			if err := policy.EnforceLandlock(rules); err != nil {
-				return fmt.Errorf("enforcing landlock: %w", err)
+		if cfg.UseLandlock {
+			rules := policy.BuildLandlockRules(policy.LandlockPaths{
+				RODirs:  cfg.ROPaths,
+				ROFiles: cfg.ROFiles,
+				RWDirs:  cfg.RWPaths,
+				RWFiles: cfg.RWFiles,
+				Exec:    cfg.ExecPaths,
+			})
+			if len(rules) > 0 {
+				if err := policy.EnforceLandlock(rules); err != nil {
+					return fmt.Errorf("enforcing landlock: %w", err)
+				}
 			}
 		}
 	}
@@ -183,19 +172,6 @@ func prepareMountNS() error {
 	return syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
 }
 
-// hidePaths overmounts each path with an empty tmpfs, making the original content invisible.
-// Non-existent paths are silently skipped.
-func hidePaths(paths []string) error {
-	for _, p := range paths {
-		if err := syscall.Mount("tmpfs", p, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "size=0"); err != nil {
-			if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR) {
-				continue
-			}
-			return fmt.Errorf("overmounting %s: %w", p, err)
-		}
-	}
-	return nil
-}
 
 // setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
 // fd to the parent, and waits for a ready signal before continuing.

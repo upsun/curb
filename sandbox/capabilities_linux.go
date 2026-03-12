@@ -17,7 +17,7 @@ func ProbeAll() *Capabilities {
 	caps := &Capabilities{}
 	caps.KernelInfo = probeKernel()
 	caps.UserNS = probeNS(syscall.CLONE_NEWUSER, "user namespace")
-	caps.MountNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNS, "mount namespace")
+	caps.MountNS = probeMountOps()
 	caps.NetNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNET, "network namespace")
 	caps.PidNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWPID, "PID namespace")
 	caps.TUN = probeTUN()
@@ -79,6 +79,77 @@ func probeTUN() error {
 		return fmt.Errorf("%w: %s", errTUNIoctl, msg)
 	}
 	return nil
+}
+
+// MountProbeEnvKey is the environment variable that triggers the mount probe child.
+const MountProbeEnvKey = "_CURB_MOUNT_PROBE"
+
+// RunMountProbe is the entry point for the mount probe child process.
+// It tests MS_SLAVE propagation and tmpfs mount inside a user+mount namespace.
+func RunMountProbe() {
+	if err := prepareMountNS(); err != nil {
+		fmt.Fprintf(os.Stderr, "MS_SLAVE: %v", err)
+		os.Exit(1)
+	}
+	dir, err := os.MkdirTemp("", "curb-probe-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mkdirtemp: %v", err)
+		os.Exit(1)
+	}
+	defer func() { _ = os.Remove(dir) }()
+	if err := syscall.Mount("tmpfs", dir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "size=4k"); err != nil {
+		fmt.Fprintf(os.Stderr, "tmpfs mount: %v", err)
+		os.Exit(1)
+	}
+	_ = syscall.Unmount(dir, 0)
+}
+
+// probeMountOps tests whether mount operations (MS_SLAVE, tmpfs mount) work
+// inside a user+mount namespace. This catches AppArmor policies that allow
+// namespace creation but block mount syscalls.
+func probeMountOps() error {
+	self, err := os.Executable()
+	if err != nil {
+		// Can't probe; fall back to basic namespace probe.
+		return probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNS, "mount namespace")
+	}
+	cmd := exec.Command(self)
+	cmd.Env = []string{MountProbeEnvKey + "=1"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
+		UidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
+		},
+		GidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getgid(), Size: 1},
+		},
+	}
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = runErr.Error()
+		}
+		e := fmt.Errorf("mount operations failed in namespace: %s", msg)
+		if isAppArmorRestrictingUserns() {
+			e = fmt.Errorf("%w; AppArmor is restricting unprivileged user namespaces (see docs/troubleshooting.md)", e)
+		}
+		return e
+	}
+	return nil
+}
+
+// isAppArmorRestrictingUserns reports whether AppArmor is enabled and
+// restricting capabilities in unprivileged user namespaces.
+func isAppArmorRestrictingUserns() bool {
+	enabled, err := os.ReadFile("/sys/module/apparmor/parameters/enabled")
+	if err != nil || strings.TrimSpace(string(enabled)) != "Y" {
+		return false
+	}
+	restrict, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+	if err != nil || strings.TrimSpace(string(restrict)) != "1" {
+		return false
+	}
+	return true
 }
 
 // TUNProbeEnvKey is the environment variable that triggers the TUN probe child.

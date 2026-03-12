@@ -48,6 +48,10 @@ Use -- before the command when it has its own flags.`,
 			}
 
 			caps := sandbox.ProbeAll()
+			// Testing hook: disable Landlock to exercise mount-NS-only path.
+			if os.Getenv(sandbox.TestNoLandlockEnvKey) == "1" {
+				caps.LandlockABI = 0
+			}
 			plan, err := sandbox.BuildPlan(cfg, caps)
 			if err != nil {
 				return err
@@ -76,7 +80,14 @@ Use -- before the command when it has its own flags.`,
 			if plan.NoFSRestrict {
 				logger.Info("fs: disabled (--write '*').")
 			} else {
-				logger.Info("fs: active.")
+				switch {
+				case plan.UsePivotRoot && plan.UseLandlock:
+					logger.Info("fs: active (pivot_root + landlock).")
+				case plan.UsePivotRoot:
+					logger.Info("fs: active (pivot_root).")
+				case plan.UseLandlock:
+					logger.Info("fs: active (landlock; mount namespaces unavailable).")
+				}
 			}
 			if cfg.NoExecRestrict {
 				logger.Info("exec: disabled (--exec '*').")
@@ -116,9 +127,8 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 
 	// Filesystem (supports glob patterns and ! exclusions).
-	f.StringSlice("read", nil, "readable paths (! prefix removes defaults, '!*' clears all)")
-	f.StringSlice("write", nil, "writable paths (! prefix removes defaults, '*' disables FS)")
-	f.StringSlice("hide", nil, "paths to hide from the child process")
+	f.StringSlice("read", nil, "readable paths (! prefix denies/hides, '!*' clears all)")
+	f.StringSlice("write", nil, "writable paths (! prefix makes read-only, '*' disables FS)")
 
 	// Executable control.
 	f.StringSlice("exec", nil, "allowed executables (! prefix removes defaults, '*' allows all)")

@@ -173,11 +173,13 @@ func TestBuildDegradedPlan_NoISandboxEnv(t *testing.T) {
 
 // --- BuildPlan ---
 
-func TestBuildPlan_NoLandlock_Error(t *testing.T) {
-	caps := &Capabilities{LandlockABI: 0}
-	_, err := BuildPlan(minCfg(), caps)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "landlock unavailable")
+func TestBuildPlan_NoLandlock_WithMountNS(t *testing.T) {
+	caps := &Capabilities{LandlockABI: 0} // MountNS is nil = available.
+	plan, err := BuildPlan(minCfg(), caps)
+	require.NoError(t, err, "should succeed with pivot_root when mount NS available")
+	defer plan.Cleanup()
+	assert.True(t, plan.UsePivotRoot)
+	assert.False(t, plan.UseLandlock)
 }
 
 func TestBuildPlan_NoLandlock_NoFSRestrict(t *testing.T) {

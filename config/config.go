@@ -15,7 +15,6 @@ type Config struct {
 	AllowedDomains    []string
 	ROPaths           []string
 	RWPaths           []string
-	HiddenPaths       []string
 	ExecAllow         []string
 	EnvPassthrough    []string
 	EnvSet            []string
@@ -47,10 +46,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		return nil, err
 	}
 	rw, err := flags.GetStringSlice("write")
-	if err != nil {
-		return nil, err
-	}
-	hide, err := flags.GetStringSlice("hide")
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +112,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		AllowedDomains: allow,
 		ROPaths:        ro,
 		RWPaths:        rw,
-		HiddenPaths:    hide,
 		ExecAllow:      execAllow,
 		EnvPassthrough: passNames,
 		EnvSet:         setPairs,
@@ -176,8 +170,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	} else {
 		cfg.RWPaths = append(cfg.RWPaths, rwEnv...)
 	}
-
-	cfg.HiddenPaths = appendEnvList(cfg.HiddenPaths, "CURB_HIDE")
 
 	execEnv := appendEnvList(nil, "CURB_EXEC")
 	if containsStar(execEnv) {

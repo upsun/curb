@@ -20,7 +20,6 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("domains", nil, "")
 	f.StringSlice("read", nil, "")
 	f.StringSlice("write", nil, "")
-	f.StringSlice("hide", nil, "")
 	f.StringSlice("exec", nil, "")
 	f.StringSlice("env", nil, "")
 	f.String("ech", "strip", "")
@@ -61,7 +60,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 		"--domains", "a.com,b.com",
 		"--read", "/opt",
 		"--write", "/data",
-		"--hide", "/secret",
 		"--exec", "rg",
 		"--env", "GOPATH",
 		"--env", "FOO=bar",
@@ -79,7 +77,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.Equal(t, []string{"a.com", "b.com"}, cfg.AllowedDomains)
 	assert.Equal(t, []string{"/opt"}, cfg.ROPaths)
 	assert.Equal(t, []string{"/data"}, cfg.RWPaths)
-	assert.Equal(t, []string{"/secret"}, cfg.HiddenPaths)
 	assert.Equal(t, []string{"rg"}, cfg.ExecAllow)
 	assert.Equal(t, []string{"GOPATH"}, cfg.EnvPassthrough)
 	assert.Equal(t, []string{"FOO=bar"}, cfg.EnvSet)

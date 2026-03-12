@@ -27,6 +27,11 @@ func TestMain(m *testing.M) {
 		ChildInit()
 		os.Exit(ExitSetupFailure)
 	}
+	// Mount probe child.
+	if os.Getenv(MountProbeEnvKey) != "" {
+		RunMountProbe()
+		return
+	}
 	// TUN probe child.
 	if os.Getenv(TUNProbeEnvKey) != "" {
 		RunTUNProbe()
@@ -380,11 +385,8 @@ func requireLandlock(t *testing.T) {
 
 func requireMountOps(t *testing.T) {
 	t.Helper()
-	// Test if mount operations work inside a user+mount namespace.
-	hideDir := t.TempDir()
-	cmd := exec.Command(curbBin, "--hide", hideDir, "--", "true")
-	out, err := cmd.CombinedOutput()
-	if err != nil && strings.Contains(string(out), "mount namespace") {
+	requireUserNS(t)
+	if testCaps.MountNS != nil {
 		t.Skip("mount operations unavailable (AppArmor or similar restriction)")
 	}
 }
@@ -464,27 +466,23 @@ func TestCurb_FS_NoFSRestrict(t *testing.T) {
 	_ = os.Remove(testFile)
 }
 
-// TestCurb_FS_HiddenPath verifies that hidden paths are overmounted with empty tmpfs.
+// TestCurb_FS_HiddenPath verifies that --read '!/path' hides a sub-path.
 func TestCurb_FS_HiddenPath(t *testing.T) {
 	requireUserNS(t)
 	requireMountOps(t)
 
-	// Create a directory to hide with content inside.
-	hideDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(hideDir, "secret"), []byte("sensitive"), 0o644))
+	// Create a parent directory with content and a subdirectory to deny.
+	parentDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(parentDir, "visible"), []byte("ok"), 0o644))
+	subDir := filepath.Join(parentDir, "secret")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "data"), []byte("sensitive"), 0o644))
 
-	cmd := exec.Command(curbBin, "--hide", hideDir, "--", "ls", hideDir)
+	cmd := exec.Command(curbBin, "--read", parentDir, "--read", "!"+subDir, "--", "ls", subDir)
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "ls on hidden path should succeed (shows empty tmpfs): %s", string(out))
-	outStr := strings.TrimSpace(string(out))
-	// Filter out warning lines.
-	var lines []string
-	for line := range strings.SplitSeq(outStr, "\n") {
-		if !strings.HasPrefix(line, "curb:") {
-			lines = append(lines, line)
-		}
-	}
-	assert.Empty(t, lines, "hidden path should appear empty, got: %v", lines)
+	require.NoError(t, err, "ls on denied path should succeed (shows empty tmpfs): %s", string(out))
+	outStr := filterCurbOutput(strings.TrimSpace(string(out)))
+	assert.Empty(t, strings.TrimSpace(outStr), "denied path should appear empty, got: %s", outStr)
 }
 
 // TestCurb_FS_ReadSysPathAllowed verifies that system paths are readable.
@@ -557,22 +555,23 @@ func TestCurb_FS_EtcRestored(t *testing.T) {
 	require.NoError(t, err, "expected read of /etc/hostname with --read /etc to succeed: %s", string(out))
 }
 
-// TestCurb_FS_SubpathExclusionWarns verifies that excluding a subdirectory
-// of an allowed path emits a warning recommending --hide.
-func TestCurb_FS_SubpathExclusionWarns(t *testing.T) {
+// TestCurb_FS_SubpathDenialEnforced verifies that --read '!/sub' denies access
+// to a subdirectory of the CWD (which is allowed by default).
+func TestCurb_FS_SubpathDenialEnforced(t *testing.T) {
 	requireUserNS(t)
-	requireLandlock(t)
+	requireMountOps(t)
 
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "secret")
 	require.NoError(t, os.Mkdir(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "data"), []byte("sensitive"), 0o644))
 
-	cmd := exec.Command(curbBin, "--read", "!"+sub, "--", "true")
+	cmd := exec.Command(curbBin, "--read", "!"+sub, "--", "ls", sub)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "command should still succeed: %s", string(out))
-	assert.Contains(t, string(out), "has no effect")
-	assert.Contains(t, string(out), "--hide")
+	require.NoError(t, err, "ls on denied sub-path should succeed (empty): %s", string(out))
+	outStr := filterCurbOutput(strings.TrimSpace(string(out)))
+	assert.Empty(t, strings.TrimSpace(outStr), "denied sub-path should appear empty, got: %s", outStr)
 }
 
 // TestCurb_FS_ExcludeCWDRead verifies --read '!.' blocks reading the CWD.
@@ -2057,8 +2056,8 @@ func TestCurb_PidNS_FreshProc(t *testing.T) {
 	requirePidNS(t)
 	requireMountOps(t)
 
-	hideDir := t.TempDir()
-	cmd := exec.Command(curbBin, "--hide", hideDir, "--write", "*", "--exec", "*", "--",
+	// Mount NS is always active when FS restrictions are active, so /proc is fresh.
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*", "--",
 		"sh", "-c", "ls /proc | grep -c '^[0-9]'")
 	out, err := cmd.CombinedOutput()
 	outStr := strings.TrimSpace(filterCurbOutput(string(out)))
@@ -2077,6 +2076,137 @@ func TestCurb_PidNS_FreshProc(t *testing.T) {
 	_, scanErr := fmt.Sscanf(outStr, "%d", &count)
 	require.NoError(t, scanErr, "unexpected output: %s", outStr)
 	assert.Less(t, count, 10, "expected few PIDs in fresh /proc, got %d", count)
+}
+
+// --- Mount NS (pivot_root) integration tests ---
+// These tests exercise the pivot_root enforcement path with Landlock disabled.
+
+// requirePivotRoot skips the test if mount operations don't work in namespaces.
+func requirePivotRoot(t *testing.T) {
+	t.Helper()
+	requireUserNS(t)
+	if testCaps.MountNS != nil {
+		t.Skipf("mount operations unavailable: %v", testCaps.MountNS)
+	}
+}
+
+// mountNSEnv returns the test environment with Landlock disabled.
+func mountNSEnv() []string {
+	return append(os.Environ(), TestNoLandlockEnvKey+"=1")
+}
+
+// TestCurb_MountFS_ReadSysPathAllowed verifies system paths are readable under pivot_root.
+func TestCurb_MountFS_ReadSysPathAllowed(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "cat", "/etc/hosts")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected read of /etc/hosts to succeed: %s", string(out))
+}
+
+// TestCurb_MountFS_WriteSysPathBlocked verifies system paths are read-only under pivot_root.
+// Error is EROFS (read-only filesystem) not EACCES (permission denied).
+func TestCurb_MountFS_WriteSysPathBlocked(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "touch /usr/bin/curb-escape-test")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected write to /usr/bin to fail: %s", string(out))
+	assert.Contains(t, string(out), "Read-only file system")
+}
+
+// TestCurb_MountFS_WriteTmpDirAllowed verifies that the sandbox TMPDIR is writable.
+func TestCurb_MountFS_WriteTmpDirAllowed(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", "touch $TMPDIR/curb-test-write && rm $TMPDIR/curb-test-write")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected TMPDIR write to succeed: %s", string(out))
+}
+
+// TestCurb_MountFS_ExecTmpDirBlocked verifies MS_NOEXEC on writable dirs under pivot_root.
+func TestCurb_MountFS_ExecTmpDirBlocked(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c",
+		"cp /bin/true $TMPDIR/escape && chmod +x $TMPDIR/escape && $TMPDIR/escape")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected exec from writable TMPDIR to be blocked: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
+}
+
+// TestCurb_MountFS_NonDefaultPathMissing verifies non-default paths return ENOENT.
+func TestCurb_MountFS_NonDefaultPathMissing(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "cat", "/etc/machine-id")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected non-default path to fail: %s", string(out))
+	assert.Contains(t, string(out), "No such file or directory")
+}
+
+// TestCurb_MountFS_DenyReadSubpath verifies --read '!/path' overmounts a subpath with empty tmpfs.
+func TestCurb_MountFS_DenyReadSubpath(t *testing.T) {
+	requirePivotRoot(t)
+
+	parentDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(parentDir, "visible"), []byte("ok"), 0o644))
+	hideDir := filepath.Join(parentDir, "secret")
+	require.NoError(t, os.Mkdir(hideDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(hideDir, "data"), []byte("sensitive"), 0o644))
+
+	cmd := exec.Command(curbBin, "--read", parentDir, "--read", "!"+hideDir, "--", "ls", hideDir)
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ls on denied path should succeed (shows empty tmpfs): %s", string(out))
+	outStr := filterCurbOutput(strings.TrimSpace(string(out)))
+	assert.Empty(t, strings.TrimSpace(outStr), "denied path should appear empty, got: %s", outStr)
+}
+
+// TestCurb_MountFS_DenyReadFile verifies --read '!/file' overmounts a file with /dev/null.
+func TestCurb_MountFS_DenyReadFile(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--read", "/etc", "--read", "!/etc/passwd", "--", "wc", "-c", "/etc/passwd")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "wc on denied file should succeed (reads /dev/null): %s", string(out))
+	outStr := filterCurbOutput(strings.TrimSpace(string(out)))
+	assert.Contains(t, outStr, "0", "denied file should have 0 bytes")
+}
+
+// TestCurb_MountFS_DenyWriteSubpath verifies --write '!/path' makes a subpath read-only.
+func TestCurb_MountFS_DenyWriteSubpath(t *testing.T) {
+	requirePivotRoot(t)
+
+	parentDir := t.TempDir()
+	protectedDir := filepath.Join(parentDir, "protected")
+	require.NoError(t, os.Mkdir(protectedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(protectedDir, "data"), []byte("original"), 0o644))
+
+	cmd := exec.Command(curbBin, "--write", parentDir, "--write", "!"+protectedDir, "--",
+		"sh", "-c", fmt.Sprintf("echo pwned > %s/data", protectedDir))
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected write to denied path to fail: %s", string(out))
+	assert.Contains(t, string(out), "Read-only file system")
+}
+
+// TestCurb_MountFS_DenyExecSubpath verifies --exec '!/path' makes a binary non-executable.
+func TestCurb_MountFS_DenyExecSubpath(t *testing.T) {
+	requirePivotRoot(t)
+
+	// Deny exec on a specific binary under /usr/bin.
+	cmd := exec.Command(curbBin, "--exec", "!/usr/bin/env", "--", "/usr/bin/env", "true")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected exec of denied binary to fail: %s", string(out))
+	assert.Contains(t, string(out), "Permission denied")
 }
 
 // filterCurbOutput removes lines starting with "curb:" from output.

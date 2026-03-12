@@ -35,11 +35,11 @@ Key practical differences:
 
 |  | srt | curb |
 |---|---|---|
-| Mechanism | bubblewrap bind mounts + tmpfs overmounts | Landlock LSM (kernel 5.13+), mount namespace for `--hide` |
+| Mechanism | bubblewrap bind mounts + tmpfs overmounts | Mount namespace (pivot_root) + Landlock LSM (kernel 5.13+) |
 | Read model | Allow-all + denylist (scans for dangerous files with ripgrep) | Deny-all + allowlist (only listed paths are accessible) |
 | Write model | Deny-all + allowlist (`allowWrite`) | Deny-all + allowlist (`--write`) |
 | Exec control | None | Landlock `EXECUTE` right: only listed binaries can run |
-| Hidden paths | tmpfs overmount on denied dirs, `/dev/null` bind on denied files | `--hide` overmounts with empty tmpfs; fresh `/tmp` and `/dev` |
+| Hidden paths | tmpfs overmount on denied dirs, `/dev/null` bind on denied files | `!` denials: tmpfs overmount on dirs, `/dev/null` bind on files; fresh `/tmp` and `/dev` |
 | Glob patterns | Literal paths only (Linux) | Supported on all path flags |
 | Host side effects | Creates ghost mount-point files for non-existent denied paths (requires cleanup) | None |
 
@@ -78,12 +78,12 @@ though it also means legitimate programs that do not support proxies will fail.
 |---|---|---|
 | PID namespace | Yes (`bwrap --unshare-pid` + fresh `/proc`) | Yes (fresh `/proc` where mount NS is active) |
 | User namespace | Implicit via bubblewrap | Explicit `CLONE_NEWUSER` with UID/GID mapping |
-| Mount namespace | Always (bubblewrap requires it) | Only when `--hide` is used |
+| Mount namespace | Always (bubblewrap requires it) | Always when FS restrictions are active |
 | Seccomp | BPF filter blocking `AF_UNIX` socket creation (applied via custom binary after socat starts) | None |
 
 Both create PID namespaces. curb mounts a fresh `/proc` when a mount namespace
-is also active (`--hide`), so the sandboxed process only sees its own PIDs.
-Without a mount namespace, host PIDs are visible via the inherited `/proc`.
+is active (default when FS restrictions are on), so the sandboxed process only
+sees its own PIDs.
 Cross-namespace signal delivery is restricted by user namespace UID boundaries
 (only same-UID processes can be signaled).
 

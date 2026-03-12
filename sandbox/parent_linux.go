@@ -49,15 +49,12 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	}
 
 	// Re-exec curb inside new user and network namespaces.
-	// Mount namespace is only added when needed (--hide). On Ubuntu 24.04+,
-	// AppArmor's unprivileged_userns profile blocks fstat on inherited pty
-	// fds inside a mount namespace ("disconnected path"). Skipping CLONE_NEWNS
-	// when not needed avoids this.
+	// Mount namespace is added when pivot_root is used for FS enforcement.
 	cloneFlags := uintptr(syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET)
 	if plan.PidNS {
 		cloneFlags |= syscall.CLONE_NEWPID
 	}
-	if len(plan.HiddenPaths) > 0 {
+	if plan.UsePivotRoot {
 		cloneFlags |= syscall.CLONE_NEWNS
 	}
 	cmd := exec.Command(self)
