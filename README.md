@@ -118,7 +118,7 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common i
 1. **Environment sanitization**: deny-by-default environment with only safe variables passed through.
 2. **User namespace**: the child runs as uid 0 in an isolated namespace (no host privileges).
 3. **Mount namespace + pivot_root** (primary FS enforcement): a new root is built from bind-mounted allowed paths. Unmounted paths don't exist (ENOENT). `MS_RDONLY` and `MS_NOEXEC` enforce read-only and no-exec. `!` denials are enforced via overmount (empty tmpfs/`/dev/null` for read denials, `MS_RDONLY` for write denials, `MS_NOEXEC` for exec denials).
-4. **Landlock LSM** (optional hardening): when available, Landlock is layered on top of pivot_root for defense-in-depth. On systems where mount operations are blocked (e.g. AppArmor), Landlock is used as the sole FS enforcement (degraded mode).
+4. **Landlock LSM**: when both are available, Landlock is layered on top of pivot_root for defense-in-depth. On systems where mount operations are blocked (e.g. AppArmor), Landlock provides FS enforcement on its own (default-deny via EACCES). The only limitation without mount namespaces is that sub-path denials (`!` exclusions under an allowed parent) cannot be enforced.
 5. **Network namespace + TAP**: child gets an isolated network with a virtual Ethernet device. A userspace TCP/IP stack (gvisor netstack) on the parent side filters traffic:
    - DNS queries checked against the domain allowlist
    - TLS connections validated via SNI

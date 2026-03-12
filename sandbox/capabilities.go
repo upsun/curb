@@ -11,7 +11,7 @@ var (
 // Capabilities holds the results of probing system capabilities.
 type Capabilities struct {
 	UserNS      error  // nil = ok, non-nil = fatal.
-	MountNS     error  // nil = ok, non-nil = degraded (no sub-path denials).
+	MountNS     error  // nil = ok, non-nil = Landlock-only (no sub-path denials).
 	NetNS       error  // nil = ok, non-nil = fatal if --allow-domains used.
 	TUN         error  // nil = ok, non-nil = fatal if --allow-domains used.
 	PidNS       error  // nil = ok, non-nil = degraded (no PID isolation).

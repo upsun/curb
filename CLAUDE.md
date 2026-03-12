@@ -24,7 +24,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 
 ## Key Design Decisions
 
-- Mount namespace (pivot_root) is the primary FS enforcement: bind-mount allowed paths into a new root, pivot_root into it. Provides default-deny (ENOENT). Landlock layers on top as optional hardening when available. Landlock-only is a degraded fallback.
+- Mount namespace (pivot_root) is the preferred FS enforcement: bind-mount allowed paths into a new root, pivot_root into it. Provides default-deny (ENOENT) and supports sub-path denials via overmount. Landlock layers on top when available for defense-in-depth. Landlock-only is a capable alternative (default-deny via EACCES) but cannot enforce sub-path denials (`!` exclusions under an allowed parent).
 - Landlock requires different access rights for files vs directories. `DefaultROFiles` and `DefaultROPaths` are separate. `splitDirsFiles()` in plan.go classifies user-added paths via `os.Stat()`.
 - `/etc` is not a blanket default. Only specific files/dirs are exposed (ssl, ca-certificates, ld.so, resolv.conf, hosts, passwd, etc.). Use `--read /etc` to restore full access.
 - `/proc` is safe as default RO: user namespace blocks ptrace-guarded access across namespace boundaries.
