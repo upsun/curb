@@ -173,13 +173,19 @@ func TestBuildDegradedPlan_NoISandboxEnv(t *testing.T) {
 
 // --- BuildPlan ---
 
-func TestBuildPlan_LandlockDegraded(t *testing.T) {
+func TestBuildPlan_NoLandlock_Error(t *testing.T) {
 	caps := &Capabilities{LandlockABI: 0}
-	plan, err := BuildPlan(minCfg(), caps)
+	_, err := BuildPlan(minCfg(), caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "landlock unavailable")
+}
+
+func TestBuildPlan_NoLandlock_NoFSRestrict(t *testing.T) {
+	caps := &Capabilities{LandlockABI: 0}
+	cfg := &config.Config{ECHMode: "strip", NoFSRestrict: true, NoExecRestrict: true}
+	plan, err := BuildPlan(cfg, caps)
 	require.NoError(t, err)
 	defer plan.Cleanup()
-
-	assert.True(t, hasDegradedLayer(plan, "landlock"), "expect landlock degraded layer when ABI=0")
 }
 
 func TestBuildPlan_NoExecRestrict(t *testing.T) {

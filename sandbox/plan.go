@@ -127,12 +127,9 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			Impact: "PID isolation unavailable: the sandboxed process can see host PIDs.",
 		})
 	}
-	if caps.LandlockABI == 0 {
-		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-			Layer:  "landlock",
-			Reason: "not available (requires kernel 5.13+)",
-			Impact: landlockWarnMessage(),
-		})
+	// TODO: fall back to mount namespace restrictions when Landlock is unavailable.
+	if caps.LandlockABI == 0 && (!cfg.NoFSRestrict || !cfg.NoExecRestrict) {
+		return nil, fmt.Errorf("landlock unavailable: filesystem and exec restrictions cannot be enforced; use --write '*' --exec '*' to disable them")
 	}
 
 	plan.Quiet = cfg.Quiet

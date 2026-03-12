@@ -40,8 +40,3 @@ func tunIoctlErrMessage() string {
 	return `/dev/net/tun exists but TAP creation failed inside a user+network namespace.`
 }
 
-// landlockWarnMessage returns a warning for missing Landlock support.
-func landlockWarnMessage() string {
-	return `Landlock is not available (requires kernel 5.13+).
-  Filesystem restrictions will use mount namespace and seccomp-bpf only (weaker).`
-}

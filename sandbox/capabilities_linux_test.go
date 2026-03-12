@@ -49,7 +49,7 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 	assert.False(t, plan.NetEnabled, "no --allow means no network")
 }
 
-func TestBuildPlan_NoLandlock(t *testing.T) {
+func TestBuildPlan_NoLandlock_Fatal(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		MountNS:     nil,
@@ -58,12 +58,9 @@ func TestBuildPlan_NoLandlock(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	plan, err := BuildPlan(cfg, caps)
-	require.NoError(t, err)
-	defer plan.Cleanup()
-
-	assert.Len(t, plan.DegradedLayers, 1)
-	assert.Equal(t, "landlock", plan.DegradedLayers[0].Layer)
+	_, err := BuildPlan(cfg, caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "landlock unavailable")
 }
 
 func TestBuildPlan_NoMountNS_NoHide(t *testing.T) {
@@ -215,7 +212,8 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
-		LandlockABI: 0,
+		PidNS:       assert.AnError,
+		LandlockABI: 4,
 		KernelInfo:  "5.10.0-test",
 	}
 	cfg := &config.Config{}
@@ -229,5 +227,5 @@ func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	output := buf.String()
 
 	assert.Contains(t, output, "enforcement: degraded")
-	assert.Contains(t, output, "warning: landlock:")
+	assert.Contains(t, output, "warning: pid namespace:")
 }

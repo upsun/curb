@@ -88,6 +88,9 @@ Use -- before the command when it has its own flags.`,
 			} else {
 				logger.Info("env: deny-by-default.")
 			}
+			for _, d := range plan.DegradedLayers {
+				logger.Warn("%s: %s", d.Layer, d.Impact)
+			}
 
 			exitCode, err := sandbox.StartSandbox(plan)
 			plan.Cleanup()

@@ -13,10 +13,6 @@ import (
 // Namespace isolation, filesystem restrictions, and network filtering
 // are not available.
 func StartSandbox(plan *SandboxPlan) (int, error) {
-	for _, d := range plan.DegradedLayers {
-		plan.Logger.Warn("%s: %s", d.Layer, d.Reason)
-	}
-
 	env := plan.ResolveEnv()
 
 	exe, err := exec.LookPath(plan.Command[0])
