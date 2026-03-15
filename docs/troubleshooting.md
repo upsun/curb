@@ -29,6 +29,14 @@ sudo chmod 0666 /dev/net/tun
 
 In containers, `/dev/net/tun` must be provided by the container runtime (e.g. `--device /dev/net/tun` in Docker/Podman). It is not in the [OCI default device list](https://github.com/opencontainers/runtime-spec/blob/main/config-linux.md).
 
+## Running in Docker
+
+Docker's default settings should work — no `--security-opt` flags are needed. Docker containers share the host kernel, so namespace and Landlock support depends on the host, not the container image.
+
+For TUN mode (`--tun always` or `--proxy off --domains`), pass `--device /dev/net/tun` to `docker run`.
+
+Run `./test/distro-smoke.sh` to verify curb works across Alpine, Debian, Fedora, Ubuntu, and Arch Linux containers. See the script header for options.
+
 ## AppArmor on Ubuntu 24.04+
 
 Ubuntu 24.04+ restricts capabilities in user namespaces via the `unprivileged_userns` AppArmor profile. The default profile contains `audit deny capability,` which blocks all capability-gated operations including mount and TAP device creation.
