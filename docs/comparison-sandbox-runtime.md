@@ -16,17 +16,16 @@ Key practical differences:
 
 - curb starts ~6x faster (35 ms vs 208 ms), which matters when sandboxing
   many short-lived commands (e.g. repeated tool calls in an agent loop).
-- curb's network filtering is transparent — programs do not need proxy
-  support. srt requires programs to respect `HTTP_PROXY` / `ALL_PROXY`
-  environment variables; programs that ignore them get no network.
+- curb's default network filtering uses a MITM proxy (like srt), but
+  programs that ignore `HTTPS_PROXY` get no network (isolated namespace)
+  rather than failing silently. With `--tun always`, curb additionally
+  provides transparent packet-level filtering for non-HTTP programs.
 - curb has no external dependencies (no bubblewrap, socat, ripgrep, or
   Node.js runtime to install).
-- srt isolates the PID namespace, so the sandboxed process cannot see or
-  signal host processes. curb does not, but its user namespace means the
-  child has no capabilities in the host namespace, limiting what it can do
-  with host PIDs. srt's PID namespace requires `CLONE_NEWPID`, which may
-  not be available in nested or restricted environments (srt can be configured
-  with a weaker sandbox mode in this case).
+- Both isolate the PID namespace when available. curb skips PID NS in
+  proxy-only mode (the Go runtime must stay alive for the fd-passing
+  accept loop). srt's PID namespace requires `CLONE_NEWPID`, which may
+  not be available in nested or restricted environments.
 - srt ships a curated denylist of files an AI agent should not read
   (`.bashrc`, `.gitconfig`, `.git/hooks`, etc.). curb's allow-only model
   is stricter but requires the caller to specify what should be accessible.
@@ -51,26 +50,21 @@ allowlist for each use case.
 
 ## Network
 
-|  | srt | curb |
-|---|---|---|
-| Mechanism | `bwrap --unshare-net`, then HTTP + SOCKS5 proxies exposed as Unix sockets, bridged in via socat | User namespace + network namespace + TAP device + userspace TCP/IP stack (gvisor netstack) |
-| Traffic routing | Via `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` env vars | Transparent: the TAP is the child's only network interface |
-| Program compatibility | Only programs that respect proxy env vars | All programs |
-| Protocol coverage | HTTP via HTTP proxy, other TCP via SOCKS5 | All IP traffic (full TCP/IP stack) |
-| Filtering signal | Proxy protocol: CONNECT hostname / SOCKS5 destination | DNS responses, TLS SNI, HTTP Host header |
-| ECH handling | Not applicable (filtering happens before TLS) | Can strip, allow, or deny Encrypted Client Hello |
-| Localhost forwarding | No | `--domains localhost` forwards loopback traffic to host |
+|  | srt | curb (proxy, default) | curb (TUN, `--tun always`) |
+|---|---|---|---|
+| Mechanism | `bwrap --unshare-net`, HTTP + SOCKS5 proxies via Unix sockets + socat | MITM proxy in parent, connection fds passed via SCM_RIGHTS | MITM proxy + TAP device + userspace TCP/IP (gvisor netstack) |
+| Traffic routing | Via `HTTP_PROXY` / `ALL_PROXY` env vars | Via `HTTPS_PROXY` / `HTTP_PROXY` env vars | Proxy env vars + transparent TAP for non-proxy traffic |
+| Non-proxy programs | No network (no interface) | No network (empty net NS, loopback only) | Domain-filtered via netstack (DNS, SNI, Host) |
+| Protocol coverage | HTTP via HTTP proxy, other TCP via SOCKS5 | HTTP/HTTPS only | All IP traffic (full TCP/IP stack) |
+| Filtering signal | CONNECT hostname / SOCKS5 destination | CONNECT hostname / HTTP Host (TLS terminated) | Proxy + DNS + TLS SNI + HTTP Host |
+| ECH handling | N/A (proxy sees hostname) | N/A (proxy terminates TLS) | Netstack: strip, allow, or deny ECH |
+| Localhost forwarding | No | `--domains localhost` | `--domains localhost` |
 
-**srt advantage**: srt filters at the proxy protocol level, so it knows the
-destination hostname from the explicit CONNECT or SOCKS5 request without
-inspecting TLS. curb infers the hostname from packet contents (DNS, SNI,
-Host header) and must handle evasion techniques (ECH, missing SNI, SNI
-spoofing) explicitly — though it does so successfully in testing
-(see `docs/test-reports/`).
-
-**srt advantage**: programs that ignore proxy env vars get zero network access
-(there is no network interface). This is a hard block with no bypass path,
-though it also means legitimate programs that do not support proxies will fail.
+Both curb (default) and srt use HTTP proxies for domain filtering. The key
+differences: curb's proxy terminates TLS (MITM), seeing the actual request
+regardless of ECH. srt's proxy relies on the CONNECT hostname without
+inspecting TLS content. curb's `--tun always` mode adds transparent
+packet-level filtering for programs that ignore proxy env vars.
 
 ## Process isolation
 
@@ -129,13 +123,13 @@ networking, and runs the command. No intermediate processes are spawned.
 
 Benchmarks run via `make bench` (see `bench/bench_linux_test.go`). These
 measure end-to-end time including sandbox setup, command execution, and
-teardown.
+teardown. curb is benchmarked in both proxy mode (default) and TUN mode.
 
-| Benchmark | curb | srt | Ratio |
-|---|---|---|---|
-| Boot (`true`) | ~35 ms | ~208 ms | 6x |
-| HTTP single request | ~61 ms | ~251 ms | 4x |
-| HTTP batch (10 requests) | ~111 ms | ~315 ms | 2.8x |
+| Benchmark | curb (proxy) | curb (TUN) | srt | Proxy vs srt |
+|---|---|---|---|---|
+| Boot (`true`) | ~40 ms | - | ~212 ms | 5.3x |
+| HTTP single request | ~43 ms | ~65 ms | ~226 ms | 5.3x |
+| HTTP batch (10 requests) | ~89 ms | ~113 ms | ~291 ms | 3.3x |
 
 The boot benchmark runs `/usr/bin/true` inside the sandbox, isolating
 setup/teardown overhead. The HTTP benchmarks run `curl` against a local HTTP
@@ -145,13 +139,15 @@ The batch benchmark makes 10 requests within a single sandbox invocation,
 so boot cost is paid once. Subtracting boot time gives per-request network
 overhead:
 
-- curb: ~7.6 ms/request
-- srt: ~10.7 ms/request
+- curb (proxy): ~4.9 ms/request
+- curb (TUN): ~7.3 ms/request
+- srt: ~7.9 ms/request
 
-Boot is the dominant difference (6x). Per-request network overhead is in the
-same ballpark — curb's netstack path is roughly 30% faster than srt's proxy
-path. For long-running processes that make many requests, the startup cost matters
-less and overall performance converges.
+Boot is the dominant difference (5x). Proxy mode is the fastest network path
+because it avoids the userspace TCP/IP stack. TUN mode adds ~50% overhead
+per request for the defense-in-depth filtering layer. For long-running
+processes that make many requests, the startup cost matters less and overall
+performance converges.
 
 ## Summary
 
@@ -160,10 +156,12 @@ tradeoffs:
 
 - **Filesystem**: allow-only (curb) vs deny-only (srt). Stricter by default
   vs easier to configure for broad compatibility.
-- **Network**: packet-level (curb) vs proxy-level (srt). Transparent to all
-  programs vs simpler filtering logic.
-- **Evasion surface**: srt avoids TLS-level evasion by design. curb handles
-  these at the packet level (ECH stripping, SNI validation, missing-SNI
-  rejection) and covers all protocols.
+- **Network**: both use HTTP proxies for domain filtering by default. curb's
+  MITM proxy terminates TLS, making filtering immune to ECH. curb can
+  optionally add transparent packet-level filtering (`--tun always`) for
+  non-HTTP programs. srt uses SOCKS5 for non-HTTP TCP.
+- **Non-proxy programs**: in both tools, programs ignoring proxy env vars get
+  no network (empty namespace). curb's `--tun always` mode is the exception,
+  providing domain-filtered access for all programs.
 - **Dependencies**: curb uses kernel interfaces directly with no runtime
   dependencies. srt depends on bubblewrap, socat, ripgrep, and Node.js.

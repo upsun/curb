@@ -17,7 +17,8 @@ func NewRootCmd() *cobra.Command {
 		Short: "Sandbox a process with filesystem, network, and environment restrictions",
 		Long: `curb runs a command inside an unprivileged sandbox with:
   - Filesystem restrictions (Landlock + mount namespace)
-  - Domain-level network filtering (userspace TCP/IP)
+  - Network filtering by domain (--domains) or IP (--ips) via userspace TCP/IP
+  - Unrestricted network pass-through (--unrestricted-net) with FS sandbox only
   - Executable control (Landlock EXECUTE)
   - Environment sanitization (deny-by-default)
 
@@ -66,12 +67,24 @@ Use -- before the command when it has its own flags.`,
 			}
 
 			// Startup summary.
-			if plan.NetEnabled && len(plan.AllowedDomains) > 0 {
-				logger.Info("net: allowed domains: %s.", strings.Join(plan.AllowedDomains, ", "))
-			} else if plan.NetEnabled {
+			if plan.ProxyEnabled {
+				logger.Info("proxy: on (127.0.0.1:%d).", plan.ProxyPort)
+			}
+			if plan.UnrestrictedNet {
+				logger.Info("net: unrestricted (--unrestricted-net).")
+			} else if (plan.NetEnabled || plan.ProxyEnabled) && (len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0) {
+				var parts []string
+				if len(plan.AllowedDomains) > 0 {
+					parts = append(parts, "domains: "+strings.Join(plan.AllowedDomains, ", "))
+				}
+				if len(plan.AllowedIPs) > 0 {
+					parts = append(parts, "IPs: "+strings.Join(plan.AllowedIPs, ", "))
+				}
+				logger.Info("net: allowed %s.", strings.Join(parts, "; "))
+			} else if plan.NetEnabled || plan.ProxyEnabled {
 				logger.Info("net: localhost only.")
 			} else {
-				logger.Info("net: disabled (no --domains).")
+				logger.Info("net: disabled (no --domains or --ips).")
 			}
 			if plan.PidNS {
 				logger.Info("pid: isolated.")
@@ -124,8 +137,12 @@ Use -- before the command when it has its own flags.`,
 func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 
-	// Domain filtering.
+	// Network filtering.
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
+	f.StringSlice("ips", nil, "allowed IP addresses or CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16, ::1)")
+	f.Bool("unrestricted-net", false, "allow unrestricted network access (no filtering)")
+	f.String("proxy", "on", "MITM proxy for HTTP/HTTPS filtering: on, off")
+	f.String("tun", "auto", "TUN/TAP netstack layer: auto, always")
 
 	// Filesystem (supports glob patterns and ! exclusions).
 	f.StringSlice("read", nil, "readable paths (! prefix denies/hides, '!*' clears all)")

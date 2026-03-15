@@ -17,7 +17,7 @@ sudo sysctl --system
 
 ## /dev/net/tun not available
 
-`/dev/net/tun` is required for `--domains`. Without it, curb can only offer all-or-nothing network isolation.
+`/dev/net/tun` is required for `--tun always` or `--proxy off --domains`. The default proxy mode (`--proxy on`) does not need `/dev/net/tun`.
 
 To create the device node (requires root):
 

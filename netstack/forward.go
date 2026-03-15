@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/upsun/curb/clog"
@@ -58,6 +59,17 @@ func filterLogger(filter *FilterConfig) *clog.Logger {
 	return filter.Logger
 }
 
+// toNetIP converts a gvisor tcpip.Address to a net/netip.Addr.
+func toNetIP(addr tcpip.Address) (netip.Addr, bool) {
+	if addr.Len() == 4 {
+		return netip.AddrFrom4(addr.As4()), true
+	}
+	if addr.Len() == 16 {
+		return netip.AddrFrom16(addr.As16()), true
+	}
+	return netip.Addr{}, false
+}
+
 // rejectReason returns a non-empty string if the TCP connection can be
 // rejected with RST before accepting, based on port and IP alone. The
 // returned string describes why the connection was rejected (for logging).
@@ -69,12 +81,22 @@ func rejectReason(id stack.TransportEndpointID, filter *FilterConfig, dnsFilter 
 
 	loopback := isLoopback(id.LocalAddress)
 
-	// Localhost-only mode (filter set, no Check): reject all non-loopback.
-	if filter.Check == nil {
+	// Localhost-only mode (filter set, no Check and no CheckIP): reject all non-loopback.
+	if filter.Check == nil && filter.CheckIP == nil {
 		if loopback {
 			return ""
 		}
 		return "localhost-only mode"
+	}
+
+	// IP allowlist: allow any port.
+	if filter.CheckIP != nil {
+		if nip, ok := toNetIP(id.LocalAddress); ok && filter.CheckIP(nip) {
+			if loopback && !filter.allowsLoopback(addrString(id.LocalAddress)) {
+				return "loopback not allowed"
+			}
+			return ""
+		}
 	}
 
 	// Loopback: reject if not allowed (except DNS, which is always filtered).
@@ -155,6 +177,20 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			return
 		}
 
+		// IP-allowlisted: forward directly on any port, no domain filtering.
+		if filter != nil && filter.CheckIP != nil {
+			if nip, ok := toNetIP(id.LocalAddress); ok && filter.CheckIP(nip) {
+				remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
+				if dialErr != nil {
+					logger.Warn("tcp forward %s: %v", dst, dialErr)
+					_ = local.Close()
+					return
+				}
+				go relay(local, remote, dst, logger)
+				return
+			}
+		}
+
 		// When filtering is active, route by port.
 		if dnsFilter != nil {
 			switch id.LocalPort {
@@ -232,6 +268,20 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			logger.Debug("udp loopback dropped: %s", dst)
 			_ = local.Close()
 			return true
+		}
+
+		// IP-allowlisted: forward directly on any port.
+		if filter != nil && filter.CheckIP != nil {
+			if nip, ok := toNetIP(id.LocalAddress); ok && filter.CheckIP(nip) {
+				remote, dialErr := net.Dial("udp", dst)
+				if dialErr != nil {
+					logger.Warn("udp forward %s: %v", dst, dialErr)
+					ep.Close()
+					return true
+				}
+				go relayUDP(local, remote)
+				return true
+			}
 		}
 
 		// When filtering is active, only DNS is allowed.

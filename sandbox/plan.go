@@ -6,6 +6,8 @@ import (
 	"io"
 	"maps"
 	"os"
+	"math/rand/v2"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -15,6 +17,8 @@ import (
 
 	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
+	"github.com/upsun/curb/policy"
+	"github.com/upsun/curb/proxy"
 )
 
 const (
@@ -57,21 +61,29 @@ type SandboxPlan struct {
 	UsePivotRoot   bool
 	UseLandlock    bool
 	PidNS          bool
-	NetEnabled     bool
-	AllowedDomains []string
-	AllowLocalhost bool
-	ECHMode        string
-	RequireSNI     bool
-	AllowHTTP      bool
-	EnvSet         map[string]string
-	EnvPassthrough []string
-	DegradedLayers []DegradedLayer
-	TempDir        string
-	NoFSRestrict   bool
-	Quiet          bool
-	Command        []string
-	Caps           *Capabilities
-	Logger         *clog.Logger
+	NetEnabled      bool
+	UnrestrictedNet bool
+	AllowedDomains  []string
+	AllowedIPs      []string
+	AllowLocalhost  bool
+	ECHMode          string
+	RequireSNI       bool
+	AllowHTTP        bool
+	ProxyEnabled     bool
+	ProxyPort        int
+	TUNMode          string
+	CACertPath       string // Host path to combined CA bundle (in TempDir).
+	SystemCACertPath string // System CA file path to bind-mount over.
+	CA               *proxy.CA
+	EnvSet           map[string]string
+	EnvPassthrough   []string
+	DegradedLayers   []DegradedLayer
+	TempDir          string
+	NoFSRestrict     bool
+	Quiet            bool
+	Command          []string
+	Caps             *Capabilities
+	Logger           *clog.Logger
 }
 
 // ChildConfig is the serializable config sent from parent to child over a pipe.
@@ -91,7 +103,12 @@ type ChildConfig struct {
 	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
 	PidNS          bool     `json:"pid_ns,omitempty"`
 	NetEnabled     bool     `json:"net_enabled"`
+	ProxyEnabled   bool     `json:"proxy_enabled,omitempty"`
+	ProxyPort      int      `json:"proxy_port,omitempty"`
+	CACertFile     string   `json:"ca_cert_file,omitempty"`
+	CACertMountDst string   `json:"ca_cert_mount_dst,omitempty"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	AllowedIPs     []string `json:"allowed_ips,omitempty"`
 	Quiet          bool     `json:"quiet,omitempty"`
 	TempDir        string   `json:"temp_dir"`
 }
@@ -108,10 +125,22 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSErrMessage())
 	}
 
-	if len(cfg.AllowedDomains) > 0 {
+	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
+	proxyEnabled := hasFiltering && cfg.ProxyMode != "off"
+
+	if hasFiltering {
 		if caps.NetNS != nil {
 			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSErrMessage())
 		}
+	}
+
+	// Netstack is required when the proxy is off (netstack is the sole filter),
+	// or when --tun always for defense-in-depth alongside the proxy.
+	needsNetstack := hasFiltering && !proxyEnabled
+	if cfg.TUNMode == "always" && hasFiltering && proxyEnabled && caps.TUN == nil {
+		needsNetstack = true
+	}
+	if needsNetstack {
 		if caps.TUN != nil {
 			msg := tunDeviceErrMessage()
 			if errors.Is(caps.TUN, errTUNIoctl) {
@@ -273,26 +302,62 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	}
 
 	// Network policy.
-	plan.NetEnabled = len(cfg.AllowedDomains) > 0
-	if plan.NetEnabled && !cfg.NoFSRestrict {
+	plan.UnrestrictedNet = cfg.UnrestrictedNet
+	plan.AllowedDomains = cfg.AllowedDomains
+	plan.AllowedIPs = cfg.AllowedIPs
+	plan.TUNMode = cfg.TUNMode
+	plan.NetEnabled = needsNetstack
+	if !cfg.NoFSRestrict && plan.NetEnabled {
 		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
-		// On systemd systems, /etc/resolv.conf is a symlink to /run/systemd/resolve/,
-		// which Landlock would otherwise block.
 		if dir := resolvConfDir(); dir != "" {
 			plan.ROPaths = append(plan.ROPaths, dir)
 		}
 	}
-	plan.AllowedDomains = cfg.AllowedDomains
-	// Wildcard or "localhost" in allowed domains implies localhost access:
-	// if all external traffic is allowed, blocking localhost is inconsistent.
-	// "localhost" is special-cased because clients typically connect to
-	// 127.0.0.1 directly without a DNS lookup, so the DNS cache approach
-	// does not cover it.
+	// Wildcard or "localhost" in allowed domains implies localhost access.
 	plan.AllowLocalhost = slices.Contains(cfg.AllowedDomains, "*") ||
 		slices.Contains(cfg.AllowedDomains, "localhost")
+	// Loopback IPs in the allowlist also imply localhost forwarding.
+	if len(cfg.AllowedIPs) > 0 {
+		ipMatcher := policy.NewIPMatcher(cfg.AllowedIPs)
+		if ipMatcher.ContainsLoopback() {
+			plan.AllowLocalhost = true
+		}
+	}
 	plan.ECHMode = cfg.ECHMode
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
+
+	// Proxy setup.
+	if proxyEnabled {
+		plan.ProxyEnabled = true
+		plan.ProxyPort = pickProxyPort()
+		if plan.NetEnabled {
+			// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
+			plan.AllowLocalhost = true
+		}
+		if cfg.TUNMode == "always" && hasFiltering && caps.TUN != nil && !plan.NetEnabled {
+			plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+				Layer:  "TUN/TAP hardening",
+				Reason: caps.TUN.Error(),
+				Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
+			})
+		}
+	}
+
+	// CA generation for proxy.
+	if plan.ProxyEnabled {
+		ca, caErr := proxy.NewCA()
+		if caErr != nil {
+			return nil, fmt.Errorf("generating ephemeral CA: %w", caErr)
+		}
+		plan.CA = ca
+		bundlePath, systemPath, caErr := proxy.WriteCombinedBundle(tmpDir, ca)
+		if caErr != nil {
+			return nil, fmt.Errorf("writing CA bundle: %w", caErr)
+		}
+		plan.CACertPath = bundlePath
+		plan.SystemCACertPath = systemPath
+	}
 
 	// Environment policy.
 	applyEnvPolicy(plan, cfg, tmpDir)
@@ -343,7 +408,12 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		NoFSRestrict:   p.NoFSRestrict,
 		PidNS:          p.PidNS,
 		NetEnabled:     p.NetEnabled,
+		ProxyEnabled:   p.ProxyEnabled,
+		ProxyPort:      p.ProxyPort,
+		CACertFile:     p.CACertPath,
+		CACertMountDst: p.SystemCACertPath,
 		AllowedDomains: p.AllowedDomains,
+		AllowedIPs:     p.AllowedIPs,
 		Quiet:          p.Quiet,
 		TempDir:        p.TempDir,
 	}
@@ -444,32 +514,48 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 
 	// Network.
 	ln("  network:")
-	if p.NetEnabled && len(p.AllowedDomains) > 0 {
-		pr("    allowed:    %s\n", strings.Join(p.AllowedDomains, " "))
-	} else if p.NetEnabled && p.AllowLocalhost {
-		ln("    allowed:    localhost only (non-loopback traffic dropped)")
-	} else if p.NetEnabled {
-		ln("    allowed:    none")
+	if p.UnrestrictedNet {
+		ln("    mode:       unrestricted (--unrestricted-net)")
 	} else {
-		ln("    allowed:    none (no network interface)")
-	}
-	if p.AllowLocalhost {
-		ln("    localhost:  forwarded to host")
-	}
-	if p.NetEnabled && len(p.AllowedDomains) > 0 {
-		pr("    tls (443):  SNI filtered, ECH %s", p.ECHMode)
-		if p.RequireSNI {
-			pr(", SNI required")
-		}
-		pr("\n")
-		if p.AllowHTTP {
-			ln("    http (80):  Host filtered")
+		if p.ProxyEnabled {
+			pr("    proxy:      on (127.0.0.1:%d)\n", p.ProxyPort)
 		} else {
-			ln("    http (80):  blocked (use --allow-http to enable)")
+			ln("    proxy:      off")
 		}
-		ln("    other:      dropped")
+		tunStatus := "off"
+		if p.NetEnabled {
+			tunStatus = "on"
+		}
+		pr("    tun:        %s (%s)\n", p.TUNMode, tunStatus)
+		if p.CACertPath != "" {
+			pr("    ca cert:    %s\n", p.CACertPath)
+		}
+		if len(p.AllowedDomains) > 0 {
+			pr("    domains:    %s\n", strings.Join(p.AllowedDomains, ", "))
+		}
+		if len(p.AllowedIPs) > 0 {
+			pr("    IPs:        %s\n", strings.Join(p.AllowedIPs, ", "))
+		}
+		if !p.ProxyEnabled && !p.NetEnabled && len(p.AllowedDomains) == 0 && len(p.AllowedIPs) == 0 {
+			ln("    allowed:    none (no network interface)")
+		}
+		if p.AllowLocalhost {
+			ln("    localhost:  forwarded to host")
+		}
+		if p.NetEnabled && len(p.AllowedDomains) > 0 {
+			pr("    tls (443):  SNI filtered, ECH %s", p.ECHMode)
+			if p.RequireSNI {
+				pr(", SNI required")
+			}
+			pr("\n")
+			if p.AllowHTTP {
+				ln("    http (80):  Host filtered")
+			} else {
+				ln("    http (80):  blocked (use --allow-http to enable)")
+			}
+		}
+		ln("    blocked:    everything else")
 	}
-	ln("    blocked:    everything else")
 
 	// Environment.
 	ln("  environment:")
@@ -556,6 +642,22 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	} else {
 		plan.EnvPassthrough = config.ApplyExclusions(config.SafePassthroughVars, excludeArgs(envRemoves))
 		plan.EnvPassthrough = append(plan.EnvPassthrough, envAdds...)
+	}
+
+	// Proxy env vars.
+	if plan.ProxyEnabled {
+		proxyURL := fmt.Sprintf("http://127.0.0.1:%d", plan.ProxyPort)
+		plan.EnvSet["HTTPS_PROXY"] = proxyURL
+		plan.EnvSet["HTTP_PROXY"] = proxyURL
+		plan.EnvSet["https_proxy"] = proxyURL
+		plan.EnvSet["http_proxy"] = proxyURL
+		if plan.CACertPath != "" {
+			plan.EnvSet["SSL_CERT_FILE"] = plan.CACertPath
+			plan.EnvSet["CURL_CA_BUNDLE"] = plan.CACertPath
+			plan.EnvSet["REQUESTS_CA_BUNDLE"] = plan.CACertPath
+			plan.EnvSet["NODE_EXTRA_CA_CERTS"] = plan.CACertPath
+			plan.EnvSet["SSL_CERT_DIR"] = "" // Clear to prevent stale dir overriding the bundle file.
+		}
 	}
 }
 
@@ -807,6 +909,21 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 
 	plan.Command = cfg.Command
 	return plan, nil
+}
+
+// pickProxyPort picks a random port for the proxy listener inside the sandbox.
+// The port is in the ephemeral range (49152-65535).
+func pickProxyPort() int {
+	// Use a random port. In the isolated net NS, collisions are impossible
+	// (nothing else is listening). The port is fixed at plan time so it can
+	// be passed to the child via ChildConfig.
+	return 49152 + rand.IntN(16384)
+}
+
+// listenProxyPort creates a TCP listener on the proxy port.
+// Used by the parent in proxy+TUN mode.
+func listenProxyPort(port int) (net.Listener, error) {
+	return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 }
 
 func printCap(w io.Writer, name string, err error, info string) {

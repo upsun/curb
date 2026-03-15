@@ -66,12 +66,17 @@ func requireUserNS(b *testing.B) {
 	}
 }
 
-func requireNetNS(b *testing.B) {
+func requireProxyNS(b *testing.B) {
 	b.Helper()
 	requireUserNS(b)
 	if testCaps.NetNS != nil {
 		b.Skipf("network namespaces unavailable: %v", testCaps.NetNS)
 	}
+}
+
+func requireNetNS(b *testing.B) {
+	b.Helper()
+	requireProxyNS(b)
 	if testCaps.TUN != nil {
 		b.Skipf("TUN/TAP unavailable: %v", testCaps.TUN)
 	}
@@ -205,12 +210,31 @@ func BenchmarkHTTPSingle(b *testing.B) {
 	requireCurl(b)
 	port := httpBenchServer(b)
 
-	b.Run("curb", func(b *testing.B) {
-		requireNetNS(b)
+	b.Run("curb-proxy", func(b *testing.B) {
+		requireProxyNS(b)
 		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
 		for b.Loop() {
 			cmd := exec.Command(curbBin,
 				"--domains", "localhost",
+				"--allow-http",
+				"--write", "*",
+				"--exec", "*",
+				"--", curlBin, "-so", "/dev/null", url,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				b.Fatalf("curb: %v\n%s", err, out)
+			}
+		}
+	})
+
+	b.Run("curb-tun", func(b *testing.B) {
+		requireNetNS(b)
+		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
+		for b.Loop() {
+			cmd := exec.Command(curbBin,
+				"--proxy", "off",
+				"--domains", "localhost",
+				"--allow-http",
 				"--write", "*",
 				"--exec", "*",
 				"--", curlBin, "-so", "/dev/null", url,
@@ -251,13 +275,33 @@ func BenchmarkHTTPBatch(b *testing.B) {
 	requireCurl(b)
 	port := httpBenchServer(b)
 
-	b.Run("curb", func(b *testing.B) {
-		requireNetNS(b)
+	b.Run("curb-proxy", func(b *testing.B) {
+		requireProxyNS(b)
 		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
 		shCmd := curlLoop(httpBatchSize, fmt.Sprintf("-so /dev/null %s", url))
 		for b.Loop() {
 			cmd := exec.Command(curbBin,
 				"--domains", "localhost",
+				"--allow-http",
+				"--write", "*",
+				"--exec", "*",
+				"--", "sh", "-c", shCmd,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				b.Fatalf("curb: %v\n%s", err, out)
+			}
+		}
+	})
+
+	b.Run("curb-tun", func(b *testing.B) {
+		requireNetNS(b)
+		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
+		shCmd := curlLoop(httpBatchSize, fmt.Sprintf("-so /dev/null %s", url))
+		for b.Loop() {
+			cmd := exec.Command(curbBin,
+				"--proxy", "off",
+				"--domains", "localhost",
+				"--allow-http",
 				"--write", "*",
 				"--exec", "*",
 				"--", "sh", "-c", shCmd,

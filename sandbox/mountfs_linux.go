@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/upsun/curb/clog"
 )
 
 // mountEntry represents a single bind-mount in the new root.
@@ -137,7 +139,13 @@ func enforceMountNS(cfg *ChildConfig) error {
 			}
 		}
 		if err := syscall.Mount(m.src, dst, "", syscall.MS_BIND, ""); err != nil {
-			return fmt.Errorf("bind-mounting %s: %w", m.src, err)
+			// Bind-mount failure is non-fatal: the path will be absent from
+			// the new root (ENOENT), which is strictly more restrictive.
+			// This handles paths that AppArmor blocks or that have
+			// incompatible mount properties.
+			clog.Warnf("skipping %s: bind mount failed: %v", m.src, err)
+			_ = os.Remove(dst)
+			continue
 		}
 
 		// Remount with desired flags. The kernel ignores MS_RDONLY on the
@@ -185,6 +193,21 @@ func enforceMountNS(cfg *ChildConfig) error {
 	}
 	if err := overmountDeny(newRoot, cfg.DenyExecPaths, syscall.MS_NOEXEC, "deny-exec"); err != nil {
 		return err
+	}
+
+	// Bind-mount combined CA bundle over the system CA path so the proxy's
+	// ephemeral CA is trusted by all programs in the sandbox.
+	if cfg.CACertFile != "" && cfg.CACertMountDst != "" {
+		dst := filepath.Join(newRoot, cfg.CACertMountDst)
+		if _, err := os.Stat(dst); err == nil {
+			if err := syscall.Mount(cfg.CACertFile, dst, "", syscall.MS_BIND, ""); err != nil {
+				return fmt.Errorf("bind-mounting CA bundle: %w", err)
+			}
+			flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+			if err := syscall.Mount("", dst, "", flags, ""); err != nil {
+				return fmt.Errorf("remounting CA bundle read-only: %w", err)
+			}
+		}
 	}
 
 	// Mount /proc (best-effort: fails on hidepid=invisible and similar restrictions).

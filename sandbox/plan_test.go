@@ -262,6 +262,69 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 	assert.False(t, hasDegradedLayer(plan, "filesystem"), "user-chosen --write '*' should not be a degraded layer")
 }
 
+// --- BuildPlan IPs + UnrestrictedNet ---
+
+func TestBuildPlan_IPsEnableNet(t *testing.T) {
+	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
+	plan, err := BuildPlan(cfg, minCaps())
+	if err != nil {
+		t.Skip("network namespaces or TUN not available:", err)
+	}
+	defer plan.Cleanup()
+	assert.True(t, plan.NetEnabled)
+	assert.Equal(t, []string{"10.0.0.1"}, plan.AllowedIPs)
+}
+
+func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
+	cfg := &config.Config{ECHMode: "strip", AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
+	plan, err := BuildPlan(cfg, minCaps())
+	if err != nil {
+		t.Skip("network namespaces or TUN not available:", err)
+	}
+	defer plan.Cleanup()
+	assert.True(t, plan.NetEnabled)
+}
+
+func TestBuildPlan_UnrestrictedNet(t *testing.T) {
+	cfg := &config.Config{ECHMode: "strip", UnrestrictedNet: true}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	assert.True(t, plan.UnrestrictedNet)
+	assert.False(t, plan.NetEnabled)
+}
+
+func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
+	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"127.0.0.1"}}
+	plan, err := BuildPlan(cfg, minCaps())
+	if err != nil {
+		t.Skip("network namespaces or TUN not available:", err)
+	}
+	defer plan.Cleanup()
+	assert.True(t, plan.AllowLocalhost)
+}
+
+func TestBuildPlan_IPsNoLoopback(t *testing.T) {
+	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}}
+	plan, err := BuildPlan(cfg, minCaps())
+	if err != nil {
+		t.Skip("network namespaces or TUN not available:", err)
+	}
+	defer plan.Cleanup()
+	assert.False(t, plan.AllowLocalhost)
+}
+
+func TestBuildPlan_ChildConfig_AllowedIPs(t *testing.T) {
+	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}}
+	plan, err := BuildPlan(cfg, minCaps())
+	if err != nil {
+		t.Skip("network namespaces or TUN not available:", err)
+	}
+	defer plan.Cleanup()
+	cc := plan.childConfig()
+	assert.Equal(t, []string{"10.0.0.1"}, cc.AllowedIPs)
+}
+
 // --- isSubpath ---
 
 func TestIsSubpath(t *testing.T) {

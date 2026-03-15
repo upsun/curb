@@ -22,6 +22,8 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("write", nil, "")
 	f.StringSlice("exec", nil, "")
 	f.StringSlice("env", nil, "")
+	f.StringSlice("ips", nil, "")
+	f.Bool("unrestricted-net", false, "")
 	f.String("ech", "strip", "")
 	f.Bool("allow-no-sni", false, "")
 	f.Bool("allow-http", false, "")
@@ -31,6 +33,8 @@ func newTestCmd(args []string) *cobra.Command {
 	f.BoolP("quiet", "q", false, "")
 	f.Bool("dry-run", false, "")
 	f.String("home", "", "")
+	f.String("proxy", "on", "")
+	f.String("tun", "auto", "")
 
 	cmd.SetArgs(args)
 	_ = cmd.Execute()
@@ -374,6 +378,78 @@ func TestExpandHome_NonTilde(t *testing.T) {
 	result, err := expandHome("/absolute/path")
 	require.NoError(t, err)
 	assert.Equal(t, "/absolute/path", result)
+}
+
+func TestFromFlags_IPsAndUnrestrictedNet(t *testing.T) {
+	cmd := newTestCmd([]string{"--ips", "10.0.0.1,192.168.0.0/16"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.1", "192.168.0.0/16"}, cfg.AllowedIPs)
+	assert.False(t, cfg.UnrestrictedNet)
+}
+
+func TestFromFlags_UnrestrictedNet(t *testing.T) {
+	cmd := newTestCmd([]string{"--unrestricted-net"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+	assert.True(t, cfg.UnrestrictedNet)
+}
+
+func TestFromFlags_UnrestrictedNetWithDomains(t *testing.T) {
+	cmd := newTestCmd([]string{"--unrestricted-net", "--domains", "example.com"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--unrestricted-net cannot be combined")
+}
+
+func TestFromFlags_UnrestrictedNetWithIPs(t *testing.T) {
+	cmd := newTestCmd([]string{"--unrestricted-net", "--ips", "10.0.0.1"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--unrestricted-net cannot be combined")
+}
+
+func TestFromFlags_InvalidDomain(t *testing.T) {
+	cmd := newTestCmd([]string{"--domains", "http://example.com"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "looks like a URL")
+}
+
+func TestFromFlags_InvalidIP(t *testing.T) {
+	cmd := newTestCmd([]string{"--ips", "not-an-ip"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a valid IP")
+}
+
+func TestFromFlags_DomainIsIP(t *testing.T) {
+	cmd := newTestCmd([]string{"--domains", "192.168.1.1"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "use --ips instead")
+}
+
+func TestMergeEnv_IPsAdditive(t *testing.T) {
+	cmd := newTestCmd([]string{"--ips", "10.0.0.1"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_IPS", "10.0.0.2")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, cfg.AllowedIPs)
+}
+
+func TestMergeEnv_UnrestrictedNet(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_UNRESTRICTED_NET", "1")
+	MergeEnv(cfg, cmd)
+
+	assert.True(t, cfg.UnrestrictedNet)
 }
 
 func TestSplitComma(t *testing.T) {

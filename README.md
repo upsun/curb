@@ -12,7 +12,7 @@ On non-Linux platforms, curb applies environment sanitization only and warns abo
 go install github.com/upsun/curb@latest
 ```
 
-Requires Go 1.26+ and Linux kernel 3.8+ (user namespaces). Landlock (kernel 5.13+) provides additional hardening when available. Network filtering requires kernel 4.18+ (user + network namespaces) and `/dev/net/tun`.
+Requires Go 1.26+ and Linux kernel 3.8+ (user namespaces). Landlock (kernel 5.13+) provides additional hardening when available. Network filtering requires kernel 4.18+ (user + network namespaces). The default proxy mode needs only network namespaces; the optional TUN/TAP hardening layer also requires `/dev/net/tun`.
 
 ## Quick Start
 
@@ -59,9 +59,13 @@ curb --dry-run make test
 | Flag | Env Var | Description |
 |------|---------|-------------|
 | `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). Bare domains match exactly; use `*.example.com` for subdomains, `*` to allow all, `localhost` for localhost forwarding. |
+| `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
+| `--proxy` | `CURB_PROXY` | MITM proxy for HTTP/HTTPS filtering: `on` (default), `off`. The proxy terminates TLS, making domain filtering immune to ECH. |
+| `--tun` | `CURB_TUN` | TUN/TAP netstack layer: `auto` (default), `always`. With `auto`, TUN is used only when `--proxy off`. With `always`, TUN provides defense-in-depth alongside the proxy. |
+| `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Allow unrestricted network access (no filtering). Cannot combine with `--domains` or `--ips`. |
 | `--allow-http` | `CURB_ALLOW_HTTP` | Allow plaintext HTTP (port 80) when domain filtering is active |
-| `--ech` | `CURB_ECH` | ECH handling mode: `strip` (default, strips ECH from DNS), `allow`, `deny` |
-| `--allow-no-sni` | `CURB_ALLOW_NO_SNI` | Allow TLS connections without SNI (reduces filtering) |
+| `--ech` | `CURB_ECH` | ECH handling mode: `strip` (default, strips ECH from DNS), `allow`, `deny` (TUN mode only) |
+| `--allow-no-sni` | `CURB_ALLOW_NO_SNI` | Allow TLS connections without SNI (reduces filtering, TUN mode only) |
 
 ### Filesystem
 
@@ -109,10 +113,10 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `TMPDIR`, `
 
 | Platform | Restrictions | Notes |
 |----------|-------------|-------|
-| Linux (kernel 5.13+, mount ops) | Full | pivot_root + Landlock + netstack |
-| Linux (kernel 5.13+, no mount ops) | Strong | Landlock only (no pivot_root); blocked paths return EACCES not ENOENT |
-| Linux (kernel 3.8-5.12, mount ops) | Strong | pivot_root only (no Landlock hardening) |
-| Linux (kernel 3.8+, network only) | Network + env | User + network namespaces + netstack |
+| Linux (kernel 5.13+, mount ops) | Full | pivot_root + Landlock + MITM proxy (+ netstack with `--tun always`) |
+| Linux (kernel 5.13+, no mount ops) | Strong | Landlock + MITM proxy; blocked paths return EACCES not ENOENT |
+| Linux (kernel 4.18+, net NS only) | Network + env | MITM proxy for domain filtering; no FS restrictions (use `--write '*' --exec '*'`) |
+| Linux (kernel 3.8-5.12, mount ops) | Strong | pivot_root + MITM proxy (no Landlock hardening) |
 | macOS / Windows | Environment only | Sanitized env; all other restrictions unavailable |
 
 ## Troubleshooting
@@ -125,8 +129,5 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common i
 2. **User namespace**: the child runs as uid 0 in an isolated namespace (no host privileges).
 3. **Mount namespace + pivot_root** (primary FS enforcement): a new root is built from bind-mounted allowed paths. Unmounted paths don't exist (ENOENT). `MS_RDONLY` and `MS_NOEXEC` enforce read-only and no-exec. `!` denials are enforced via overmount (empty tmpfs/`/dev/null` for read denials, `MS_RDONLY` for write denials, `MS_NOEXEC` for exec denials).
 4. **Landlock LSM**: when both are available, Landlock is layered on top of pivot_root for defense-in-depth. On systems where mount operations are blocked (e.g. AppArmor), Landlock provides FS enforcement on its own (default-deny via EACCES). The only limitation without mount namespaces is that sub-path denials (`!` exclusions under an allowed parent) cannot be enforced.
-5. **Network namespace + TAP**: child gets an isolated network with a virtual Ethernet device. A userspace TCP/IP stack (gvisor netstack) on the parent side filters traffic:
-   - DNS queries checked against the domain allowlist
-   - TLS connections validated via SNI
-   - HTTP requests validated via Host header
-   - All other ports dropped
+5. **Network namespace + MITM proxy** (primary network enforcement): child gets an isolated network namespace with only loopback. An ephemeral CA and MITM proxy in the parent process filter HTTP/HTTPS by domain. Programs using `HTTPS_PROXY` get filtered access; programs ignoring it get no network. The proxy terminates TLS, making domain filtering immune to Encrypted Client Hello (ECH).
+6. **TUN/TAP + netstack** (optional hardening, `--tun always`): a userspace TCP/IP stack provides defense-in-depth alongside the proxy. DNS queries, TLS SNI, and HTTP Host headers are filtered. Non-HTTP programs get domain-filtered network instead of a hard block.

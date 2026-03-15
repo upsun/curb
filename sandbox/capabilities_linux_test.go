@@ -157,6 +157,7 @@ func TestBuildPlan_FatalTUN(t *testing.T) {
 	}
 	cfg := &config.Config{
 		AllowedDomains: []string{"example.com"},
+		ProxyMode:      "off", // Without proxy, TUN is required.
 	}
 
 	plan, err := BuildPlan(cfg, caps)

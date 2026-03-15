@@ -36,6 +36,13 @@ func childInit() error {
 	}
 	_ = configFile.Close()
 
+	// Proxy-only mode: the child runs the accept loop and relays fds to the parent.
+	// This must happen before FS enforcement (needs lo interface up).
+	if cfg.ProxyEnabled && !cfg.NetEnabled {
+		// Close sockFile after proxyRelayInit returns (it stays open for fd-passing).
+		return proxyRelayInit(sockFile, &cfg)
+	}
+
 	// Network setup: create TAP and send fd to parent before Landlock
 	// (Landlock would block /dev/net/tun access).
 	if cfg.NetEnabled {
@@ -47,27 +54,8 @@ func childInit() error {
 	_ = sockFile.Close()
 
 	// Filesystem enforcement: pivot_root first, then Landlock.
-	// pivot_root provides default-deny via bind mounts; Landlock hardens on top.
-	if !cfg.NoFSRestrict {
-		if cfg.UsePivotRoot {
-			if err := enforceMountNS(&cfg); err != nil {
-				return fmt.Errorf("mount namespace enforcement: %w", err)
-			}
-		}
-		if cfg.UseLandlock {
-			rules := policy.BuildLandlockRules(policy.LandlockPaths{
-				RODirs:  cfg.ROPaths,
-				ROFiles: cfg.ROFiles,
-				RWDirs:  cfg.RWPaths,
-				RWFiles: cfg.RWFiles,
-				Exec:    cfg.ExecPaths,
-			})
-			if len(rules) > 0 {
-				if err := policy.EnforceLandlock(rules); err != nil {
-					return fmt.Errorf("enforcing landlock: %w", err)
-				}
-			}
-		}
+	if err := enforceFS(&cfg); err != nil {
+		return err
 	}
 
 	if len(cfg.Command) == 0 {
@@ -88,7 +76,13 @@ func childInit() error {
 // pidNSInit acts as PID 1 inside the PID namespace: it forks the target
 // command, forwards signals to it, and reaps orphaned children.
 func pidNSInit(exe string, argv, env []string) error {
-	// Fork+exec the target.
+	return initLoop(exe, argv, env, nil)
+}
+
+// initLoop forks+execs the target command, forwards signals, and reaps
+// children. cleanup (if non-nil) is called after the target exits, before
+// os.Exit. Used by both pidNSInit and proxyRelayInit.
+func initLoop(exe string, argv, env []string, cleanup func()) error {
 	pid, err := syscall.ForkExec(exe, argv, &syscall.ProcAttr{
 		Env:   env,
 		Files: []uintptr{0, 1, 2},
@@ -98,7 +92,6 @@ func pidNSInit(exe string, argv, env []string) error {
 	}
 
 	// Forward all catchable signals (except SIGCHLD) to the target.
-	// SIGCHLD is handled by the reap loop below.
 	sigs := catchableSignals()
 	filtered := make([]os.Signal, 0, len(sigs))
 	for _, s := range sigs {
@@ -115,9 +108,6 @@ func pidNSInit(exe string, argv, env []string) error {
 	}()
 
 	// Reap loop: wait for the target to exit, silently reaping orphans.
-	// Once the target exits, drain remaining zombies (non-blocking) before
-	// exiting. The kernel SIGKILLs any still-running processes in the PID
-	// namespace when PID 1 exits.
 	var targetStatus syscall.WaitStatus
 	targetFound := false
 	for {
@@ -132,7 +122,7 @@ func pidNSInit(exe string, argv, env []string) error {
 			break
 		}
 	}
-	// Drain any zombies that arrived between the target exiting and now.
+	// Drain remaining zombies.
 	for {
 		var ws syscall.WaitStatus
 		wpid, waitErr := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
@@ -144,18 +134,48 @@ func pidNSInit(exe string, argv, env []string) error {
 	signal.Stop(sigCh)
 	close(sigCh)
 
+	if cleanup != nil {
+		cleanup()
+	}
+
 	if !targetFound {
 		os.Exit(1)
 	}
 	if targetStatus.Signaled() {
-		// Re-raise the signal so the parent sees the correct wait status.
 		signal.Reset(targetStatus.Signal())
 		_ = syscall.Kill(syscall.Getpid(), targetStatus.Signal())
-		// Fallback if re-raise doesn't kill us.
 		os.Exit(128 + int(targetStatus.Signal()))
 	}
 	os.Exit(targetStatus.ExitStatus())
 	return nil // Unreachable.
+}
+
+// enforceFS applies filesystem enforcement (pivot_root + Landlock) from the
+// child config. Called from both childInit and proxyRelayInit.
+func enforceFS(cfg *ChildConfig) error {
+	if cfg.NoFSRestrict {
+		return nil
+	}
+	if cfg.UsePivotRoot {
+		if err := enforceMountNS(cfg); err != nil {
+			return fmt.Errorf("mount namespace enforcement: %w", err)
+		}
+	}
+	if cfg.UseLandlock {
+		rules := policy.BuildLandlockRules(policy.LandlockPaths{
+			RODirs:  cfg.ROPaths,
+			ROFiles: cfg.ROFiles,
+			RWDirs:  cfg.RWPaths,
+			RWFiles: cfg.RWFiles,
+			Exec:    cfg.ExecPaths,
+		})
+		if len(rules) > 0 {
+			if err := policy.EnforceLandlock(rules); err != nil {
+				return fmt.Errorf("enforcing landlock: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // childWarn prints a warning to stderr from the child process.

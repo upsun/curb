@@ -1,6 +1,7 @@
 package netstack
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -124,6 +125,54 @@ func TestRejectReason(t *testing.T) {
 			addr:   [4]byte{93, 184, 216, 34},
 			port:   443,
 			filter: &FilterConfig{Check: denyAll},
+		},
+		{
+			name: "CheckIP allows any port",
+			addr: [4]byte{10, 0, 0, 1},
+			port: 8080,
+			filter: &FilterConfig{
+				CheckIP: func(addr netip.Addr) bool { return addr == netip.MustParseAddr("10.0.0.1") },
+			},
+		},
+		{
+			name: "CheckIP no match with deny-all Check rejects non-standard port",
+			addr: [4]byte{10, 0, 0, 2},
+			port: 8080,
+			filter: &FilterConfig{
+				Check:   denyAll,
+				CheckIP: func(addr netip.Addr) bool { return addr == netip.MustParseAddr("10.0.0.1") },
+			},
+			dnsFilter: minDNSFilter,
+			want:      "port not allowed",
+		},
+		{
+			name: "CheckIP with domain Check allows IP on any port",
+			addr: [4]byte{10, 0, 0, 1},
+			port: 9999,
+			filter: &FilterConfig{
+				Check:   allowAll,
+				CheckIP: func(addr netip.Addr) bool { return addr == netip.MustParseAddr("10.0.0.1") },
+			},
+			dnsFilter: minDNSFilter,
+		},
+		{
+			name: "CheckIP loopback allowed via CheckIP",
+			addr: [4]byte{127, 0, 0, 1},
+			port: 8080,
+			filter: &FilterConfig{
+				Check:   allowAll,
+				CheckIP: func(addr netip.Addr) bool { return addr.IsLoopback() },
+			},
+			dnsFilter: minDNSFilter,
+		},
+		{
+			name: "CheckIP only mode allows loopback on any port",
+			addr: [4]byte{127, 0, 0, 1},
+			port: 3000,
+			filter: &FilterConfig{
+				CheckIP:        func(addr netip.Addr) bool { return addr.IsLoopback() },
+				AllowLocalhost: true,
+			},
 		},
 	}
 
