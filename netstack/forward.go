@@ -28,6 +28,24 @@ const (
 	dnsMaxResponseSize = 4096 // EDNS0 max; avoids 64KB allocation per query.
 )
 
+// routeAction describes what to do with a connection.
+type routeAction int
+
+const (
+	routeForward  routeAction = iota // Direct forward, no inspection.
+	routeDNS                         // Route to DNS filter.
+	routeTLS                         // Route to TLS SNI inspector.
+	routeHTTP                        // Route to HTTP Host inspector.
+	routeLoopback                    // Forward to host's localhost.
+	routeDrop                        // Drop/reject connection.
+)
+
+// routeResult pairs an action with an optional drop reason.
+type routeResult struct {
+	action routeAction
+	reason string // Non-empty only for routeDrop.
+}
+
 // newDNSFilter creates a DNSFilter from a FilterConfig, or returns nil if
 // filtering is not active. When ECHMode is ECHStrip, DNS ECH stripping and
 // IP caching are enabled, and the filter's checkIP is wired to the cache.
@@ -70,78 +88,70 @@ func toNetIP(addr tcpip.Address) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
-// rejectReason returns a non-empty string if the TCP connection can be
-// rejected with RST before accepting, based on port and IP alone. The
-// returned string describes why the connection was rejected (for logging).
-func rejectReason(id stack.TransportEndpointID, filter *FilterConfig, dnsFilter *DNSFilter) string {
-	// No filtering active: accept everything.
+// routeDecision determines the routing action for a connection based on
+// destination address, port, and the active filter configuration.
+func routeDecision(addr tcpip.Address, port uint16, filter *FilterConfig, dnsFilter *DNSFilter) routeResult {
+	// No filtering active: forward everything.
 	if filter == nil {
-		return ""
+		return routeResult{action: routeForward}
 	}
 
-	loopback := isLoopback(id.LocalAddress)
-
-	// Localhost-only mode (filter set, no Check and no CheckIP): reject all non-loopback.
+	// Localhost-only mode (filter set, no Check and no CheckIP).
 	if filter.Check == nil && filter.CheckIP == nil {
-		if loopback {
-			return ""
+		if isLoopback(addr) {
+			return routeResult{action: routeLoopback}
 		}
-		return "localhost-only mode"
+		return routeResult{action: routeDrop, reason: "localhost-only mode"}
 	}
 
-	// IP allowlist: allow any port.
+	// Loopback destinations need the 127.0.0.1 rewrite, so check before CheckIP.
+	if isLoopback(addr) {
+		if port == dnsPort && dnsFilter != nil {
+			return routeResult{action: routeDNS}
+		}
+		if filter.allowsLoopback(addrString(addr)) {
+			return routeResult{action: routeLoopback}
+		}
+		return routeResult{action: routeDrop, reason: "loopback not allowed"}
+	}
+
+	// IP allowlist: forward directly on any port.
 	if filter.CheckIP != nil {
-		if nip, ok := toNetIP(id.LocalAddress); ok && filter.CheckIP(nip) {
-			if loopback && !filter.allowsLoopback(addrString(id.LocalAddress)) {
-				return "loopback not allowed"
-			}
-			return ""
+		if nip, ok := toNetIP(addr); ok && filter.CheckIP(nip) {
+			return routeResult{action: routeForward}
 		}
 	}
 
-	// Loopback: reject if not allowed (except DNS, which is always filtered).
-	if loopback {
-		if id.LocalPort == dnsPort && dnsFilter != nil {
-			return ""
-		}
-		if filter.allowsLoopback(addrString(id.LocalAddress)) {
-			return ""
-		}
-		return "loopback not allowed"
-	}
-
-	// Domain filtering active: only accept ports that need data inspection.
+	// Domain filtering active: route by port.
 	if dnsFilter != nil {
-		switch id.LocalPort {
-		case dnsPort, tlsPort:
-			return ""
+		switch port {
+		case dnsPort:
+			return routeResult{action: routeDNS}
+		case tlsPort:
+			return routeResult{action: routeTLS}
 		case httpPort:
 			if filter.AllowHTTP {
-				return ""
+				return routeResult{action: routeHTTP}
 			}
-			return "port 80 disabled"
+			return routeResult{action: routeDrop, reason: "port 80 disabled"}
 		default:
-			return "port not allowed"
+			return routeResult{action: routeDrop, reason: "port not allowed"}
 		}
 	}
 
-	return ""
+	return routeResult{action: routeForward}
 }
 
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
-// If filter is active, traffic is routed by port:
-// 53 → DNS filter, 443 → TLS SNI filter, 80 → HTTP filter (if AllowHTTP), others → RST.
-// Loopback destinations (127.0.0.0/8) are forwarded to the host if AllowLocalhost is set.
+// Routing is determined by routeDecision: DNS, TLS, HTTP, loopback, forward, or drop.
 func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilter) {
 	logger := filterLogger(filter)
 	fwd := tcp.NewForwarder(s, 0, maxTCPInFlight, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
-
-		// Early rejection: send TCP RST for connections that can be blocked
-		// by port/IP alone, without reading data.
-		if reason := rejectReason(id, filter, dnsFilter); reason != "" {
-			dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
-			logger.Event("tcp_connect", dst, "blocked", reason)
+		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
+		result := routeDecision(id.LocalAddress, id.LocalPort, filter, dnsFilter)
+		if result.action == routeDrop {
+			logger.Event("tcp_connect", dst, "blocked", result.reason)
 			r.Complete(true) // TCP RST
 			return
 		}
@@ -159,63 +169,30 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 		}
 		r.Complete(false)
 
-		dstIP := addrString(id.LocalAddress)
-		dst := net.JoinHostPort(dstIP, fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewTCPConn(&wq, ep)
 		if logger.IsDebug() {
 			logger.Debug("tcp accept: %s:%d → %s", addrString(id.RemoteAddress), id.RemotePort, dst)
 		}
 
-		// Loopback traffic handling (loopback rejections handled above).
-		if isLoopback(id.LocalAddress) {
-			if id.LocalPort == dnsPort && dnsFilter != nil {
-				go dnsFilter.handleTCPQuery(local, dst)
-				return
-			}
+		switch result.action {
+		case routeDNS:
+			go dnsFilter.handleTCPQuery(local, dst)
+		case routeTLS:
+			go handleTLSConnection(local, dst, filter)
+		case routeHTTP:
+			go handleHTTPConnection(local, dst, filter)
+		case routeLoopback:
 			hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
 			go forwardTCP(local, hostDst, logger)
-			return
-		}
-
-		// IP-allowlisted: forward directly on any port, no domain filtering.
-		if filter != nil && filter.CheckIP != nil {
-			if nip, ok := toNetIP(id.LocalAddress); ok && filter.CheckIP(nip) {
-				remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
-				if dialErr != nil {
-					logger.Warn("tcp forward %s: %v", dst, dialErr)
-					_ = local.Close()
-					return
-				}
-				go relay(local, remote, dst, logger)
+		default: // routeForward
+			remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
+			if dialErr != nil {
+				logger.Warn("tcp forward %s: %v", dst, dialErr)
+				_ = local.Close()
 				return
 			}
+			go relay(local, remote, dst, logger)
 		}
-
-		// When filtering is active, route by port.
-		if dnsFilter != nil {
-			switch id.LocalPort {
-			case dnsPort:
-				go dnsFilter.handleTCPQuery(local, dst)
-			case tlsPort:
-				go handleTLSConnection(local, dst, filter)
-			case httpPort:
-				go handleHTTPConnection(local, dst, filter)
-			default:
-				// Should not reach here: rejectReason handles non-standard ports.
-				_ = local.Close()
-			}
-			return
-		}
-
-		// No filtering: forward directly.
-		remote, dialErr := net.DialTimeout("tcp", dst, tcpDialTimeout)
-		if dialErr != nil {
-			logger.Warn("tcp forward %s: %v", dst, dialErr)
-			_ = local.Close()
-			return
-		}
-
-		go relay(local, remote, dst, logger)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
 }
@@ -232,8 +209,7 @@ func forwardTCP(local net.Conn, dst string, logger *clog.Logger) {
 }
 
 // setupUDPForwarding installs a UDP forwarder that proxies packets to the real network.
-// If dnsFilter is non-nil, only UDP port 53 (DNS) is forwarded; all other UDP is dropped.
-// Loopback DNS is always forwarded; other loopback UDP requires AllowLocalhost.
+// Routing is determined by routeDecision: DNS, loopback, forward, or drop.
 func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilter) {
 	logger := filterLogger(filter)
 	fwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
@@ -244,72 +220,34 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 			return false
 		}
 
-		dstIP := addrString(id.LocalAddress)
-		dst := net.JoinHostPort(dstIP, fmt.Sprintf("%d", id.LocalPort))
+		dst := net.JoinHostPort(addrString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
 		local := gonet.NewUDPConn(&wq, ep)
+		result := routeDecision(id.LocalAddress, id.LocalPort, filter, dnsFilter)
 
-		// Loopback traffic handling.
-		if isLoopback(id.LocalAddress) {
-			if id.LocalPort == dnsPort && dnsFilter != nil {
-				go dnsFilter.handleQuery(local, dst)
+		switch result.action {
+		case routeDNS:
+			go dnsFilter.handleQuery(local, dst)
+		case routeLoopback:
+			hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
+			remote, dialErr := net.Dial("udp", hostDst)
+			if dialErr != nil {
+				logger.Warn("localhost udp forward %s: %v", hostDst, dialErr)
+				ep.Close()
 				return true
 			}
-			if filter.allowsLoopback(dstIP) {
-				hostDst := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", id.LocalPort))
-				remote, dialErr := net.Dial("udp", hostDst)
-				if dialErr != nil {
-					logger.Warn("localhost udp forward %s: %v", hostDst, dialErr)
-					ep.Close()
-					return true
-				}
-				go relayUDP(local, remote)
+			go relayUDP(local, remote)
+		case routeForward:
+			remote, dialErr := net.Dial("udp", dst)
+			if dialErr != nil {
+				logger.Warn("udp forward %s: %v", dst, dialErr)
+				ep.Close()
 				return true
 			}
-			logger.Debug("udp loopback dropped: %s", dst)
+			go relayUDP(local, remote)
+		default: // routeDrop, routeTLS, routeHTTP
+			logger.Debug("udp dropped: %s (%s)", dst, result.reason)
 			_ = local.Close()
-			return true
 		}
-
-		// IP-allowlisted: forward directly on any port.
-		if filter != nil && filter.CheckIP != nil {
-			if nip, ok := toNetIP(id.LocalAddress); ok && filter.CheckIP(nip) {
-				remote, dialErr := net.Dial("udp", dst)
-				if dialErr != nil {
-					logger.Warn("udp forward %s: %v", dst, dialErr)
-					ep.Close()
-					return true
-				}
-				go relayUDP(local, remote)
-				return true
-			}
-		}
-
-		// When filtering is active, only DNS is allowed.
-		if dnsFilter != nil {
-			if id.LocalPort == dnsPort {
-				go dnsFilter.handleQuery(local, dst)
-			} else {
-				logger.Debug("udp port %d dropped (not 53): %s", id.LocalPort, dst)
-				_ = local.Close()
-			}
-			return true
-		}
-
-		// If a filter is set but has no Check function (localhost-only mode),
-		// drop all non-loopback traffic.
-		if filter != nil {
-			_ = local.Close()
-			return true
-		}
-
-		remote, dialErr := net.Dial("udp", dst)
-		if dialErr != nil {
-			logger.Warn("udp forward %s: %v", dst, dialErr)
-			ep.Close()
-			return true
-		}
-
-		go relayUDP(local, remote)
 		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, fwd.HandlePacket)
