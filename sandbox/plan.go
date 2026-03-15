@@ -113,31 +113,61 @@ type ChildConfig struct {
 	TempDir        string   `json:"temp_dir"`
 }
 
+// planRemovals collects exclusion lists during FS and exec resolution,
+// passed to resolveDenials to compute sub-path denial overmounts.
+type planRemovals struct {
+	roRemoves      []string
+	rwRemoves      []string
+	execRemoves    []string
+	noExecRestrict bool
+}
+
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
 // It returns an error only for fatal conditions (user ns unavailable, net required but missing).
 func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	if runtime.GOOS != "linux" {
-		// Non-Linux: env-only mode. Record all layers as degraded.
 		return buildDegradedPlan(cfg, caps)
 	}
+	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet}
+	realHome, _ := os.UserHomeDir()
+	var removals planRemovals
+	if err := resolveCapabilities(plan, cfg, caps); err != nil {
+		return nil, err
+	}
+	if err := resolveFilesystem(plan, cfg, &removals, realHome); err != nil {
+		return nil, err
+	}
+	if err := resolveExec(plan, cfg, &removals, realHome); err != nil {
+		return nil, err
+	}
+	resolveNetwork(plan, cfg)
+	if err := resolveProxy(plan, cfg, caps); err != nil {
+		return nil, err
+	}
+	if err := resolveEnv(plan, cfg); err != nil {
+		return nil, err
+	}
+	resolveDenials(plan, &removals)
+	return plan, nil
+}
 
+// resolveCapabilities validates system capabilities and selects enforcement layers.
+func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
 	if caps.UserNS != nil {
-		return nil, fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSErrMessage())
+		return fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSErrMessage())
 	}
 
 	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
-	proxyEnabled := hasFiltering && cfg.ProxyMode != "off"
-
 	if hasFiltering {
 		if caps.NetNS != nil {
-			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSErrMessage())
+			return fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSErrMessage())
 		}
 	}
 
-	// Netstack is required when the proxy is off (netstack is the sole filter),
-	// or when --tun always for defense-in-depth alongside the proxy.
-	needsNetstack := hasFiltering && !proxyEnabled
-	if cfg.TUNMode == "always" && hasFiltering && proxyEnabled && caps.TUN == nil {
+	// Proxy and netstack mode selection.
+	plan.ProxyEnabled = hasFiltering && cfg.ProxyMode != "off"
+	needsNetstack := hasFiltering && !plan.ProxyEnabled
+	if cfg.TUNMode == "always" && hasFiltering && plan.ProxyEnabled && caps.TUN == nil {
 		needsNetstack = true
 	}
 	if needsNetstack {
@@ -146,30 +176,24 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 			if errors.Is(caps.TUN, errTUNIoctl) {
 				msg = tunIoctlErrMessage()
 			}
-			return nil, fmt.Errorf("fatal: %w\n\n%s", caps.TUN, msg)
+			return fmt.Errorf("fatal: %w\n\n%s", caps.TUN, msg)
 		}
 	}
-
-	plan := &SandboxPlan{
-		Caps: caps,
-	}
+	plan.NetEnabled = needsNetstack
 
 	// PID namespace.
 	if caps.PidNS == nil {
 		plan.PidNS = true
-	}
-
-	// Record degraded layers.
-	if caps.PidNS != nil {
+	} else {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "pid namespace",
 			Reason: caps.PidNS.Error(),
 			Impact: "PID isolation unavailable: the sandboxed process can see host PIDs.",
 		})
 	}
+
 	// FS/exec enforcement routing: pivot_root (mount NS) is primary for FS,
-	// Landlock hardens on top when available. pivot_root is only useful when
-	// FS restriction is active (it restricts paths via bind mounts).
+	// Landlock hardens on top when available.
 	if !cfg.NoFSRestrict || !cfg.NoExecRestrict {
 		if caps.MountNS == nil && !cfg.NoFSRestrict {
 			plan.UsePivotRoot = true
@@ -179,32 +203,30 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 		} else if caps.LandlockABI > 0 {
 			plan.UseLandlock = true
 		} else {
-			return nil, fmt.Errorf("mount namespaces and landlock both unavailable: filesystem and exec restrictions cannot be enforced; use --write '*' --exec '*' to disable them")
+			return fmt.Errorf("mount namespaces and landlock both unavailable: filesystem and exec restrictions cannot be enforced; use --write '*' --exec '*' to disable them")
 		}
 	}
+	return nil
+}
 
-	plan.Quiet = cfg.Quiet
-
-	// Resolve the real home dir for tilde expansion (before child overrides HOME).
-	realHome, _ := os.UserHomeDir()
-
-	// Filesystem policy.
+// resolveFilesystem merges default and user-configured paths, expands tildes
+// and globs, resolves symlinks, and creates the temp directory.
+func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, realHome string) error {
 	plan.NoFSRestrict = cfg.NoFSRestrict
-	var roRemoves, rwRemoves, execRemoves []string
 	if !cfg.NoFSRestrict {
 		// Parse exclusions, expand tildes and globs, then merge with defaults.
 		var roAdds []string
 		var roRemoveAll bool
-		roAdds, roRemoves, roRemoveAll = config.ParseExclusions(cfg.ROPaths)
+		roAdds, removals.roRemoves, roRemoveAll = config.ParseExclusions(cfg.ROPaths)
 		if realHome != "" {
 			roAdds = config.ExpandTildes(roAdds, realHome)
-			roRemoves = config.ExpandTildes(roRemoves, realHome)
+			removals.roRemoves = config.ExpandTildes(removals.roRemoves, realHome)
 		}
 		roAdds = config.ExpandGlobs(roAdds)
-		roRemoves = config.ExpandGlobs(roRemoves)
+		removals.roRemoves = config.ExpandGlobs(removals.roRemoves)
 
 		// Apply exclusions to both default RO paths and files.
-		roExcl := excludeArgs(roRemoves)
+		roExcl := excludeArgs(removals.roRemoves)
 		addDirs, addFiles := splitDirsFiles(roAdds)
 		if roRemoveAll {
 			plan.ROPaths = addDirs
@@ -216,14 +238,14 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 		var rwAdds []string
 		var rwRemoveAll bool
-		rwAdds, rwRemoves, rwRemoveAll = config.ParseExclusions(cfg.RWPaths)
+		rwAdds, removals.rwRemoves, rwRemoveAll = config.ParseExclusions(cfg.RWPaths)
 		if realHome != "" {
 			rwAdds = config.ExpandTildes(rwAdds, realHome)
-			rwRemoves = config.ExpandTildes(rwRemoves, realHome)
+			removals.rwRemoves = config.ExpandTildes(removals.rwRemoves, realHome)
 		}
 		rwAdds = config.ExpandGlobs(rwAdds)
-		rwRemoves = config.ExpandGlobs(rwRemoves)
-		rwExcl := excludeArgs(rwRemoves)
+		removals.rwRemoves = config.ExpandGlobs(removals.rwRemoves)
+		rwExcl := excludeArgs(removals.rwRemoves)
 		rwAddDirs, rwAddFiles := splitDirsFiles(rwAdds)
 		if !rwRemoveAll {
 			plan.RWPaths = config.ApplyExclusions(config.DefaultRWPaths, rwExcl)
@@ -234,7 +256,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 		// CWD: read-only by default (use --write . for write access).
 		// Respects --read '!.' and --read '!*'.
-		if cwd, err := os.Getwd(); err == nil && !roRemoveAll && !isExcluded(cwd, roRemoves) {
+		if cwd, err := os.Getwd(); err == nil && !roRemoveAll && !isExcluded(cwd, removals.roRemoves) {
 			plan.ROPaths = append(plan.ROPaths, cwd)
 		}
 
@@ -250,63 +272,71 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	// Temp directory.
 	tmpDir, err := os.MkdirTemp("", "curb-")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	plan.TempDir = tmpDir
 	plan.RWPaths = append(plan.RWPaths, tmpDir)
+	return nil
+}
 
-	// Exec policy.
-	if !cfg.NoExecRestrict {
-		var execAdds []string
-		var execRemoveAll bool
-		execAdds, execRemoves, execRemoveAll = config.ParseExclusions(cfg.ExecAllow)
-		if realHome != "" {
-			execAdds = config.ExpandTildes(execAdds, realHome)
-			execRemoves = config.ExpandTildes(execRemoves, realHome)
-		}
-		execRemoves = config.ExpandGlobs(execRemoves)
-		if execRemoveAll {
-			plan.ExecPaths = nil
+// resolveExec resolves exec path allowlists: parse exclusions, look up
+// binaries via PATH, resolve symlinks, and ensure exec dirs are readable.
+func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, realHome string) error {
+	removals.noExecRestrict = cfg.NoExecRestrict
+	if cfg.NoExecRestrict {
+		return nil
+	}
+	var execAdds []string
+	var execRemoveAll bool
+	execAdds, removals.execRemoves, execRemoveAll = config.ParseExclusions(cfg.ExecAllow)
+	if realHome != "" {
+		execAdds = config.ExpandTildes(execAdds, realHome)
+		removals.execRemoves = config.ExpandTildes(removals.execRemoves, realHome)
+	}
+	removals.execRemoves = config.ExpandGlobs(removals.execRemoves)
+	if execRemoveAll {
+		plan.ExecPaths = nil
+	} else {
+		plan.ExecPaths = config.ApplyExclusions(config.SystemExecPaths, excludeArgs(removals.execRemoves))
+	}
+	for _, name := range execAdds {
+		if filepath.IsAbs(name) {
+			// Expand globs in absolute exec paths (e.g. /usr/bin/python*).
+			plan.ExecPaths = append(plan.ExecPaths, config.ExpandGlobs([]string{name})...)
+		} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
+			plan.ExecPaths = append(plan.ExecPaths, abs)
 		} else {
-			plan.ExecPaths = config.ApplyExclusions(config.SystemExecPaths, excludeArgs(execRemoves))
+			return fmt.Errorf("--exec %s: not found in PATH", name)
 		}
-		for _, name := range execAdds {
-			if filepath.IsAbs(name) {
-				// Expand globs in absolute exec paths (e.g. /usr/bin/python*).
-				plan.ExecPaths = append(plan.ExecPaths, config.ExpandGlobs([]string{name})...)
-			} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
-				plan.ExecPaths = append(plan.ExecPaths, abs)
-			} else {
-				return nil, fmt.Errorf("--exec %s: not found in PATH", name)
-			}
-		}
-		if len(cfg.Command) > 0 {
-			cmd0 := cfg.Command[0]
-			if filepath.IsAbs(cmd0) {
-				plan.ExecPaths = append(plan.ExecPaths, cmd0)
-			} else if abs, lookErr := exec.LookPath(cmd0); lookErr == nil {
-				plan.ExecPaths = append(plan.ExecPaths, abs)
-			}
-		}
-
-		// Resolve symlinks in exec paths so Landlock covers the target
-		// inodes. Without this, symlinked binaries (e.g. ~/.local/bin/foo
-		// -> ~/.local/share/foo/binary) fail with permission denied.
-		plan.ExecPaths = resolveSymlinks(plan.ExecPaths)
-
-		// Ensure directories containing exec paths are readable so the
-		// child can stat() them for path resolution after Landlock.
-		if !cfg.NoFSRestrict {
-			plan.ROPaths = appendExecDirs(plan.ROPaths, plan.ExecPaths)
+	}
+	if len(cfg.Command) > 0 {
+		cmd0 := cfg.Command[0]
+		if filepath.IsAbs(cmd0) {
+			plan.ExecPaths = append(plan.ExecPaths, cmd0)
+		} else if abs, lookErr := exec.LookPath(cmd0); lookErr == nil {
+			plan.ExecPaths = append(plan.ExecPaths, abs)
 		}
 	}
 
-	// Network policy.
+	// Resolve symlinks in exec paths so Landlock covers the target
+	// inodes. Without this, symlinked binaries (e.g. ~/.local/bin/foo
+	// -> ~/.local/share/foo/binary) fail with permission denied.
+	plan.ExecPaths = resolveSymlinks(plan.ExecPaths)
+
+	// Ensure directories containing exec paths are readable so the
+	// child can stat() them for path resolution after Landlock.
+	if !cfg.NoFSRestrict {
+		plan.ROPaths = appendExecDirs(plan.ROPaths, plan.ExecPaths)
+	}
+	return nil
+}
+
+// resolveNetwork sets domain/IP allowlists, localhost forwarding, and TLS policy.
+func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 	plan.UnrestrictedNet = cfg.UnrestrictedNet
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.AllowedIPs = cfg.AllowedIPs
 	plan.TUNMode = cfg.TUNMode
-	plan.NetEnabled = needsNetstack
 	if !cfg.NoFSRestrict && plan.NetEnabled {
 		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
 		if dir := resolvConfDir(); dir != "" {
@@ -326,68 +356,68 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan.ECHMode = cfg.ECHMode
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
+}
 
-	// Proxy setup.
-	if proxyEnabled {
-		plan.ProxyEnabled = true
-		plan.ProxyPort = pickProxyPort()
-		if plan.NetEnabled {
-			// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
-			plan.AllowLocalhost = true
-		}
-		if cfg.TUNMode == "always" && hasFiltering && caps.TUN != nil && !plan.NetEnabled {
-			plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-				Layer:  "TUN/TAP hardening",
-				Reason: caps.TUN.Error(),
-				Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
-			})
-		}
+// resolveProxy picks a proxy port, generates the ephemeral CA, and writes
+// the combined CA bundle.
+func resolveProxy(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
+	if !plan.ProxyEnabled {
+		return nil
+	}
+	plan.ProxyPort = pickProxyPort()
+	if plan.NetEnabled {
+		// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
+		plan.AllowLocalhost = true
+	}
+	if cfg.TUNMode == "always" && caps.TUN != nil && !plan.NetEnabled {
+		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+			Layer:  "TUN/TAP hardening",
+			Reason: caps.TUN.Error(),
+			Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
+		})
 	}
 
-	// CA generation for proxy.
-	if plan.ProxyEnabled {
-		ca, caErr := proxy.NewCA()
-		if caErr != nil {
-			return nil, fmt.Errorf("generating ephemeral CA: %w", caErr)
-		}
-		plan.CA = ca
-		bundlePath, systemPath, caErr := proxy.WriteCombinedBundle(tmpDir, ca)
-		if caErr != nil {
-			return nil, fmt.Errorf("writing CA bundle: %w", caErr)
-		}
-		plan.CACertPath = bundlePath
-		plan.SystemCACertPath = systemPath
+	// CA generation.
+	ca, caErr := proxy.NewCA()
+	if caErr != nil {
+		return fmt.Errorf("generating ephemeral CA: %w", caErr)
 	}
+	plan.CA = ca
+	bundlePath, systemPath, caErr := proxy.WriteCombinedBundle(plan.TempDir, ca)
+	if caErr != nil {
+		return fmt.Errorf("writing CA bundle: %w", caErr)
+	}
+	plan.CACertPath = bundlePath
+	plan.SystemCACertPath = systemPath
+	return nil
+}
 
-	// Environment policy.
-	applyEnvPolicy(plan, cfg, tmpDir)
-
+// resolveEnv applies environment policy and sets up shell init files.
+func resolveEnv(plan *SandboxPlan, cfg *config.Config) error {
+	applyEnvPolicy(plan, cfg, plan.TempDir)
 	plan.Command = cfg.Command
-	if err := setupShellInit(plan, tmpDir); err != nil {
-		return nil, err
-	}
+	return setupShellInit(plan, plan.TempDir)
+}
 
-	// Collect denied sub-paths from exclusions.
-	// A denial is an exclusion that is a sub-path of an allowed parent.
-	// With pivot_root, these are enforced via overmount; without, warn.
-	if !cfg.NoFSRestrict {
-		plan.HiddenPaths = subpathDenials(roRemoves, plan.ROPaths, plan.RWPaths)
-		plan.DenyWritePaths = subpathDenials(rwRemoves, plan.ROPaths, plan.RWPaths)
+// resolveDenials collects sub-path denials from exclusions and warns if
+// pivot_root is unavailable to enforce them.
+func resolveDenials(plan *SandboxPlan, removals *planRemovals) {
+	if !plan.NoFSRestrict {
+		plan.HiddenPaths = subpathDenials(removals.roRemoves, plan.ROPaths, plan.RWPaths)
+		plan.DenyWritePaths = subpathDenials(removals.rwRemoves, plan.ROPaths, plan.RWPaths)
 		plan.HiddenPaths = resolveSymlinks(plan.HiddenPaths)
 		plan.DenyWritePaths = resolveSymlinks(plan.DenyWritePaths)
 	}
-	if !cfg.NoExecRestrict {
-		plan.DenyExecPaths = subpathDenials(execRemoves, plan.ExecPaths)
+	if !removals.noExecRestrict {
+		plan.DenyExecPaths = subpathDenials(removals.execRemoves, plan.ExecPaths)
 		plan.DenyExecPaths = resolveSymlinks(plan.DenyExecPaths)
 	}
 	if !plan.UsePivotRoot {
 		allDenials := len(plan.HiddenPaths) + len(plan.DenyWritePaths) + len(plan.DenyExecPaths)
 		if allDenials > 0 {
-			clog.Warnf("sub-path denials (! exclusions) cannot be enforced without mount namespaces: %v", caps.MountNS)
+			clog.Warnf("sub-path denials (! exclusions) cannot be enforced without mount namespaces: %v", plan.Caps.MountNS)
 		}
 	}
-
-	return plan, nil
 }
 
 // childConfig builds the ChildConfig from the plan, resolving the environment.
