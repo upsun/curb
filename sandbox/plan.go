@@ -39,6 +39,9 @@ const (
 
 	// TestNoLandlockEnvKey disables Landlock in tests to exercise mount-NS-only path.
 	TestNoLandlockEnvKey = "_CURB_TEST_NO_LANDLOCK"
+
+	// TestNoMountNSEnvKey disables mount NS in tests to exercise Landlock-only path.
+	TestNoMountNSEnvKey = "_CURB_TEST_NO_MOUNT_NS"
 )
 
 // DegradedLayer records a sandbox layer that cannot be fully enforced.

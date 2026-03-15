@@ -69,6 +69,7 @@ func TestCurb_Proxy_NoProxyNoNetwork(t *testing.T) {
 // TestCurb_Proxy_PlainHTTP tests that plain HTTP works through the proxy with --allow-http.
 func TestCurb_Proxy_PlainHTTP(t *testing.T) {
 	requireProxyNS(t)
+	requireExternalHTTP(t)
 
 	// Resolve to host IP to use in the test.
 	ip := resolveForTest(t, "example.com")
@@ -86,6 +87,7 @@ func TestCurb_Proxy_PlainHTTP(t *testing.T) {
 // TestCurb_Proxy_IPTarget tests CONNECT to an IP address allowed by --ips.
 func TestCurb_Proxy_IPTarget(t *testing.T) {
 	requireProxyNS(t)
+	requireExternalHTTP(t)
 
 	ip := resolveForTest(t, "example.com")
 

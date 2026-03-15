@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -50,9 +51,12 @@ Use -- before the command when it has its own flags.`,
 			}
 
 			caps := sandbox.ProbeAll()
-			// Testing hook: disable Landlock to exercise mount-NS-only path.
+			// Testing hooks: disable enforcement layers to exercise each path in isolation.
 			if os.Getenv(sandbox.TestNoLandlockEnvKey) == "1" {
 				caps.LandlockABI = 0
+			}
+			if os.Getenv(sandbox.TestNoMountNSEnvKey) == "1" {
+				caps.MountNS = fmt.Errorf("disabled by %s", sandbox.TestNoMountNSEnvKey)
 			}
 			plan, err := sandbox.BuildPlan(cfg, caps)
 			if err != nil {
