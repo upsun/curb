@@ -198,6 +198,61 @@ func TestCurb_ID(t *testing.T) {
 	assert.Contains(t, string(out), "uid=0")
 }
 
+// --- Landlock-only mode (no user namespaces) ---
+
+// noUserNSEnv returns the test environment with user NS disabled.
+func noUserNSEnv() []string {
+	return append(os.Environ(), TestNoUserNSEnvKey+"=1")
+}
+
+func TestCurb_LandlockOnly_BasicExec(t *testing.T) {
+	requireLandlock(t)
+	cmd := exec.Command(curbBin, "--unrestricted-net", "--", "id")
+	cmd.Env = noUserNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "curb landlock-only basic exec failed: %s", string(out))
+	// Without user NS, uid is the real user, not 0.
+	assert.Contains(t, string(out), fmt.Sprintf("uid=%d", os.Getuid()))
+}
+
+func TestCurb_LandlockOnly_WriteSysPathBlocked(t *testing.T) {
+	requireLandlock(t)
+	cmd := exec.Command(curbBin, "--unrestricted-net", "--", "sh", "-c", "touch /usr/bin/curb-escape-test")
+	cmd.Env = noUserNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected write to /usr/bin to be blocked")
+	assertAccessDenied(t, string(out), "write to /usr/bin")
+}
+
+func TestCurb_LandlockOnly_ExitCode(t *testing.T) {
+	requireLandlock(t)
+	cmd := exec.Command(curbBin, "--unrestricted-net", "--", "sh", "-c", "exit 42")
+	cmd.Env = noUserNSEnv()
+	err := cmd.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 42, exitErr.ExitCode())
+}
+
+func TestCurb_LandlockOnly_RequiresUnrestrictedNet(t *testing.T) {
+	requireLandlock(t)
+	cmd := exec.Command(curbBin, "--", "true")
+	cmd.Env = noUserNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected error without --unrestricted-net")
+	assert.Contains(t, string(out), "--unrestricted-net")
+}
+
+func TestCurb_LandlockOnly_DomainsError(t *testing.T) {
+	requireLandlock(t)
+	cmd := exec.Command(curbBin, "--domains", "example.com", "--", "true")
+	cmd.Env = noUserNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected --domains to fail without user NS")
+	assert.Contains(t, string(out), "--domains/--ips require user namespaces")
+}
+
 func TestCurb_ExitCode(t *testing.T) {
 	requireUserNS(t)
 

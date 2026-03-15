@@ -200,8 +200,8 @@ func addRoutePrefix(dst net.IP, dstLen uint8, gw string, ifindex int) error {
 
 	// RtMsg payload.
 	rtBuf := buf[unix.NLMSG_HDRLEN:]
-	rtBuf[0] = unix.AF_INET     // Family
-	rtBuf[1] = dstLen            // Dst_len
+	rtBuf[0] = unix.AF_INET // Family
+	rtBuf[1] = dstLen       // Dst_len
 	rtBuf[4] = unix.RT_TABLE_MAIN
 	rtBuf[5] = unix.RTPROT_BOOT
 	rtBuf[6] = unix.RT_SCOPE_UNIVERSE
@@ -277,12 +277,12 @@ func deleteLocalLoopbackRoutes() error {
 		binary.NativeEndian.PutUint32(buf[8:12], 1) // seq
 
 		rtBuf := buf[unix.NLMSG_HDRLEN:]
-		rtBuf[0] = unix.AF_INET       // Family
-		rtBuf[1] = r.pfx              // Dst_len
+		rtBuf[0] = unix.AF_INET        // Family
+		rtBuf[1] = r.pfx               // Dst_len
 		rtBuf[4] = unix.RT_TABLE_LOCAL // Table
 		rtBuf[5] = unix.RTPROT_KERNEL  // Protocol
-		rtBuf[6] = r.scope            // Scope
-		rtBuf[7] = r.typ              // Type
+		rtBuf[6] = r.scope             // Scope
+		rtBuf[7] = r.typ               // Type
 		copy(buf[hdrLen:], attrs)
 
 		if err := nlRouteSend(sock, buf); err != nil {

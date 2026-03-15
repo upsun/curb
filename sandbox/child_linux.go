@@ -162,13 +162,7 @@ func enforceFS(cfg *ChildConfig) error {
 		}
 	}
 	if cfg.UseLandlock {
-		rules := policy.BuildLandlockRules(policy.LandlockPaths{
-			RODirs:  cfg.ROPaths,
-			ROFiles: cfg.ROFiles,
-			RWDirs:  cfg.RWPaths,
-			RWFiles: cfg.RWFiles,
-			Exec:    cfg.ExecPaths,
-		})
+		rules := policy.BuildLandlockRules(cfg.LandlockPaths())
 		if len(rules) > 0 {
 			if err := policy.EnforceLandlock(rules); err != nil {
 				return fmt.Errorf("enforcing landlock: %w", err)
@@ -191,7 +185,6 @@ func childWarn(quiet bool, format string, args ...any) {
 func prepareMountNS() error {
 	return syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
 }
-
 
 // setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
 // fd to the parent, and waits for a ready signal before continuing.

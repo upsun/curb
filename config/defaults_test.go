@@ -58,9 +58,9 @@ func TestDefaultEnvVars_NoSHELL(t *testing.T) {
 
 func TestDefaultPS1(t *testing.T) {
 	tests := []struct {
-		command string
-		noColor bool
-		contains string
+		command     string
+		noColor     bool
+		contains    string
 		notContains string
 	}{
 		{"/bin/bash", false, `\[`, ""},
@@ -131,4 +131,3 @@ func TestApplyExclusions(t *testing.T) {
 		})
 	}
 }
-

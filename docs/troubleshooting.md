@@ -2,7 +2,9 @@
 
 ## User namespaces not available
 
-curb requires unprivileged user namespaces. If they are disabled:
+If user namespaces are unavailable (Docker default seccomp, AppArmor restrictions, etc.), curb degrades to Landlock-only mode. This provides filesystem enforcement (read/write/exec restrictions) but no network filtering, mount namespace, PID isolation, or sub-path denials.
+
+If Landlock is also unavailable, curb cannot run at all. To enable user namespaces:
 
 ```
 sudo sysctl -w kernel.unprivileged_userns_clone=1
@@ -31,9 +33,21 @@ In containers, `/dev/net/tun` must be provided by the container runtime (e.g. `-
 
 ## Running in Docker
 
-Docker's default settings should work — no `--security-opt` flags are needed. Docker containers share the host kernel, so namespace and Landlock support depends on the host, not the container image.
+Docker's default seccomp profile blocks `CLONE_NEWUSER`, so curb can only use Landlock-only mode (FS sandboxing, no network filtering). Pass `--unrestricted-net` to acknowledge unrestricted network:
 
-For TUN mode (`--tun always` or `--proxy off --domains`), pass `--device /dev/net/tun` to `docker run`.
+```
+curb --unrestricted-net -- command
+```
+
+To enable full sandboxing (network filtering, mount NS, PID isolation), add:
+
+```
+docker run --security-opt seccomp=unconfined --security-opt apparmor=unconfined ...
+```
+
+For TUN mode (`--tun always` or `--proxy off --domains`), also pass `--device /dev/net/tun`.
+
+Docker containers share the host kernel, so Landlock support depends on the host (kernel 5.13+).
 
 Run `./test/distro-smoke.sh` to verify curb works across Alpine, Debian, Fedora, Ubuntu, and Arch Linux containers. See the script header for options.
 

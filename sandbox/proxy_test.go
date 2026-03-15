@@ -191,4 +191,3 @@ func TestCurb_Proxy_TUNAlways_TUNUnavailable(t *testing.T) {
 	require.NoError(t, err, "proxy should work even with TUN unavailable: %s", outStr)
 	assert.Contains(t, outStr, "Example Domain")
 }
-

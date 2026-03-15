@@ -246,11 +246,49 @@ func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
 	assert.True(t, plan.AllowLocalhost)
 }
 
-func TestBuildPlan_UserNSFatal(t *testing.T) {
-	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 3}
+func TestBuildPlan_NoUserNS_LandlockAvailable(t *testing.T) {
+	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
+	cfg := &config.Config{ECHMode: "strip", UnrestrictedNet: true}
+	plan, err := BuildPlan(cfg, caps)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	assert.True(t, plan.NoUserNS)
+	assert.True(t, plan.UseLandlock)
+	assert.True(t, plan.UnrestrictedNet)
+	assert.False(t, plan.UsePivotRoot)
+	assert.False(t, plan.PidNS)
+	assert.True(t, hasDegradedLayer(plan, "user namespace"))
+}
+
+func TestBuildPlan_NoUserNS_RequiresUnrestrictedNet(t *testing.T) {
+	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
+	_, err := BuildPlan(minCfg(), caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--unrestricted-net")
+}
+
+func TestBuildPlan_NoUserNS_NoLandlock(t *testing.T) {
+	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 0}
 	_, err := BuildPlan(minCfg(), caps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fatal")
+	assert.Contains(t, err.Error(), "Landlock")
+}
+
+func TestBuildPlan_NoUserNS_WithDomains(t *testing.T) {
+	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
+	cfg := &config.Config{ECHMode: "strip", AllowedDomains: []string{"example.com"}}
+	_, err := BuildPlan(cfg, caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--domains/--ips require user namespaces")
+}
+
+func TestBuildPlan_NoUserNS_WithIPs(t *testing.T) {
+	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
+	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}}
+	_, err := BuildPlan(cfg, caps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--domains/--ips require user namespaces")
 }
 
 func TestBuildPlan_NoFSRestrict(t *testing.T) {

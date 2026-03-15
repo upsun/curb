@@ -17,7 +17,7 @@ const (
 	tlsHandshakeClientHello = 0x01
 	tlsExtSNI               = 0x0000
 	tlsExtECH               = 0xfe0d
-	tlsSNIHostNameType       = 0x00
+	tlsSNIHostNameType      = 0x00
 	tlsMaxRead              = 16384
 	tlsReadTimeout          = 10 * time.Second
 )

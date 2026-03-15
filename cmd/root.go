@@ -58,6 +58,9 @@ Use -- before the command when it has its own flags.`,
 			if os.Getenv(sandbox.TestNoMountNSEnvKey) == "1" {
 				caps.MountNS = fmt.Errorf("disabled by %s", sandbox.TestNoMountNSEnvKey)
 			}
+			if os.Getenv(sandbox.TestNoUserNSEnvKey) == "1" {
+				caps.UserNS = fmt.Errorf("disabled by %s", sandbox.TestNoUserNSEnvKey)
+			}
 			plan, err := sandbox.BuildPlan(cfg, caps)
 			if err != nil {
 				return err

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"math/rand/v2"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -42,6 +42,9 @@ const (
 
 	// TestNoMountNSEnvKey disables mount NS in tests to exercise Landlock-only path.
 	TestNoMountNSEnvKey = "_CURB_TEST_NO_MOUNT_NS"
+
+	// TestNoUserNSEnvKey disables user NS in tests to exercise the Landlock-only direct-exec path.
+	TestNoUserNSEnvKey = "_CURB_TEST_NO_USER_NS"
 )
 
 // DegradedLayer records a sandbox layer that cannot be fully enforced.
@@ -53,22 +56,23 @@ type DegradedLayer struct {
 
 // SandboxPlan is the resolved enforcement plan derived from Config + Capabilities.
 type SandboxPlan struct {
-	ROPaths        []string
-	ROFiles        []string
-	RWPaths        []string
-	RWFiles        []string
-	HiddenPaths    []string
-	DenyWritePaths []string
-	DenyExecPaths  []string
-	ExecPaths      []string
-	UsePivotRoot   bool
-	UseLandlock    bool
-	PidNS          bool
-	NetEnabled      bool
-	UnrestrictedNet bool
-	AllowedDomains  []string
-	AllowedIPs      []string
-	AllowLocalhost  bool
+	ROPaths          []string
+	ROFiles          []string
+	RWPaths          []string
+	RWFiles          []string
+	HiddenPaths      []string
+	DenyWritePaths   []string
+	DenyExecPaths    []string
+	ExecPaths        []string
+	UsePivotRoot     bool
+	UseLandlock      bool
+	PidNS            bool
+	NoUserNS         bool
+	NetEnabled       bool
+	UnrestrictedNet  bool
+	AllowedDomains   []string
+	AllowedIPs       []string
+	AllowLocalhost   bool
 	ECHMode          string
 	RequireSNI       bool
 	AllowHTTP        bool
@@ -88,6 +92,17 @@ type SandboxPlan struct {
 	Command          []string
 	Caps             *Capabilities
 	Logger           *clog.Logger
+}
+
+// LandlockPaths returns the path sets for Landlock rule construction.
+func (p *SandboxPlan) LandlockPaths() policy.LandlockPaths {
+	return policy.LandlockPaths{
+		RODirs:  p.ROPaths,
+		ROFiles: p.ROFiles,
+		RWDirs:  p.RWPaths,
+		RWFiles: p.RWFiles,
+		Exec:    p.ExecPaths,
+	}
 }
 
 // ChildConfig is the serializable config sent from parent to child over a pipe.
@@ -116,6 +131,17 @@ type ChildConfig struct {
 	UserPaths      []string `json:"user_paths,omitempty"`
 	Quiet          bool     `json:"quiet,omitempty"`
 	TempDir        string   `json:"temp_dir"`
+}
+
+// LandlockPaths returns the path sets for Landlock rule construction.
+func (c *ChildConfig) LandlockPaths() policy.LandlockPaths {
+	return policy.LandlockPaths{
+		RODirs:  c.ROPaths,
+		ROFiles: c.ROFiles,
+		RWDirs:  c.RWPaths,
+		RWFiles: c.RWFiles,
+		Exec:    c.ExecPaths,
+	}
 }
 
 // planRemovals collects exclusion lists during FS and exec resolution,
@@ -158,11 +184,30 @@ func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 
 // resolveCapabilities validates system capabilities and selects enforcement layers.
 func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
-	if caps.UserNS != nil {
-		return fmt.Errorf("fatal: %w\n\n%s", caps.UserNS, userNSErrMessage())
-	}
-
 	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
+
+	if caps.UserNS != nil {
+		if caps.LandlockABI == 0 {
+			return fmt.Errorf("fatal: user namespaces and Landlock both unavailable: %w\n\n%s", caps.UserNS, userNSErrMessage())
+		}
+		if hasFiltering {
+			return fmt.Errorf("--domains/--ips require user namespaces: %w", caps.UserNS)
+		}
+		if !cfg.UnrestrictedNet {
+			return fmt.Errorf("user namespaces unavailable: network cannot be restricted; use --unrestricted-net to allow unrestricted network: %w", caps.UserNS)
+		}
+		// Landlock-only mode: no namespaces, no network filtering.
+		// UnrestrictedNet is set by resolveNetwork from cfg.UnrestrictedNet.
+		plan.NoUserNS = true
+		plan.UseLandlock = true
+		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+			Layer:  "user namespace",
+			Reason: caps.UserNS.Error(),
+			Impact: "No mount/network/PID namespaces: FS enforcement via Landlock only, network unrestricted.",
+		})
+		// Skip net/mount/PID/TUN capability checks (all require user NS).
+		return nil
+	}
 	if hasFiltering {
 		if caps.NetNS != nil {
 			return fmt.Errorf("fatal: %w\n\n%s", caps.NetNS, netNSErrMessage())
@@ -639,6 +684,8 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    method:     pivot_root + landlock")
 	case p.UsePivotRoot:
 		ln("    method:     pivot_root")
+	case p.UseLandlock && p.NoUserNS:
+		ln("    method:     landlock (no user namespaces)")
 	case p.UseLandlock:
 		ln("    method:     landlock")
 	default:

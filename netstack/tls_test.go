@@ -157,7 +157,7 @@ func TestParseClientHello_MalformedExtensionLength(t *testing.T) {
 	// Extension that claims more data than available.
 	ext := binary.BigEndian.AppendUint16(nil, tlsExtSNI)
 	ext = binary.BigEndian.AppendUint16(ext, 0x00FF) // Claims 255 bytes.
-	ext = append(ext, 0x00)                           // Only 1 byte.
+	ext = append(ext, 0x00)                          // Only 1 byte.
 	data := buildClientHello(ext)
 	// The extensions total length in the ClientHello will be len(ext) = 5,
 	// but the extension header says 255, so parsing should fail.

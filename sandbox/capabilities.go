@@ -39,4 +39,3 @@ func tunDeviceErrMessage() string {
 func tunIoctlErrMessage() string {
 	return `/dev/net/tun exists but TAP creation failed inside a user+network namespace.`
 }
-
