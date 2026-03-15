@@ -85,6 +85,19 @@ func configureInterfaces() (int, error) {
 	return ifindex, nil
 }
 
+// bringUpLoopback brings up the loopback interface in an isolated net namespace.
+func bringUpLoopback() error {
+	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("socket for ioctl: %w", err)
+	}
+	defer func() { _ = unix.Close(sock) }()
+	if err := setInterfaceUp(sock, "lo"); err != nil {
+		return fmt.Errorf("bringing up lo: %w", err)
+	}
+	return nil
+}
+
 // setInterfaceUp brings a network interface up using ioctl SIOCSIFFLAGS.
 func setInterfaceUp(sock int, name string) error {
 	ifr, err := unix.NewIfreq(name)

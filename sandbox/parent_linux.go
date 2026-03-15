@@ -5,6 +5,8 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/upsun/curb/netstack"
 	"github.com/upsun/curb/policy"
+	"github.com/upsun/curb/proxy"
 )
 
 // StartSandbox re-execs curb inside new namespaces, passes the sandbox config
@@ -24,7 +27,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		return -1, fmt.Errorf("creating config pipe: %w", err)
 	}
 
-	// Create socketpair for later fd passing (TAP fd in WP07).
+	// Create socketpair for fd passing (TAP fd or proxy connection fds).
 	sockParent, sockChild, err := CreateSocketPair()
 	if err != nil {
 		_ = configR.Close()
@@ -37,7 +40,6 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	signal.Notify(sigCh, catchableSignals()...)
 
 	// Resolve our own executable path for re-exec.
-	// /proc/self/exe is a magic link that some kernels restrict inside user namespaces.
 	self, err := os.Executable()
 	if err != nil {
 		_ = configR.Close()
@@ -48,14 +50,19 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		return -1, fmt.Errorf("resolving executable path: %w", err)
 	}
 
-	// Re-exec curb inside new user and network namespaces.
-	// Mount namespace is added when pivot_root is used for FS enforcement.
-	cloneFlags := uintptr(syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET)
-	if plan.PidNS {
-		cloneFlags |= syscall.CLONE_NEWPID
+	// Re-exec curb inside new user namespace (and network namespace unless unrestricted).
+	cloneFlags := uintptr(syscall.CLONE_NEWUSER)
+	if !plan.UnrestrictedNet {
+		cloneFlags |= syscall.CLONE_NEWNET
 	}
 	if plan.UsePivotRoot {
 		cloneFlags |= syscall.CLONE_NEWNS
+	}
+	// PID namespace: skip for proxy-only mode where the child's initLoop
+	// handles fork+exec (PID 1 must be the Go runtime for the accept loop).
+	proxyOnly := plan.ProxyEnabled && !plan.NetEnabled
+	if plan.PidNS && !proxyOnly {
+		cloneFlags |= syscall.CLONE_NEWPID
 	}
 	cmd := exec.Command(self)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -98,7 +105,62 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	}
 	_ = configW.Close()
 
-	// If network is enabled, receive TAP fd, start netstack, signal child.
+	// Build proxy handler if proxy is enabled.
+	var proxyHandler *proxy.Handler
+	if plan.ProxyEnabled {
+		proxyHandler = buildProxyHandler(plan)
+	}
+
+	// Handle proxy-only mode: receive fds from child, serve them.
+	var proxySrv *http.Server
+	var proxyListener *proxy.ConnListener
+	if plan.ProxyEnabled && !plan.NetEnabled {
+		addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
+		proxyListener = proxy.NewConnListener(addr)
+		proxySrv = &http.Server{Handler: proxyHandler}
+		go func() { _ = proxySrv.Serve(proxyListener) }()
+
+		// Receive connection fds from child. RecvFD errors are expected on
+		// normal shutdown (child exits, socketpair closes). Unexpected errors
+		// are indistinguishable here and logged implicitly by the child's
+		// SendFD error handling.
+		go func() {
+			for {
+				fd, recvErr := RecvFD(sockParent)
+				if recvErr != nil {
+					_ = proxyListener.Close()
+					return
+				}
+				f := os.NewFile(uintptr(fd), "proxy-conn")
+				conn, fileErr := net.FileConn(f)
+				_ = f.Close()
+				if fileErr != nil {
+					continue
+				}
+				if enqErr := proxyListener.Enqueue(conn); enqErr != nil {
+					_ = conn.Close()
+				}
+			}
+		}()
+	}
+
+	// Handle proxy+TUN mode: start proxy on real TCP listener, then netstack.
+	var proxyTCPListener net.Listener
+	if plan.ProxyEnabled && plan.NetEnabled {
+		ln, lnErr := listenProxyPort(plan.ProxyPort)
+		if lnErr != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			signal.Stop(sigCh)
+			_ = sockParent.Close()
+			return -1, fmt.Errorf("proxy listener: %w", lnErr)
+		}
+		proxyTCPListener = ln
+		proxySrv = &http.Server{Handler: proxyHandler}
+		go func() { _ = proxySrv.Serve(ln) }()
+	}
+
+	// If network (TUN) is enabled, receive TAP fd, start netstack, signal child.
 	var ns *netstack.Stack
 	if plan.NetEnabled {
 		abortNet := func() {
@@ -117,18 +179,26 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
 		}
 		var filter *netstack.FilterConfig
-		if len(plan.AllowedDomains) > 0 {
-			matcher := policy.NewDomainMatcher(plan.AllowedDomains)
+		if len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0 {
 			filter = &netstack.FilterConfig{
-				Check:          matcher.Match,
 				ECHMode:        plan.ECHMode,
 				RequireSNI:     plan.RequireSNI,
 				AllowHTTP:      plan.AllowHTTP,
 				AllowLocalhost: plan.AllowLocalhost,
 				Logger:         plan.Logger,
 			}
+			if len(plan.AllowedDomains) > 0 {
+				matcher := policy.NewDomainMatcher(plan.AllowedDomains)
+				filter.Check = matcher.Match
+			} else {
+				// IPs-only: deny all domain queries so DNS returns REFUSED.
+				filter.Check = func(string) bool { return false }
+			}
+			if len(plan.AllowedIPs) > 0 {
+				ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
+				filter.CheckIP = ipMatcher.Match
+			}
 		} else if plan.AllowLocalhost {
-			// Localhost-only mode: no domain filtering, just forward loopback traffic.
 			filter = &netstack.FilterConfig{
 				AllowLocalhost: true,
 				Logger:         plan.Logger,
@@ -144,7 +214,11 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			return -1, fmt.Errorf("sending ready signal: %w", recvErr)
 		}
 	}
-	_ = sockParent.Close()
+
+	// Close socketpair parent end only when not needed for proxy fd-passing.
+	if !plan.ProxyEnabled || plan.NetEnabled {
+		_ = sockParent.Close()
+	}
 
 	// Forward signals to the child.
 	go func() {
@@ -159,6 +233,20 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	close(sigCh)
 	if ns != nil {
 		ns.Close()
+	}
+
+	// Cleanup proxy resources.
+	if proxyListener != nil {
+		_ = proxyListener.Close()
+	}
+	if proxyTCPListener != nil {
+		_ = proxyTCPListener.Close()
+	}
+	if proxySrv != nil {
+		_ = proxySrv.Close()
+	}
+	if plan.ProxyEnabled && !plan.NetEnabled {
+		_ = sockParent.Close()
 	}
 
 	if waitErr == nil {
@@ -179,6 +267,24 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		return 128 + int(status.Signal()), nil
 	}
 	return 1, nil
+}
+
+// buildProxyHandler creates the MITM proxy handler from the sandbox plan.
+func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
+	h := &proxy.Handler{
+		CertCache: proxy.NewCertCache(plan.CA),
+		Logger:    plan.Logger,
+		AllowHTTP: plan.AllowHTTP,
+	}
+	if len(plan.AllowedDomains) > 0 {
+		matcher := policy.NewDomainMatcher(plan.AllowedDomains)
+		h.DomainCheck = matcher.Match
+	}
+	if len(plan.AllowedIPs) > 0 {
+		ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
+		h.IPCheck = ipMatcher.Match
+	}
+	return h
 }
 
 // catchableSignals returns all signals that can be caught (1-31, excluding SIGKILL and SIGSTOP).

@@ -85,7 +85,10 @@ func probeTUN() error {
 const MountProbeEnvKey = "_CURB_MOUNT_PROBE"
 
 // RunMountProbe is the entry point for the mount probe child process.
-// It tests MS_SLAVE propagation and tmpfs mount inside a user+mount namespace.
+// It tests MS_SLAVE propagation, tmpfs mount, and bind-mount inside a
+// user+mount namespace. The bind-mount test catches AppArmor policies that
+// allow tmpfs but block bind mounts (e.g. the default unprivileged_userns
+// profile on Ubuntu 24.04+).
 func RunMountProbe() {
 	if err := prepareMountNS(); err != nil {
 		fmt.Fprintf(os.Stderr, "MS_SLAVE: %v", err)
@@ -101,12 +104,26 @@ func RunMountProbe() {
 		fmt.Fprintf(os.Stderr, "tmpfs mount: %v", err)
 		os.Exit(1)
 	}
+	// Test bind-mount: pivot_root enforcement relies on binding host paths
+	// into the new root. Use /usr as the source (exists on all Linux systems).
+	bindDst := dir + "/bind"
+	if err := os.Mkdir(bindDst, 0o755); err != nil {
+		_ = syscall.Unmount(dir, 0)
+		fmt.Fprintf(os.Stderr, "mkdir bind target: %v", err)
+		os.Exit(1)
+	}
+	if err := syscall.Mount("/usr", bindDst, "", syscall.MS_BIND, ""); err != nil {
+		_ = syscall.Unmount(dir, 0)
+		fmt.Fprintf(os.Stderr, "bind mount: %v", err)
+		os.Exit(1)
+	}
+	_ = syscall.Unmount(bindDst, 0)
 	_ = syscall.Unmount(dir, 0)
 }
 
-// probeMountOps tests whether mount operations (MS_SLAVE, tmpfs mount) work
-// inside a user+mount namespace. This catches AppArmor policies that allow
-// namespace creation but block mount syscalls.
+// probeMountOps tests whether mount operations (MS_SLAVE, tmpfs mount, bind
+// mount) work inside a user+mount namespace. This catches AppArmor policies
+// that allow namespace creation but block mount syscalls.
 func probeMountOps() error {
 	self, err := os.Executable()
 	if err != nil {

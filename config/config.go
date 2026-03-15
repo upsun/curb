@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/upsun/curb/policy"
 )
 
 // Config holds the resolved configuration after merging CLI flags, CURB_* env vars, and defaults.
@@ -19,6 +20,10 @@ type Config struct {
 	EnvPassthrough    []string
 	EnvSet            []string
 	EnvPassthroughAll bool
+	AllowedIPs        []string
+	UnrestrictedNet   bool
+	ProxyMode         string // "on" or "off", default "on".
+	TUNMode           string // "auto" or "always", default "auto".
 	NoFSRestrict      bool
 	NoExecRestrict    bool
 	ECHMode           string
@@ -38,6 +43,14 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	flags := cmd.Flags()
 
 	allow, err := flags.GetStringSlice("domains")
+	if err != nil {
+		return nil, err
+	}
+	ips, err := flags.GetStringSlice("ips")
+	if err != nil {
+		return nil, err
+	}
+	unrestrictedNet, err := flags.GetBool("unrestricted-net")
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +79,41 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("--ech must be strip, allow, or deny (got %q)", echMode)
 	}
+	if len(allow) > 0 {
+		if err := policy.ValidateDomains(allow); err != nil {
+			return nil, err
+		}
+	}
+	if len(ips) > 0 {
+		if err := policy.ValidateIPs(ips); err != nil {
+			return nil, err
+		}
+	}
+	proxyMode, err := flags.GetString("proxy")
+	if err != nil {
+		return nil, err
+	}
+	switch proxyMode {
+	case "on", "off":
+	default:
+		return nil, fmt.Errorf("--proxy must be on or off (got %q)", proxyMode)
+	}
+	tunMode, err := flags.GetString("tun")
+	if err != nil {
+		return nil, err
+	}
+	switch tunMode {
+	case "auto", "always":
+	default:
+		return nil, fmt.Errorf("--tun must be auto or always (got %q)", tunMode)
+	}
+	if unrestrictedNet && (len(allow) > 0 || len(ips) > 0) {
+		return nil, fmt.Errorf("--unrestricted-net cannot be combined with --domains or --ips")
+	}
+	if flags.Changed("proxy") && proxyMode == "on" && unrestrictedNet {
+		return nil, fmt.Errorf("--proxy on and --unrestricted-net are contradictory")
+	}
+
 	allowNoSNI, err := flags.GetBool("allow-no-sni")
 	if err != nil {
 		return nil, err
@@ -109,22 +157,26 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	passNames, setPairs := classifyEnvArgs(env)
 
 	cfg := &Config{
-		AllowedDomains: allow,
-		ROPaths:        ro,
-		RWPaths:        rw,
-		ExecAllow:      execAllow,
-		EnvPassthrough: passNames,
-		EnvSet:         setPairs,
-		ECHMode:        echMode,
-		RequireSNI:     !allowNoSNI,
-		AllowHTTP:      allowHTTP,
-		LogFile:        logFile,
-		Verbose:        verbose,
-		Debug:          debug,
-		Quiet:          quiet,
-		DryRun:         dryRun,
-		HomePath:       home,
-		Command:        cmd.Flags().Args(),
+		AllowedDomains:  allow,
+		AllowedIPs:      ips,
+		UnrestrictedNet: unrestrictedNet,
+		ProxyMode:       proxyMode,
+		TUNMode:         tunMode,
+		ROPaths:         ro,
+		RWPaths:         rw,
+		ExecAllow:       execAllow,
+		EnvPassthrough:  passNames,
+		EnvSet:          setPairs,
+		ECHMode:         echMode,
+		RequireSNI:      !allowNoSNI,
+		AllowHTTP:       allowHTTP,
+		LogFile:         logFile,
+		Verbose:         verbose,
+		Debug:           debug,
+		Quiet:           quiet,
+		DryRun:          dryRun,
+		HomePath:        home,
+		Command:         cmd.Flags().Args(),
 	}
 
 	// Wildcard handling: '*' in list flags sets the corresponding escape hatch.
@@ -155,6 +207,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 
 	// List values: always additive, with wildcard detection.
 	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_DOMAINS")
+	cfg.AllowedIPs = appendEnvList(cfg.AllowedIPs, "CURB_IPS")
 
 	roEnv := appendEnvList(nil, "CURB_READ")
 	if containsStar(roEnv) {
@@ -207,9 +260,28 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	}
 
 	// Bool values: env only if flag not explicitly set.
+	mergeBoolEnv(flags, &cfg.UnrestrictedNet, "unrestricted-net", "CURB_UNRESTRICTED_NET")
 	mergeBoolEnv(flags, &cfg.Verbose, "verbose", "CURB_VERBOSE")
 	mergeBoolEnv(flags, &cfg.Debug, "debug", "CURB_DEBUG")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
+
+	// Proxy/TUN mode: env only if flag not explicitly set.
+	if !flags.Changed("proxy") {
+		if val, ok := os.LookupEnv("CURB_PROXY"); ok {
+			switch val {
+			case "on", "off":
+				cfg.ProxyMode = val
+			}
+		}
+	}
+	if !flags.Changed("tun") {
+		if val, ok := os.LookupEnv("CURB_TUN"); ok {
+			switch val {
+			case "auto", "always":
+				cfg.TUNMode = val
+			}
+		}
+	}
 
 	// ECH mode: env only if flag not explicitly set.
 	if !flags.Changed("ech") {

@@ -1,6 +1,10 @@
 package netstack
 
-import "github.com/upsun/curb/clog"
+import (
+	"net/netip"
+
+	"github.com/upsun/curb/clog"
+)
 
 // ECH handling modes for FilterConfig.ECHMode.
 const (
@@ -21,6 +25,9 @@ type FilterConfig struct {
 	RequireSNI bool
 	// AllowHTTP permits filtered plaintext HTTP on port 80.
 	AllowHTTP bool
+	// CheckIP reports whether a direct connection to the given IP is allowed.
+	// Set from --ips allowlist. Connections matching CheckIP bypass port restrictions.
+	CheckIP func(addr netip.Addr) bool
 	// AllowLocalhost forwards connections to 127.0.0.0/8 to the host.
 	AllowLocalhost bool
 	// Logger for filtering events.
@@ -40,6 +47,11 @@ func (f *FilterConfig) allowsLoopback(ip string) bool {
 	}
 	if f.AllowLocalhost {
 		return true
+	}
+	if f.CheckIP != nil {
+		if addr, err := netip.ParseAddr(ip); err == nil && f.CheckIP(addr) {
+			return true
+		}
 	}
 	return f.checkIP != nil && f.checkIP(ip)
 }
