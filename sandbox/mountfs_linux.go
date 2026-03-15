@@ -15,11 +15,12 @@ import (
 
 // mountEntry represents a single bind-mount in the new root.
 type mountEntry struct {
-	src      string
-	isFile   bool
-	isDev    bool // Character or block device node.
-	readOnly bool
-	noExec   bool
+	src           string
+	isFile        bool
+	isDev         bool // Character or block device node.
+	readOnly      bool
+	noExec        bool
+	userRequested bool // Explicitly requested by the user (not a default/auto path).
 }
 
 // buildMountPlan collects, deduplicates, and sorts mount entries shortest-first.
@@ -27,6 +28,11 @@ type mountEntry struct {
 // When execPaths is empty (no exec restriction), noExec is false for all entries.
 func buildMountPlan(cfg *ChildConfig) []mountEntry {
 	hasExecRestrict := len(cfg.ExecPaths) > 0
+
+	userSet := make(map[string]bool, len(cfg.UserPaths))
+	for _, p := range cfg.UserPaths {
+		userSet[p] = true
+	}
 
 	entries := make(map[string]*mountEntry)
 
@@ -83,6 +89,7 @@ func buildMountPlan(cfg *ChildConfig) []mountEntry {
 		}
 		e.isFile = !info.IsDir()
 		e.isDev = info.Mode()&os.ModeDevice != 0
+		e.userRequested = userSet[e.src]
 		result = append(result, *e)
 	}
 
@@ -142,8 +149,11 @@ func enforceMountNS(cfg *ChildConfig) error {
 			// Bind-mount failure is non-fatal: the path will be absent from
 			// the new root (ENOENT), which is strictly more restrictive.
 			// This handles paths that AppArmor blocks or that have
-			// incompatible mount properties.
-			clog.Warnf("skipping %s: bind mount failed: %v", m.src, err)
+			// incompatible mount properties (e.g. kernel pseudo-filesystems
+			// mounted underneath by EDR tools).
+			if m.userRequested {
+				clog.Warnf("skipping %s: bind mount failed (%v); path will not be available in the sandbox", m.src, err)
+			}
 			_ = os.Remove(dst)
 			continue
 		}

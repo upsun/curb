@@ -78,6 +78,7 @@ type SandboxPlan struct {
 	CACertPath       string // Host path to combined CA bundle (in TempDir).
 	SystemCACertPath string // System CA file path to bind-mount over.
 	CA               *proxy.CA
+	UserPaths        []string // Paths explicitly requested by the user (--read/--write/--exec adds).
 	EnvSet           map[string]string
 	EnvPassthrough   []string
 	DegradedLayers   []DegradedLayer
@@ -112,6 +113,7 @@ type ChildConfig struct {
 	CACertMountDst string   `json:"ca_cert_mount_dst,omitempty"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	AllowedIPs     []string `json:"allowed_ips,omitempty"`
+	UserPaths      []string `json:"user_paths,omitempty"`
 	Quiet          bool     `json:"quiet,omitempty"`
 	TempDir        string   `json:"temp_dir"`
 }
@@ -257,6 +259,12 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 		plan.RWPaths = append(plan.RWPaths, rwAddDirs...)
 		plan.RWFiles = append(plan.RWFiles, rwAddFiles...)
 
+		// Track user-specified paths for better warnings on bind mount failures.
+		plan.UserPaths = append(plan.UserPaths, addDirs...)
+		plan.UserPaths = append(plan.UserPaths, addFiles...)
+		plan.UserPaths = append(plan.UserPaths, rwAddDirs...)
+		plan.UserPaths = append(plan.UserPaths, rwAddFiles...)
+
 		// CWD: read-only by default (use --write . for write access).
 		// Respects --read '!.' and --read '!*'.
 		if cwd, err := os.Getwd(); err == nil && !roRemoveAll && !isExcluded(cwd, removals.roRemoves) {
@@ -305,9 +313,12 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	for _, name := range execAdds {
 		if filepath.IsAbs(name) {
 			// Expand globs in absolute exec paths (e.g. /usr/bin/python*).
-			plan.ExecPaths = append(plan.ExecPaths, config.ExpandGlobs([]string{name})...)
+			resolved := config.ExpandGlobs([]string{name})
+			plan.ExecPaths = append(plan.ExecPaths, resolved...)
+			plan.UserPaths = append(plan.UserPaths, resolved...)
 		} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
 			plan.ExecPaths = append(plan.ExecPaths, abs)
+			plan.UserPaths = append(plan.UserPaths, abs)
 		} else {
 			return fmt.Errorf("--exec %s: not found in PATH", name)
 		}
@@ -447,6 +458,7 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		CACertMountDst: p.SystemCACertPath,
 		AllowedDomains: p.AllowedDomains,
 		AllowedIPs:     p.AllowedIPs,
+		UserPaths:      p.UserPaths,
 		Quiet:          p.Quiet,
 		TempDir:        p.TempDir,
 	}

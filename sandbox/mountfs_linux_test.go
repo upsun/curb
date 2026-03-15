@@ -114,6 +114,27 @@ func TestBuildMountPlan_DeviceDetection(t *testing.T) {
 	}
 }
 
+func TestBuildMountPlan_UserRequested(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "sub")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+
+	cfg := &ChildConfig{
+		ROPaths:   []string{dir, subDir},
+		UserPaths: []string{subDir},
+	}
+	plan := buildMountPlan(cfg)
+
+	require.Len(t, plan, 2)
+	for _, m := range plan {
+		if m.src == subDir {
+			assert.True(t, m.userRequested, "user-specified path should be marked")
+		} else {
+			assert.False(t, m.userRequested, "default path should not be marked")
+		}
+	}
+}
+
 // TestSynthesizePasswd verifies content generation. The bind-mount step
 // requires a mount namespace, so it is covered by integration tests
 // (TestCurb_MountFS_UsernameNotRoot).
