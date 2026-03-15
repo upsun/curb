@@ -12,19 +12,21 @@ import (
 )
 
 func TestBuildMountPlan_SortAndDedup(t *testing.T) {
-	dir := t.TempDir()
-	subDir := filepath.Join(dir, "sub")
-	require.NoError(t, os.Mkdir(subDir, 0o755))
+	base := t.TempDir()
+	dirA := filepath.Join(base, "aaa")
+	dirB := filepath.Join(base, "bbb")
+	require.NoError(t, os.Mkdir(dirA, 0o755))
+	require.NoError(t, os.Mkdir(dirB, 0o755))
 
 	cfg := &ChildConfig{
-		ROPaths: []string{subDir, dir},
+		ROPaths: []string{dirB, dirA},
 	}
 	plan := buildMountPlan(cfg)
 
 	require.Len(t, plan, 2)
-	// Shortest path first.
-	assert.Equal(t, dir, plan[0].src)
-	assert.Equal(t, subDir, plan[1].src)
+	// Shortest path first, then alphabetical for equal length.
+	assert.Equal(t, dirA, plan[0].src)
+	assert.Equal(t, dirB, plan[1].src)
 }
 
 func TestBuildMountPlan_RWOverridesRO(t *testing.T) {
@@ -81,12 +83,13 @@ func TestBuildMountPlan_NoExecRestrict(t *testing.T) {
 }
 
 func TestBuildMountPlan_FileDetection(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "file.txt")
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	f := filepath.Join(dirB, "file.txt")
 	require.NoError(t, os.WriteFile(f, nil, 0o644))
 
 	cfg := &ChildConfig{
-		ROPaths: []string{dir},
+		ROPaths: []string{dirA},
 		ROFiles: []string{f},
 	}
 	plan := buildMountPlan(cfg)
@@ -115,24 +118,74 @@ func TestBuildMountPlan_DeviceDetection(t *testing.T) {
 }
 
 func TestBuildMountPlan_UserRequested(t *testing.T) {
-	dir := t.TempDir()
-	subDir := filepath.Join(dir, "sub")
-	require.NoError(t, os.Mkdir(subDir, 0o755))
+	dirA := t.TempDir()
+	dirB := t.TempDir()
 
 	cfg := &ChildConfig{
-		ROPaths:   []string{dir, subDir},
-		UserPaths: []string{subDir},
+		ROPaths:   []string{dirA, dirB},
+		UserPaths: []string{dirB},
 	}
 	plan := buildMountPlan(cfg)
 
 	require.Len(t, plan, 2)
 	for _, m := range plan {
-		if m.src == subDir {
+		if m.src == dirB {
 			assert.True(t, m.userRequested, "user-specified path should be marked")
 		} else {
 			assert.False(t, m.userRequested, "default path should not be marked")
 		}
 	}
+}
+
+func TestBuildMountPlan_SubsumesChildWithSameFlags(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "file.txt")
+	subDir := filepath.Join(dir, "sub")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.WriteFile(f, nil, 0o644))
+
+	cfg := &ChildConfig{
+		ROPaths: []string{dir, subDir},
+		ROFiles: []string{f},
+	}
+	plan := buildMountPlan(cfg)
+
+	// Both subDir and f are subsumed by dir (identical RO flags).
+	require.Len(t, plan, 1)
+	assert.Equal(t, dir, plan[0].src)
+}
+
+func TestBuildMountPlan_KeepsChildWithDifferentFlags(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "sub")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+
+	cfg := &ChildConfig{
+		ROPaths: []string{dir},
+		RWPaths: []string{subDir},
+	}
+	plan := buildMountPlan(cfg)
+
+	// subDir has RW, parent has RO: not subsumed.
+	require.Len(t, plan, 2)
+}
+
+func TestBuildMountPlan_DeviceNotSubsumed(t *testing.T) {
+	cfg := &ChildConfig{
+		ROPaths: []string{"/dev"},
+		ROFiles: []string{"/dev/urandom"},
+	}
+	plan := buildMountPlan(cfg)
+
+	// /dev/urandom is a device node and must not be subsumed (needs MS_NODEV exemption).
+	var found bool
+	for _, m := range plan {
+		if m.src == "/dev/urandom" {
+			found = true
+			assert.True(t, m.isDev)
+		}
+	}
+	assert.True(t, found, "/dev/urandom should not be subsumed")
 }
 
 // TestSynthesizePasswd verifies content generation. The bind-mount step
@@ -148,11 +201,12 @@ func TestSynthesizePasswd(t *testing.T) {
 	cfg := &ChildConfig{
 		Env: []string{"HOME=/app", "SHELL=/bin/bash", "USER=web"},
 	}
-	// synthesizePasswd writes .curb temp files then bind-mounts them.
-	// The mount fails without a mount NS, but the temp files are written.
+	// synthesizePasswd writes temp files to the newroot base then bind-mounts
+	// them. The mount fails without a mount NS, but the temp files are written.
 	_ = synthesizePasswd(cfg, dir)
 
-	passwd, err := os.ReadFile(filepath.Join(etcDir, "passwd.curb"))
+	// Temp files are written to the newroot base, not next to the target.
+	passwd, err := os.ReadFile(filepath.Join(dir, ".synth-passwd"))
 	require.NoError(t, err)
 	assert.Contains(t, string(passwd), "web:x:0:0::/app:/bin/bash")
 	assert.Contains(t, string(passwd), "nobody:x:65534:65534:")

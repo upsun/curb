@@ -93,6 +93,25 @@ func buildMountPlan(cfg *ChildConfig) []mountEntry {
 		result = append(result, *e)
 	}
 
+	// Filter entries subsumed by a parent directory with identical mount
+	// flags. When --read /etc is specified, default files like
+	// /etc/resolv.conf are already accessible through the parent bind mount
+	// and don't need separate mount entries. Creating mount points for them
+	// inside the read-only parent would fail.
+	dirSet := make(map[string]mountEntry, len(result))
+	for _, e := range result {
+		if !e.isFile {
+			dirSet[e.src] = e
+		}
+	}
+	filtered := result[:0]
+	for _, e := range result {
+		if !isSubsumed(dirSet, e) {
+			filtered = append(filtered, e)
+		}
+	}
+	result = filtered
+
 	// Sort by path length (shortest first) so parents are mounted before children.
 	sort.Slice(result, func(i, j int) bool {
 		if len(result[i].src) != len(result[j].src) {
@@ -102,6 +121,26 @@ func buildMountPlan(cfg *ChildConfig) []mountEntry {
 	})
 
 	return result
+}
+
+// isSubsumed reports whether a parent directory in dirs provides identical
+// mount flags (readOnly, noExec), making child redundant. Device entries are
+// never subsumed because they need their own mount without MS_NODEV.
+func isSubsumed(dirs map[string]mountEntry, child mountEntry) bool {
+	if child.isDev {
+		return false
+	}
+	path := child.src
+	for {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		if e, ok := dirs[parent]; ok {
+			return e.readOnly == child.readOnly && e.noExec == child.noExec
+		}
+		path = parent
+	}
 }
 
 // enforceMountNS restricts filesystem access by building a new root from
@@ -128,9 +167,9 @@ func enforceMountNS(cfg *ChildConfig) error {
 		dst := filepath.Join(newRoot, m.src)
 		if m.isFile {
 			// Create parent directory and empty file for file bind mounts.
-			// Skip creation if the file already exists (e.g. from a parent
-			// bind mount that was remounted read-only).
-			if _, statErr := os.Stat(dst); statErr != nil {
+			// Skip creation if the file (or symlink) already exists, e.g.
+			// from a parent bind mount that was remounted read-only.
+			if _, statErr := os.Lstat(dst); statErr != nil {
 				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 					return fmt.Errorf("creating parent for %s: %w", m.src, err)
 				}
@@ -318,7 +357,9 @@ func synthesizePasswd(cfg *ChildConfig, newRoot string) error {
 		if _, err := os.Stat(f.path); err != nil {
 			continue // Not in the mount plan.
 		}
-		tmp := f.path + ".curb"
+		// Write temp file to the tmpfs root (always writable), not next to the
+		// target which may be inside a read-only parent bind mount.
+		tmp := filepath.Join(newRoot, ".synth-"+filepath.Base(f.path))
 		if err := os.WriteFile(tmp, []byte(f.content), 0o644); err != nil {
 			return fmt.Errorf("writing synthetic %s: %w", filepath.Base(f.path), err)
 		}
