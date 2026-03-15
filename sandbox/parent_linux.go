@@ -17,36 +17,50 @@ import (
 	"github.com/upsun/curb/proxy"
 )
 
+// resources is a stack-based cleanup manager. Closers run in LIFO order.
+type resources struct{ closers []func() }
+
+func (r *resources) push(fn func()) { r.closers = append(r.closers, fn) }
+
+func (r *resources) closeAll() {
+	for i := len(r.closers) - 1; i >= 0; i-- {
+		r.closers[i]()
+	}
+	r.closers = nil
+}
+
 // StartSandbox re-execs curb inside new namespaces, passes the sandbox config
 // to the child via a pipe, and waits for the child to exit.
 // It returns the child's exit code, or -1 and an error on setup failure.
 func StartSandbox(plan *SandboxPlan) (int, error) {
+	var res resources
+
 	// Create config pipe.
 	configR, configW, err := os.Pipe()
 	if err != nil {
 		return -1, fmt.Errorf("creating config pipe: %w", err)
 	}
+	res.push(func() { _ = configR.Close() })
+	res.push(func() { _ = configW.Close() })
 
 	// Create socketpair for fd passing (TAP fd or proxy connection fds).
 	sockParent, sockChild, err := CreateSocketPair()
 	if err != nil {
-		_ = configR.Close()
-		_ = configW.Close()
+		res.closeAll()
 		return -1, fmt.Errorf("creating socketpair: %w", err)
 	}
+	res.push(func() { _ = sockParent.Close() })
+	res.push(func() { _ = sockChild.Close() })
 
 	// Set up signal forwarding before starting the child to avoid races.
 	sigCh := make(chan os.Signal, 32)
 	signal.Notify(sigCh, catchableSignals()...)
+	res.push(func() { signal.Stop(sigCh) })
 
 	// Resolve our own executable path for re-exec.
 	self, err := os.Executable()
 	if err != nil {
-		_ = configR.Close()
-		_ = configW.Close()
-		_ = sockParent.Close()
-		_ = sockChild.Close()
-		signal.Stop(sigCh)
+		res.closeAll()
 		return -1, fmt.Errorf("resolving executable path: %w", err)
 	}
 
@@ -81,12 +95,16 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		signal.Stop(sigCh)
-		_ = configR.Close()
-		_ = configW.Close()
-		_ = sockParent.Close()
-		_ = sockChild.Close()
+		res.closeAll()
 		return -1, fmt.Errorf("starting sandbox: %w", err)
+	}
+
+	// abort kills the child and cleans up all resources. Used on error paths
+	// after cmd.Start() succeeds.
+	abort := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		res.closeAll()
 	}
 
 	// Child has inherited these fds; close our copies.
@@ -96,126 +114,57 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// Write config to the pipe.
 	cfg := plan.childConfig()
 	if err := json.NewEncoder(configW).Encode(&cfg); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		signal.Stop(sigCh)
-		_ = configW.Close()
-		_ = sockParent.Close()
+		abort()
 		return -1, fmt.Errorf("writing config to child: %w", err)
 	}
 	_ = configW.Close()
 
-	// Build proxy handler if proxy is enabled.
-	var proxyHandler *proxy.Handler
-	if plan.ProxyEnabled {
-		proxyHandler = buildProxyHandler(plan)
-	}
-
-	// Handle proxy-only mode: receive fds from child, serve them.
+	// Start proxy if enabled.
 	var proxySrv *http.Server
-	var proxyListener *proxy.ConnListener
-	if plan.ProxyEnabled && !plan.NetEnabled {
-		addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
-		proxyListener = proxy.NewConnListener(addr)
-		proxySrv = &http.Server{Handler: proxyHandler}
-		go func() { _ = proxySrv.Serve(proxyListener) }()
+	if plan.ProxyEnabled {
+		handler := buildProxyHandler(plan)
 
-		// Receive connection fds from child. RecvFD errors are expected on
-		// normal shutdown (child exits, socketpair closes). Unexpected errors
-		// are indistinguishable here and logged implicitly by the child's
-		// SendFD error handling.
-		go func() {
-			for {
-				fd, recvErr := RecvFD(sockParent)
-				if recvErr != nil {
-					_ = proxyListener.Close()
-					return
-				}
-				f := os.NewFile(uintptr(fd), "proxy-conn")
-				conn, fileErr := net.FileConn(f)
-				_ = f.Close()
-				if fileErr != nil {
-					continue
-				}
-				if enqErr := proxyListener.Enqueue(conn); enqErr != nil {
-					_ = conn.Close()
-				}
+		if !plan.NetEnabled {
+			// Proxy-only: ConnListener fed by recvFDLoop.
+			addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
+			cl := proxy.NewConnListener(addr)
+			res.push(func() { _ = cl.Close() })
+			proxySrv = startProxyServer(cl, handler)
+			go recvFDLoop(sockParent, cl)
+		} else {
+			// Proxy+TUN: real TCP listener reachable via netstack localhost forwarding.
+			ln, lnErr := listenProxyPort(plan.ProxyPort)
+			if lnErr != nil {
+				abort()
+				return -1, fmt.Errorf("proxy listener: %w", lnErr)
 			}
-		}()
-	}
-
-	// Handle proxy+TUN mode: start proxy on real TCP listener, then netstack.
-	var proxyTCPListener net.Listener
-	if plan.ProxyEnabled && plan.NetEnabled {
-		ln, lnErr := listenProxyPort(plan.ProxyPort)
-		if lnErr != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			signal.Stop(sigCh)
-			_ = sockParent.Close()
-			return -1, fmt.Errorf("proxy listener: %w", lnErr)
+			res.push(func() { _ = ln.Close() })
+			proxySrv = startProxyServer(ln, handler)
 		}
-		proxyTCPListener = ln
-		proxySrv = &http.Server{Handler: proxyHandler}
-		go func() { _ = proxySrv.Serve(ln) }()
+		res.push(func() { _ = proxySrv.Close() })
 	}
 
 	// If network (TUN) is enabled, receive TAP fd, start netstack, signal child.
-	var ns *netstack.Stack
 	if plan.NetEnabled {
-		abortNet := func() {
-			if ns != nil {
-				ns.Close()
-			}
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			signal.Stop(sigCh)
-			_ = sockParent.Close()
-		}
-
 		tapFD, recvErr := RecvFD(sockParent)
 		if recvErr != nil {
-			abortNet()
+			abort()
 			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
 		}
-		var filter *netstack.FilterConfig
-		if len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0 {
-			filter = &netstack.FilterConfig{
-				ECHMode:        plan.ECHMode,
-				RequireSNI:     plan.RequireSNI,
-				AllowHTTP:      plan.AllowHTTP,
-				AllowLocalhost: plan.AllowLocalhost,
-				Logger:         plan.Logger,
-			}
-			if len(plan.AllowedDomains) > 0 {
-				matcher := policy.NewDomainMatcher(plan.AllowedDomains)
-				filter.Check = matcher.Match
-			} else {
-				// IPs-only: deny all domain queries so DNS returns REFUSED.
-				filter.Check = func(string) bool { return false }
-			}
-			if len(plan.AllowedIPs) > 0 {
-				ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
-				filter.CheckIP = ipMatcher.Match
-			}
-		} else if plan.AllowLocalhost {
-			filter = &netstack.FilterConfig{
-				AllowLocalhost: true,
-				Logger:         plan.Logger,
-			}
-		}
-		ns, recvErr = netstack.NewStack(tapFD, filter)
+		filter := buildNetstackFilter(plan)
+		ns, recvErr := netstack.NewStack(tapFD, filter)
 		if recvErr != nil {
-			abortNet()
+			abort()
 			return -1, fmt.Errorf("creating netstack: %w", recvErr)
 		}
+		res.push(func() { ns.Close() })
 		if _, recvErr = sockParent.Write([]byte{0}); recvErr != nil {
-			abortNet()
+			abort()
 			return -1, fmt.Errorf("sending ready signal: %w", recvErr)
 		}
 	}
 
-	// Close socketpair parent end only when not needed for proxy fd-passing.
+	// Close socketpair parent end when not needed for proxy fd-passing.
 	if !plan.ProxyEnabled || plan.NetEnabled {
 		_ = sockParent.Close()
 	}
@@ -231,23 +180,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	waitErr := cmd.Wait()
 	signal.Stop(sigCh)
 	close(sigCh)
-	if ns != nil {
-		ns.Close()
-	}
-
-	// Cleanup proxy resources.
-	if proxyListener != nil {
-		_ = proxyListener.Close()
-	}
-	if proxyTCPListener != nil {
-		_ = proxyTCPListener.Close()
-	}
-	if proxySrv != nil {
-		_ = proxySrv.Close()
-	}
-	if plan.ProxyEnabled && !plan.NetEnabled {
-		_ = sockParent.Close()
-	}
+	res.closeAll()
 
 	if waitErr == nil {
 		return 0, nil
@@ -267,6 +200,67 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		return 128 + int(status.Signal()), nil
 	}
 	return 1, nil
+}
+
+// startProxyServer creates an HTTP server and starts serving in a goroutine.
+func startProxyServer(ln net.Listener, handler *proxy.Handler) *http.Server {
+	srv := &http.Server{Handler: handler}
+	go func() { _ = srv.Serve(ln) }()
+	return srv
+}
+
+// recvFDLoop receives connection fds from the child over the socketpair and
+// enqueues them into the ConnListener for the proxy server. It returns when
+// the socketpair closes (normal shutdown) or on any RecvFD error.
+func recvFDLoop(sock *os.File, cl *proxy.ConnListener) {
+	for {
+		fd, err := RecvFD(sock)
+		if err != nil {
+			_ = cl.Close()
+			return
+		}
+		f := os.NewFile(uintptr(fd), "proxy-conn")
+		conn, fileErr := net.FileConn(f)
+		_ = f.Close()
+		if fileErr != nil {
+			continue
+		}
+		if enqErr := cl.Enqueue(conn); enqErr != nil {
+			_ = conn.Close()
+		}
+	}
+}
+
+// buildNetstackFilter constructs the netstack filter configuration from the plan.
+func buildNetstackFilter(plan *SandboxPlan) *netstack.FilterConfig {
+	if len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0 {
+		filter := &netstack.FilterConfig{
+			ECHMode:        plan.ECHMode,
+			RequireSNI:     plan.RequireSNI,
+			AllowHTTP:      plan.AllowHTTP,
+			AllowLocalhost: plan.AllowLocalhost,
+			Logger:         plan.Logger,
+		}
+		if len(plan.AllowedDomains) > 0 {
+			matcher := policy.NewDomainMatcher(plan.AllowedDomains)
+			filter.Check = matcher.Match
+		} else {
+			// IPs-only: deny all domain queries so DNS returns REFUSED.
+			filter.Check = func(string) bool { return false }
+		}
+		if len(plan.AllowedIPs) > 0 {
+			ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
+			filter.CheckIP = ipMatcher.Match
+		}
+		return filter
+	}
+	if plan.AllowLocalhost {
+		return &netstack.FilterConfig{
+			AllowLocalhost: true,
+			Logger:         plan.Logger,
+		}
+	}
+	return nil
 }
 
 // buildProxyHandler creates the MITM proxy handler from the sandbox plan.
