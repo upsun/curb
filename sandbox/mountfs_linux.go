@@ -310,6 +310,14 @@ func enforceMountNS(cfg *ChildConfig) error {
 	}
 	_ = os.Remove("/.old_root")
 
+	// Remount root tmpfs read-only so gap directories (not covered by
+	// any bind mount) cannot be written to. MS_BIND makes this a
+	// per-mount (MNT_READONLY) change rather than a superblock change,
+	// avoiding EBUSY from internal bind mounts (e.g. synthetic passwd).
+	if err := syscall.Mount("", "/", "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_RDONLY, ""); err != nil {
+		return fmt.Errorf("remounting root read-only: %w", err)
+	}
+
 	// Restore CWD.
 	if err := syscall.Chdir(cwd); err != nil {
 		// CWD may not exist in new root; fall back to /.

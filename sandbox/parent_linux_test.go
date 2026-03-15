@@ -2349,6 +2349,19 @@ func TestCurb_MountFS_UsernameNotRoot(t *testing.T) {
 	}
 }
 
+// TestCurb_MountFS_WriteEtcGapBlocked verifies that unmounted gap directories
+// under /etc (part of the scaffolding tmpfs, not covered by any bind mount)
+// are read-only. Without the root tmpfs remount this would succeed.
+func TestCurb_MountFS_WriteEtcGapBlocked(t *testing.T) {
+	requirePivotRoot(t)
+
+	cmd := exec.Command(curbBin, "--", "touch", "/etc/curb-gap-test")
+	cmd.Env = mountNSEnv()
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected touch in /etc gap to fail: %s", string(out))
+	assert.Contains(t, string(out), "Read-only file system")
+}
+
 // --- IPs and UnrestrictedNet integration tests ---
 
 // TestCurb_Net_IPsAllowsConnection verifies that --ips allows direct IP connections.
