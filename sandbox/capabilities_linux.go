@@ -22,6 +22,7 @@ func ProbeAll() *Capabilities {
 	caps.PidNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWPID, "PID namespace")
 	caps.TUN = probeTUN()
 	caps.LandlockABI = probeLandlock()
+	caps.Seccomp = true // seccomp-bpf available since kernel 3.5.
 	return caps
 }
 

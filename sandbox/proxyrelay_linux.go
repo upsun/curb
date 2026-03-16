@@ -31,6 +31,14 @@ func proxyRelayInit(sockFile *os.File, cfg *ChildConfig) error {
 		return err
 	}
 
+	// Seccomp: block AF_UNIX socket creation. Applied after FS enforcement
+	// but before fork+exec so the user command inherits the filter.
+	// The accept loop uses TCP (AF_INET) and existing fds, so is unaffected.
+	if err := enforceSeccomp(cfg.AllowUnixSockets); err != nil {
+		_ = ln.Close()
+		return err
+	}
+
 	if len(cfg.Command) == 0 {
 		_ = ln.Close()
 		return fmt.Errorf("no command specified")

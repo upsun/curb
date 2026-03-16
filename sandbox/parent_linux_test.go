@@ -2599,6 +2599,232 @@ func TestCurb_Net_UnrestrictedNetConflict(t *testing.T) {
 	assert.Contains(t, string(out), "cannot be combined")
 }
 
+// TestCurb_Net_AbstractUnixSocketEscape verifies that a sandboxed process
+// cannot use abstract Unix sockets to communicate with the host. Abstract
+// sockets live in the network namespace (not the filesystem), so mount NS and
+// Landlock do not block them. Without net NS (--unrestricted-net), this is an
+// unmitigated escape vector unless socket(AF_UNIX) is blocked via seccomp.
+func TestCurb_Net_AbstractUnixSocketEscape(t *testing.T) {
+	requireUserNS(t)
+
+	// Build a helper binary that connects to an abstract Unix socket and
+	// sends a message.
+	helperDir := t.TempDir()
+	helperSrc := filepath.Join(helperDir, "escape.go")
+	require.NoError(t, os.WriteFile(helperSrc, []byte(`package main
+
+import (
+	"net"
+	"os"
+)
+
+func main() {
+	conn, err := net.Dial("unix", "@curb-escape-test")
+	if err != nil {
+		os.Stderr.WriteString("dial: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	conn.Write([]byte("ESCAPED"))
+	conn.Close()
+}
+`), 0o644))
+	helperBin := filepath.Join(helperDir, "escape")
+	build := exec.Command("go", "build", "-o", helperBin, helperSrc)
+	buildOut, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", string(buildOut))
+
+	// Listen on an abstract Unix socket in the host namespace.
+	// Abstract sockets have no filesystem path — they bypass all
+	// path-based enforcement (mount NS, Landlock).
+	ln, err := net.Listen("unix", "@curb-escape-test")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+
+	// Accept one connection in the background.
+	received := make(chan string, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			received <- "accept-error"
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		buf := make([]byte, 256)
+		n, _ := conn.Read(buf)
+		received <- string(buf[:n])
+	}()
+
+	// Run the helper inside curb with --unrestricted-net (no net NS).
+	cmd := exec.Command(curbBin,
+		"--unrestricted-net",
+		"--read", helperDir,
+		"--exec", helperDir,
+		"--",
+		helperBin)
+	out, cmdErr := cmd.CombinedOutput()
+	outStr := string(out)
+
+	// The helper should fail: seccomp blocks socket(AF_UNIX) with EPERM.
+	require.Error(t, cmdErr, "expected helper to fail (seccomp should block AF_UNIX)")
+	assert.Contains(t, outStr, "operation not permitted",
+		"expected EPERM from seccomp, got: %s", outStr)
+
+	// Close the listener to unblock the goroutine, then verify no data arrived.
+	_ = ln.Close()
+	select {
+	case msg := <-received:
+		if msg == "ESCAPED" {
+			t.Fatalf("SECURITY: sandboxed process escaped via abstract Unix socket")
+		}
+	case <-time.After(time.Second):
+		// Goroutine didn't send anything — expected.
+	}
+}
+
+// TestCurb_Net_SeccompActiveInProxyMode verifies that seccomp blocks AF_UNIX
+// even in proxy mode (default). This exercises the proxyRelayInit code path
+// where the Go runtime stays alive running the accept loop after seccomp is
+// installed. In proxy mode, net NS already isolates abstract sockets, but
+// seccomp provides defense-in-depth.
+func TestCurb_Net_SeccompActiveInProxyMode(t *testing.T) {
+	requireProxyNS(t)
+
+	// The helper binary attempts socket(AF_UNIX) — seccomp should block it.
+	helperDir := t.TempDir()
+	helperSrc := filepath.Join(helperDir, "unixsock.go")
+	require.NoError(t, os.WriteFile(helperSrc, []byte(`package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+)
+
+func main() {
+	conn, err := net.Dial("unix", "@curb-seccomp-proxy-test")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "socket blocked: %v\n", err)
+		os.Exit(1)
+	}
+	conn.Close()
+	fmt.Fprintln(os.Stderr, "ESCAPED: socket(AF_UNIX) was not blocked")
+	os.Exit(0)
+}
+`), 0o644))
+	helperBin := filepath.Join(helperDir, "unixsock")
+	build := exec.Command("go", "build", "-o", helperBin, helperSrc)
+	buildOut, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", string(buildOut))
+
+	// Run in default proxy mode (no --proxy off, no --unrestricted-net).
+	cmd := exec.Command(curbBin,
+		"--domains", "localhost",
+		"--read", helperDir,
+		"--exec", helperDir,
+		"--",
+		helperBin)
+	out, cmdErr := cmd.CombinedOutput()
+	outStr := string(out)
+
+	require.Error(t, cmdErr, "expected helper to fail (seccomp should block AF_UNIX in proxy mode)")
+	assert.Contains(t, outStr, "operation not permitted",
+		"expected EPERM from seccomp in proxy mode, got: %s", outStr)
+}
+
+// TestCurb_Net_SeccompBlocksSocketpair verifies that socketpair(AF_UNIX) is
+// also blocked, not just socket(AF_UNIX).
+func TestCurb_Net_SeccompBlocksSocketpair(t *testing.T) {
+	requireUserNS(t)
+
+	// This helper calls socketpair(AF_UNIX) via Go's net package.
+	helperDir := t.TempDir()
+	helperSrc := filepath.Join(helperDir, "pair.go")
+	require.NoError(t, os.WriteFile(helperSrc, []byte(`package main
+
+import (
+	"fmt"
+	"os"
+	"syscall"
+)
+
+func main() {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "socketpair blocked: %v\n", err)
+		os.Exit(1)
+	}
+	syscall.Close(fds[0])
+	syscall.Close(fds[1])
+	fmt.Fprintln(os.Stderr, "ESCAPED: socketpair(AF_UNIX) was not blocked")
+	os.Exit(0)
+}
+`), 0o644))
+	helperBin := filepath.Join(helperDir, "pair")
+	build := exec.Command("go", "build", "-o", helperBin, helperSrc)
+	buildOut, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", string(buildOut))
+
+	cmd := exec.Command(curbBin,
+		"--unrestricted-net",
+		"--read", helperDir,
+		"--exec", helperDir,
+		"--",
+		helperBin)
+	out, cmdErr := cmd.CombinedOutput()
+	outStr := string(out)
+
+	require.Error(t, cmdErr, "expected helper to fail (seccomp should block socketpair)")
+	assert.Contains(t, outStr, "operation not permitted",
+		"expected EPERM from seccomp on socketpair, got: %s", outStr)
+}
+
+// TestCurb_Net_AllowUnixSocketsFlag verifies that --allow-unix-sockets
+// disables the seccomp filter, allowing AF_UNIX socket creation.
+func TestCurb_Net_AllowUnixSocketsFlag(t *testing.T) {
+	requireUserNS(t)
+
+	// Reuse the socketpair helper — it should succeed with the flag.
+	helperDir := t.TempDir()
+	helperSrc := filepath.Join(helperDir, "pair.go")
+	require.NoError(t, os.WriteFile(helperSrc, []byte(`package main
+
+import (
+	"fmt"
+	"os"
+	"syscall"
+)
+
+func main() {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "socketpair: %v\n", err)
+		os.Exit(1)
+	}
+	syscall.Close(fds[0])
+	syscall.Close(fds[1])
+	fmt.Println("OK")
+}
+`), 0o644))
+	helperBin := filepath.Join(helperDir, "pair")
+	build := exec.Command("go", "build", "-o", helperBin, helperSrc)
+	buildOut, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", string(buildOut))
+
+	cmd := exec.Command(curbBin,
+		"--unrestricted-net",
+		"--allow-unix-sockets",
+		"--read", helperDir,
+		"--exec", helperDir,
+		"--",
+		helperBin)
+	out, cmdErr := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+
+	require.NoError(t, cmdErr,
+		"expected socketpair to succeed with --allow-unix-sockets: %s", outStr)
+	assert.Contains(t, outStr, "OK")
+}
+
 // filterCurbOutput removes lines starting with "curb:" from output.
 func filterCurbOutput(s string) string {
 	var lines []string

@@ -73,7 +73,7 @@ packet-level filtering for programs that ignore proxy env vars.
 | PID namespace | Yes (`bwrap --unshare-pid` + fresh `/proc`) | Yes (fresh `/proc` where mount NS is active) |
 | User namespace | Implicit via bubblewrap | Explicit `CLONE_NEWUSER` with UID/GID mapping |
 | Mount namespace | Always (bubblewrap requires it) | Always when FS restrictions are active |
-| Seccomp | BPF filter blocking `AF_UNIX` socket creation (applied via custom binary after socat starts) | None |
+| Seccomp | BPF filter blocking `AF_UNIX` socket creation (applied via custom binary after socat starts) | BPF filter blocking `AF_UNIX` socket + socketpair (applied after FS enforcement, before exec) |
 
 Both create PID namespaces. curb mounts a fresh `/proc` when a mount namespace
 is active (default when FS restrictions are on), so the sandboxed process only
@@ -81,12 +81,12 @@ sees its own PIDs.
 Cross-namespace signal delivery is restricted by user namespace UID boundaries
 (only same-UID processes can be signaled).
 
-**srt advantage**: seccomp BPF provides an additional layer of defense by
-blocking `AF_UNIX` socket creation, preventing the sandboxed process from
-communicating with host services via Unix sockets. In curb, Landlock covers
-this indirectly (the child cannot access socket files unless they are in an
-allowed path), but seccomp enforces it at the syscall level regardless of
-filesystem policy.
+Both use seccomp BPF to block `AF_UNIX` socket creation, preventing the
+sandboxed process from communicating with host services via Unix domain
+sockets. This is particularly important for abstract sockets (names starting
+with `\0`), which have no filesystem path and bypass mount NS and Landlock.
+srt applies the filter via a custom `apply-seccomp` binary after socat
+starts; curb builds the BPF program in Go with no external dependencies.
 
 ## Environment
 

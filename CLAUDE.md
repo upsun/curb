@@ -45,6 +45,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - Netstack-specific tests must use `--proxy off` to bypass the proxy (default is `--proxy on`).
 - `_CURB_TEST_NO_LANDLOCK=1` disables Landlock to test the mount-NS-only path.
 - `_CURB_TEST_NO_MOUNT_NS=1` disables mount NS to test the Landlock-only path.
+- `_CURB_TEST_NO_SECCOMP=1` disables the seccomp AF_UNIX filter.
 - Tests that fail with exit 111 (curb setup failure) due to degraded mount NS retry with Landlock-only mode via `isSetupFailure()` + `landlockOnlyEnv()`.
 - Network-dependent tests (external HTTP) use `requireExternalHTTP(t)` to skip gracefully.
 - Write adversarial tests: try to escape each sandbox layer (env leaks, path traversal, exec bypass, namespace escapes).

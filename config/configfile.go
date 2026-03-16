@@ -12,19 +12,20 @@ import (
 // ConfigFile represents the sandbox-config subset of Config as loaded from a YAML file.
 // Pointer types for scalars distinguish "not set" from zero value.
 type ConfigFile struct {
-	Domains         []string `yaml:"domains"`
-	IPs             []string `yaml:"ips"`
-	Read            []string `yaml:"read"`
-	Write           []string `yaml:"write"`
-	Exec            []string `yaml:"exec"`
-	Env             []string `yaml:"env"`
-	Proxy           *string  `yaml:"proxy"`
-	TUN             *string  `yaml:"tun"`
-	ECH             *string  `yaml:"ech"`
-	AllowHTTP       *bool    `yaml:"allow-http"`
-	AllowNoSNI      *bool    `yaml:"allow-no-sni"`
-	UnrestrictedNet *bool    `yaml:"unrestricted-net"`
-	Home            *string  `yaml:"home"`
+	Domains          []string `yaml:"domains"`
+	IPs              []string `yaml:"ips"`
+	Read             []string `yaml:"read"`
+	Write            []string `yaml:"write"`
+	Exec             []string `yaml:"exec"`
+	Env              []string `yaml:"env"`
+	Proxy            *string  `yaml:"proxy"`
+	TUN              *string  `yaml:"tun"`
+	ECH              *string  `yaml:"ech"`
+	AllowHTTP        *bool    `yaml:"allow-http"`
+	AllowNoSNI       *bool    `yaml:"allow-no-sni"`
+	AllowUnixSockets *bool    `yaml:"allow-unix-sockets"`
+	UnrestrictedNet  *bool    `yaml:"unrestricted-net"`
+	Home             *string  `yaml:"home"`
 }
 
 // LoadConfigFile reads and decodes a YAML config file.
@@ -97,6 +98,9 @@ func MergeConfigFile(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 	}
 	if cf.AllowNoSNI != nil && !flags.Changed("allow-no-sni") {
 		cfg.RequireSNI = !*cf.AllowNoSNI
+	}
+	if cf.AllowUnixSockets != nil && !flags.Changed("allow-unix-sockets") {
+		cfg.AllowUnixSockets = *cf.AllowUnixSockets
 	}
 	if cf.UnrestrictedNet != nil && !flags.Changed("unrestricted-net") {
 		cfg.UnrestrictedNet = *cf.UnrestrictedNet

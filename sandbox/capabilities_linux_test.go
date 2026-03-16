@@ -30,6 +30,7 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 		NetNS:       nil,
 		TUN:         nil,
 		LandlockABI: 4,
+		Seccomp:     true,
 		KernelInfo:  "6.8.0-test",
 	}
 	cfg := &config.Config{
@@ -208,6 +209,7 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 		NetNS:       nil,
 		TUN:         nil,
 		LandlockABI: 4,
+		Seccomp:     true,
 		KernelInfo:  "6.8.0-test",
 	}
 	cfg := &config.Config{
@@ -233,6 +235,7 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 	assert.Contains(t, output, "example.com")
 	assert.Contains(t, output, "environment:")
 	assert.Contains(t, output, "method:     pivot_root + landlock")
+	assert.Contains(t, output, "seccomp:    AF_UNIX blocked")
 	assert.Contains(t, output, "status:     full")
 }
 

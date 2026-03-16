@@ -73,6 +73,9 @@ Use -- before the command when it has its own flags.`,
 			if os.Getenv(sandbox.TestNoUserNSEnvKey) == "1" {
 				caps.UserNS = fmt.Errorf("disabled by %s", sandbox.TestNoUserNSEnvKey)
 			}
+			if os.Getenv(sandbox.TestNoSeccompEnvKey) == "1" {
+				caps.Seccomp = false
+			}
 			plan, err := sandbox.BuildPlan(cfg, caps)
 			if err != nil {
 				return err
@@ -126,6 +129,11 @@ Use -- before the command when it has its own flags.`,
 				logger.Info("exec: disabled (--exec '*').")
 			} else {
 				logger.Info("exec: active.")
+			}
+			if plan.AllowUnixSockets {
+				logger.Info("seccomp: disabled (--allow-unix-sockets).")
+			} else if caps.Seccomp {
+				logger.Info("seccomp: AF_UNIX blocked.")
 			}
 			if cfg.EnvPassthroughAll {
 				logger.Info("env: full host passthrough.")
@@ -206,6 +214,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.String("ech", "strip", "ECH handling mode: strip, allow, deny")
 	f.Bool("allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
 	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")
+	f.Bool("allow-unix-sockets", false, "allow AF_UNIX socket creation (needed for Docker, databases via socket)")
 
 	// Logging.
 	f.String("log-file", "", "write structured JSON logs to file (use with --domains '*' to discover needed domains, then: curb config-gen --from-log FILE)")

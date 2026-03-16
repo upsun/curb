@@ -293,6 +293,9 @@ func startLandlockOnly(plan *SandboxPlan) (int, error) {
 	if err := enforceFS(&cfg); err != nil {
 		return -1, err
 	}
+	if err := enforceSeccomp(cfg.AllowUnixSockets); err != nil {
+		return -1, err
+	}
 	exe, err := findExecutable(cfg.Command[0], cfg.Env)
 	if err != nil {
 		return -1, err

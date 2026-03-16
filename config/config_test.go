@@ -27,6 +27,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.String("ech", "strip", "")
 	f.Bool("allow-no-sni", false, "")
 	f.Bool("allow-http", false, "")
+	f.Bool("allow-unix-sockets", false, "")
 	f.String("log-file", "", "")
 	f.BoolP("verbose", "v", false, "")
 	f.Bool("debug", false, "")

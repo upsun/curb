@@ -16,6 +16,7 @@ type Capabilities struct {
 	TUN         error  // nil = ok, non-nil = fatal if --allow-domains used.
 	PidNS       error  // nil = ok, non-nil = degraded (no PID isolation).
 	LandlockABI int    // 0 = unavailable, 1-5 = version.
+	Seccomp     bool   // true = seccomp-bpf filter will be applied.
 	KernelInfo  string // e.g., "6.8.0-100-generic".
 }
 

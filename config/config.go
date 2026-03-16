@@ -29,6 +29,7 @@ type Config struct {
 	ECHMode           string
 	RequireSNI        bool
 	AllowHTTP         bool
+	AllowUnixSockets  bool
 	LogFile           string
 	Verbose           bool
 	Debug             bool
@@ -123,6 +124,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	allowUnixSockets, err := flags.GetBool("allow-unix-sockets")
+	if err != nil {
+		return nil, err
+	}
 	logFile, err := flags.GetString("log-file")
 	if err != nil {
 		return nil, err
@@ -158,26 +163,27 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	passNames, setPairs := classifyEnvArgs(env)
 
 	cfg := &Config{
-		AllowedDomains:  allow,
-		AllowedIPs:      ips,
-		UnrestrictedNet: unrestrictedNet,
-		ProxyMode:       proxyMode,
-		TUNMode:         tunMode,
-		ROPaths:         ro,
-		RWPaths:         rw,
-		ExecAllow:       execAllow,
-		EnvPassthrough:  passNames,
-		EnvSet:          setPairs,
-		ECHMode:         echMode,
-		RequireSNI:      !allowNoSNI,
-		AllowHTTP:       allowHTTP,
-		LogFile:         logFile,
-		Verbose:         verbose,
-		Debug:           debug,
-		Quiet:           quiet,
-		DryRun:          dryRun,
-		HomePath:        home,
-		Command:         cmd.Flags().Args(),
+		AllowedDomains:   allow,
+		AllowedIPs:       ips,
+		UnrestrictedNet:  unrestrictedNet,
+		ProxyMode:        proxyMode,
+		TUNMode:          tunMode,
+		ROPaths:          ro,
+		RWPaths:          rw,
+		ExecAllow:        execAllow,
+		EnvPassthrough:   passNames,
+		EnvSet:           setPairs,
+		ECHMode:          echMode,
+		RequireSNI:       !allowNoSNI,
+		AllowHTTP:        allowHTTP,
+		AllowUnixSockets: allowUnixSockets,
+		LogFile:          logFile,
+		Verbose:          verbose,
+		Debug:            debug,
+		Quiet:            quiet,
+		DryRun:           dryRun,
+		HomePath:         home,
+		Command:          cmd.Flags().Args(),
 	}
 
 	// Wildcard handling: '*' in list flags sets the corresponding escape hatch.
@@ -303,6 +309,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 			cfg.AllowHTTP = true
 		}
 	}
+	mergeBoolEnv(flags, &cfg.AllowUnixSockets, "allow-unix-sockets", "CURB_ALLOW_UNIX_SOCKETS")
 }
 
 // classifyEnvArgs separates env args into passthrough names and explicit name=value pairs.

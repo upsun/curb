@@ -45,6 +45,9 @@ const (
 
 	// TestNoUserNSEnvKey disables user NS in tests to exercise the Landlock-only direct-exec path.
 	TestNoUserNSEnvKey = "_CURB_TEST_NO_USER_NS"
+
+	// TestNoSeccompEnvKey disables seccomp in tests to exercise paths without AF_UNIX blocking.
+	TestNoSeccompEnvKey = "_CURB_TEST_NO_SECCOMP"
 )
 
 // FSEnforcer applies a filesystem enforcement layer to the current process.
@@ -83,6 +86,7 @@ type SandboxPlan struct {
 	ECHMode          string
 	RequireSNI       bool
 	AllowHTTP        bool
+	AllowUnixSockets bool
 	ProxyEnabled     bool
 	ProxyPort        int
 	TUNMode          string
@@ -114,30 +118,31 @@ func (p *SandboxPlan) LandlockPaths() policy.LandlockPaths {
 
 // ChildConfig is the serializable config sent from parent to child over a pipe.
 type ChildConfig struct {
-	Command        []string `json:"command"`
-	Env            []string `json:"env"`
-	ROPaths        []string `json:"ro_paths,omitempty"`
-	ROFiles        []string `json:"ro_files,omitempty"`
-	RWPaths        []string `json:"rw_paths,omitempty"`
-	RWFiles        []string `json:"rw_files,omitempty"`
-	HiddenPaths    []string `json:"hidden_paths,omitempty"`
-	DenyWritePaths []string `json:"deny_write_paths,omitempty"`
-	DenyExecPaths  []string `json:"deny_exec_paths,omitempty"`
-	ExecPaths      []string `json:"exec_paths,omitempty"`
-	UsePivotRoot   bool     `json:"use_pivot_root,omitempty"`
-	UseLandlock    bool     `json:"use_landlock,omitempty"`
-	NoFSRestrict   bool     `json:"no_fs_restrict,omitempty"`
-	PidNS          bool     `json:"pid_ns,omitempty"`
-	NetEnabled     bool     `json:"net_enabled"`
-	ProxyEnabled   bool     `json:"proxy_enabled,omitempty"`
-	ProxyPort      int      `json:"proxy_port,omitempty"`
-	CACertFile     string   `json:"ca_cert_file,omitempty"`
-	CACertMountDst string   `json:"ca_cert_mount_dst,omitempty"`
-	AllowedDomains []string `json:"allowed_domains,omitempty"`
-	AllowedIPs     []string `json:"allowed_ips,omitempty"`
-	UserPaths      []string `json:"user_paths,omitempty"`
-	Quiet          bool     `json:"quiet,omitempty"`
-	TempDir        string   `json:"temp_dir"`
+	Command          []string `json:"command"`
+	Env              []string `json:"env"`
+	ROPaths          []string `json:"ro_paths,omitempty"`
+	ROFiles          []string `json:"ro_files,omitempty"`
+	RWPaths          []string `json:"rw_paths,omitempty"`
+	RWFiles          []string `json:"rw_files,omitempty"`
+	HiddenPaths      []string `json:"hidden_paths,omitempty"`
+	DenyWritePaths   []string `json:"deny_write_paths,omitempty"`
+	DenyExecPaths    []string `json:"deny_exec_paths,omitempty"`
+	ExecPaths        []string `json:"exec_paths,omitempty"`
+	UsePivotRoot     bool     `json:"use_pivot_root,omitempty"`
+	UseLandlock      bool     `json:"use_landlock,omitempty"`
+	NoFSRestrict     bool     `json:"no_fs_restrict,omitempty"`
+	PidNS            bool     `json:"pid_ns,omitempty"`
+	NetEnabled       bool     `json:"net_enabled"`
+	ProxyEnabled     bool     `json:"proxy_enabled,omitempty"`
+	ProxyPort        int      `json:"proxy_port,omitempty"`
+	CACertFile       string   `json:"ca_cert_file,omitempty"`
+	CACertMountDst   string   `json:"ca_cert_mount_dst,omitempty"`
+	AllowedDomains   []string `json:"allowed_domains,omitempty"`
+	AllowedIPs       []string `json:"allowed_ips,omitempty"`
+	UserPaths        []string `json:"user_paths,omitempty"`
+	AllowUnixSockets bool     `json:"allow_unix_sockets,omitempty"`
+	Quiet            bool     `json:"quiet,omitempty"`
+	TempDir          string   `json:"temp_dir"`
 }
 
 // LandlockPaths returns the path sets for Landlock rule construction.
@@ -422,6 +427,7 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 	plan.ECHMode = cfg.ECHMode
 	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
+	plan.AllowUnixSockets = cfg.AllowUnixSockets
 }
 
 // resolveProxy picks a proxy port, generates the ephemeral CA, and writes
@@ -489,30 +495,31 @@ func resolveDenials(plan *SandboxPlan, removals *planRemovals) {
 // childConfig builds the ChildConfig from the plan, resolving the environment.
 func (p *SandboxPlan) childConfig() ChildConfig {
 	return ChildConfig{
-		Command:        p.Command,
-		Env:            p.ResolveEnv(),
-		ROPaths:        p.ROPaths,
-		ROFiles:        p.ROFiles,
-		RWPaths:        p.RWPaths,
-		RWFiles:        p.RWFiles,
-		HiddenPaths:    p.HiddenPaths,
-		DenyWritePaths: p.DenyWritePaths,
-		DenyExecPaths:  p.DenyExecPaths,
-		ExecPaths:      p.ExecPaths,
-		UsePivotRoot:   p.UsePivotRoot,
-		UseLandlock:    p.UseLandlock,
-		NoFSRestrict:   p.NoFSRestrict,
-		PidNS:          p.PidNS,
-		NetEnabled:     p.NetEnabled,
-		ProxyEnabled:   p.ProxyEnabled,
-		ProxyPort:      p.ProxyPort,
-		CACertFile:     p.CACertPath,
-		CACertMountDst: p.SystemCACertPath,
-		AllowedDomains: p.AllowedDomains,
-		AllowedIPs:     p.AllowedIPs,
-		UserPaths:      p.UserPaths,
-		Quiet:          p.Quiet,
-		TempDir:        p.TempDir,
+		Command:          p.Command,
+		Env:              p.ResolveEnv(),
+		ROPaths:          p.ROPaths,
+		ROFiles:          p.ROFiles,
+		RWPaths:          p.RWPaths,
+		RWFiles:          p.RWFiles,
+		HiddenPaths:      p.HiddenPaths,
+		DenyWritePaths:   p.DenyWritePaths,
+		DenyExecPaths:    p.DenyExecPaths,
+		ExecPaths:        p.ExecPaths,
+		UsePivotRoot:     p.UsePivotRoot,
+		UseLandlock:      p.UseLandlock,
+		NoFSRestrict:     p.NoFSRestrict,
+		PidNS:            p.PidNS,
+		NetEnabled:       p.NetEnabled,
+		ProxyEnabled:     p.ProxyEnabled,
+		ProxyPort:        p.ProxyPort,
+		CACertFile:       p.CACertPath,
+		CACertMountDst:   p.SystemCACertPath,
+		AllowedDomains:   p.AllowedDomains,
+		AllowedIPs:       p.AllowedIPs,
+		AllowUnixSockets: p.AllowUnixSockets,
+		UserPaths:        p.UserPaths,
+		Quiet:            p.Quiet,
+		TempDir:          p.TempDir,
 	}
 }
 
@@ -583,6 +590,11 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		printCap(w, "landlock", nil, fmt.Sprintf("ABI v%d", p.Caps.LandlockABI))
 	} else {
 		printCap(w, "landlock", fmt.Errorf("unavailable"), "")
+	}
+	if p.Caps.Seccomp {
+		printCap(w, "seccomp", nil, "AF_UNIX blocked")
+	} else {
+		printCap(w, "seccomp", fmt.Errorf("disabled"), "")
 	}
 	ln()
 
@@ -697,6 +709,11 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    method:     landlock")
 	default:
 		ln("    method:     none (env-only)")
+	}
+	if p.AllowUnixSockets {
+		ln("    seccomp:    disabled (--allow-unix-sockets)")
+	} else if p.Caps.Seccomp {
+		ln("    seccomp:    AF_UNIX blocked (socket + socketpair)")
 	}
 	if len(p.DegradedLayers) > 0 {
 		ln("    status:     degraded")

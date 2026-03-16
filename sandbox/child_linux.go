@@ -58,6 +58,11 @@ func childInit() error {
 		return err
 	}
 
+	// Seccomp: block AF_UNIX socket creation (abstract socket escape prevention).
+	if err := enforceSeccomp(cfg.AllowUnixSockets); err != nil {
+		return err
+	}
+
 	if len(cfg.Command) == 0 {
 		return fmt.Errorf("no command specified")
 	}
