@@ -575,6 +575,40 @@ func TestApplyEnvPolicy_EnvSet(t *testing.T) {
 	assert.Equal(t, "my_val", plan.EnvSet["MY_KEY"])
 }
 
+// --- fsEnforcers ---
+
+func TestFSEnforcers_NoFSRestrict(t *testing.T) {
+	cfg := &ChildConfig{NoFSRestrict: true, UsePivotRoot: true, UseLandlock: true}
+	assert.Nil(t, fsEnforcers(cfg))
+}
+
+func TestFSEnforcers_PivotRootOnly(t *testing.T) {
+	cfg := &ChildConfig{UsePivotRoot: true}
+	enforcers := fsEnforcers(cfg)
+	require.Len(t, enforcers, 1)
+	assert.IsType(t, &pivotRootEnforcer{}, enforcers[0])
+}
+
+func TestFSEnforcers_LandlockOnly(t *testing.T) {
+	cfg := &ChildConfig{UseLandlock: true}
+	enforcers := fsEnforcers(cfg)
+	require.Len(t, enforcers, 1)
+	assert.IsType(t, &landlockEnforcer{}, enforcers[0])
+}
+
+func TestFSEnforcers_Both(t *testing.T) {
+	cfg := &ChildConfig{UsePivotRoot: true, UseLandlock: true}
+	enforcers := fsEnforcers(cfg)
+	require.Len(t, enforcers, 2)
+	assert.IsType(t, &pivotRootEnforcer{}, enforcers[0], "pivot_root first")
+	assert.IsType(t, &landlockEnforcer{}, enforcers[1], "landlock second")
+}
+
+func TestFSEnforcers_Neither(t *testing.T) {
+	cfg := &ChildConfig{}
+	assert.Nil(t, fsEnforcers(cfg))
+}
+
 func TestApplyEnvPolicy_PassthroughAll(t *testing.T) {
 	cfg := &config.Config{EnvPassthroughAll: true}
 	plan := &SandboxPlan{}

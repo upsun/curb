@@ -284,26 +284,23 @@ func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
 	return h
 }
 
-// startLandlockOnly applies Landlock FS enforcement and exec's the target
-// command directly. Used when user namespaces are unavailable.
+// startLandlockOnly applies FS enforcement and exec's the target command
+// directly. Used when user namespaces are unavailable. When plan.NoUserNS
+// is true, resolveCapabilities sets UsePivotRoot=false and UseLandlock=true,
+// so enforceFS naturally applies only Landlock.
 func startLandlockOnly(plan *SandboxPlan) (int, error) {
-	if !plan.NoFSRestrict {
-		rules := policy.BuildLandlockRules(plan.LandlockPaths())
-		if len(rules) > 0 {
-			if err := policy.EnforceLandlock(rules); err != nil {
-				return -1, fmt.Errorf("enforcing landlock: %w", err)
-			}
-		}
+	cfg := plan.childConfig()
+	if err := enforceFS(&cfg); err != nil {
+		return -1, err
 	}
-	env := plan.ResolveEnv()
-	exe, err := findExecutable(plan.Command[0], env)
+	exe, err := findExecutable(cfg.Command[0], cfg.Env)
 	if err != nil {
 		return -1, err
 	}
 	// Do not call plan.Cleanup() here: TempDir contains shell init files
 	// (.curb.bashrc, .zshrc) that the exec'd process needs to read.
 	// The OS reclaims the directory when the process exits.
-	return -1, syscall.Exec(exe, plan.Command, env)
+	return -1, syscall.Exec(exe, cfg.Command, cfg.Env)
 }
 
 // catchableSignals returns all signals that can be caught (1-31, excluding SIGKILL and SIGSTOP).

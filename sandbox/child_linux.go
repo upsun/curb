@@ -150,23 +150,41 @@ func initLoop(exe string, argv, env []string, cleanup func()) error {
 	return nil // Unreachable.
 }
 
-// enforceFS applies filesystem enforcement (pivot_root + Landlock) from the
-// child config. Called from both childInit and proxyRelayInit.
-func enforceFS(cfg *ChildConfig) error {
+type landlockEnforcer struct{ paths policy.LandlockPaths }
+
+func (e *landlockEnforcer) Enforce() error {
+	rules := policy.BuildLandlockRules(e.paths)
+	if len(rules) == 0 {
+		return nil
+	}
+	if err := policy.EnforceLandlock(rules); err != nil {
+		return fmt.Errorf("enforcing landlock: %w", err)
+	}
+	return nil
+}
+
+// fsEnforcers returns the ordered list of filesystem enforcers for the config.
+// pivot_root is applied first (if available), then Landlock for defense-in-depth.
+func fsEnforcers(cfg *ChildConfig) []FSEnforcer {
 	if cfg.NoFSRestrict {
 		return nil
 	}
+	var enforcers []FSEnforcer
 	if cfg.UsePivotRoot {
-		if err := enforceMountNS(cfg); err != nil {
-			return fmt.Errorf("mount namespace enforcement: %w", err)
-		}
+		enforcers = append(enforcers, &pivotRootEnforcer{cfg: cfg})
 	}
 	if cfg.UseLandlock {
-		rules := policy.BuildLandlockRules(cfg.LandlockPaths())
-		if len(rules) > 0 {
-			if err := policy.EnforceLandlock(rules); err != nil {
-				return fmt.Errorf("enforcing landlock: %w", err)
-			}
+		enforcers = append(enforcers, &landlockEnforcer{paths: cfg.LandlockPaths()})
+	}
+	return enforcers
+}
+
+// enforceFS applies filesystem enforcement (pivot_root + Landlock) from the
+// child config. Called from both childInit and proxyRelayInit.
+func enforceFS(cfg *ChildConfig) error {
+	for _, e := range fsEnforcers(cfg) {
+		if err := e.Enforce(); err != nil {
+			return err
 		}
 	}
 	return nil

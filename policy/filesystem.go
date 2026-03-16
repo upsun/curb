@@ -18,17 +18,6 @@ const (
 		ll.AccessFSMakeSym | ll.AccessFSTruncate
 )
 
-// LandlockPaths groups directory and file paths for Landlock rule construction.
-// Landlock requires different access rights for files vs directories (e.g.
-// ReadDir is invalid on a regular file), so they must be handled separately.
-type LandlockPaths struct {
-	RODirs  []string
-	ROFiles []string
-	RWDirs  []string
-	RWFiles []string
-	Exec    []string
-}
-
 // BuildLandlockRules constructs Landlock rules from the given path sets.
 // When Exec is non-empty, RO and RW paths get no EXECUTE permission;
 // only Exec paths receive EXECUTE. When Exec is empty (--allow-exec '*'),

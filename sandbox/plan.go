@@ -47,6 +47,13 @@ const (
 	TestNoUserNSEnvKey = "_CURB_TEST_NO_USER_NS"
 )
 
+// FSEnforcer applies a filesystem enforcement layer to the current process.
+// Implementations capture their configuration at construction time.
+// Linux: pivotRootEnforcer (mountfs_linux.go), landlockEnforcer (child_linux.go).
+type FSEnforcer interface {
+	Enforce() error
+}
+
 // DegradedLayer records a sandbox layer that cannot be fully enforced.
 type DegradedLayer struct {
 	Layer  string

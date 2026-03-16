@@ -13,10 +13,10 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 ## Architecture
 
 - `config/` — Config struct (FromFlags, MergeEnv), defaults (paths, env vars), exclusion helpers (ParseExclusions, ApplyExclusions), config file loading (LoadConfigFile, FindConfigFile, MergeConfigFile)
-- `sandbox/plan.go` — SandboxPlan, BuildPlan (merges config + capabilities into enforcement plan)
+- `sandbox/plan.go` — SandboxPlan, BuildPlan (merges config + capabilities into enforcement plan), FSEnforcer interface
 - `sandbox/parent_linux.go` — StartSandbox, re-exec into child namespace, signal forwarding
-- `sandbox/child_linux.go` — ChildInit, enforcement dispatch (pivot_root then Landlock)
-- `sandbox/mountfs_linux.go` — enforceMountNS (pivot_root allowlist), buildMountPlan
+- `sandbox/child_linux.go` — ChildInit, enforcement dispatch via FSEnforcer (landlockEnforcer, fsEnforcers)
+- `sandbox/mountfs_linux.go` — enforceMountNS (pivot_root allowlist), buildMountPlan, pivotRootEnforcer
 - `sandbox/capabilities_linux.go` — ProbeAll (user/net/mount NS with mount ops test, TUN, Landlock ABI)
 - `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (ECH-proof): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing
 - `netstack/` — gvisor userspace TCP/IP: DNS filtering, TLS SNI filtering, HTTP Host filtering, localhost forwarding

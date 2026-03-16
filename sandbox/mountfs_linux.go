@@ -143,6 +143,15 @@ func isSubsumed(dirs map[string]mountEntry, child mountEntry) bool {
 	}
 }
 
+type pivotRootEnforcer struct{ cfg *ChildConfig }
+
+func (e *pivotRootEnforcer) Enforce() error {
+	if err := enforceMountNS(e.cfg); err != nil {
+		return fmt.Errorf("mount namespace enforcement: %w", err)
+	}
+	return nil
+}
+
 // enforceMountNS restricts filesystem access by building a new root from
 // allowed paths using bind mounts and pivot_root.
 func enforceMountNS(cfg *ChildConfig) error {
