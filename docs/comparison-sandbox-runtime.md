@@ -14,7 +14,7 @@ tradeoffs in each case.
 
 Key practical differences:
 
-- curb starts ~6x faster (35 ms vs 208 ms), which matters when sandboxing
+- curb starts ~5x faster (41 ms vs 205 ms), which matters when sandboxing
   many short-lived commands (e.g. repeated tool calls in an agent loop).
 - curb's default network filtering uses a MITM proxy (like srt), but
   programs that ignore `HTTPS_PROXY` get no network (isolated namespace)
@@ -127,9 +127,9 @@ teardown. curb is benchmarked in both proxy mode (default) and TUN mode.
 
 | Benchmark | curb (proxy) | curb (TUN) | srt | Proxy vs srt |
 |---|---|---|---|---|
-| Boot (`true`) | ~40 ms | - | ~212 ms | 5.3x |
-| HTTP single request | ~43 ms | ~65 ms | ~226 ms | 5.3x |
-| HTTP batch (10 requests) | ~89 ms | ~113 ms | ~291 ms | 3.3x |
+| Boot (`true`) | ~41 ms | - | ~205 ms | 5.0x |
+| HTTP single request | ~44 ms | ~66 ms | ~229 ms | 5.2x |
+| HTTP batch (10 requests) | ~86 ms | ~113 ms | ~289 ms | 3.4x |
 
 The boot benchmark runs `/usr/bin/true` inside the sandbox, isolating
 setup/teardown overhead. The HTTP benchmarks run `curl` against a local HTTP
@@ -139,9 +139,9 @@ The batch benchmark makes 10 requests within a single sandbox invocation,
 so boot cost is paid once. Subtracting boot time gives per-request network
 overhead:
 
-- curb (proxy): ~4.9 ms/request
-- curb (TUN): ~7.3 ms/request
-- srt: ~7.9 ms/request
+- curb (proxy): ~4.5 ms/request
+- curb (TUN): ~7.2 ms/request
+- srt: ~8.4 ms/request
 
 Boot is the dominant difference (5x). Proxy mode is the fastest network path
 because it avoids the userspace TCP/IP stack. TUN mode adds ~50% overhead
