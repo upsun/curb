@@ -30,6 +30,14 @@ Use -- before the command when it has its own flags.`,
 			if err != nil {
 				return err
 			}
+			cfs, paths, cfErr := resolveConfigFiles(cmd)
+			if cfErr != nil {
+				return cfErr
+			}
+			for _, cf := range cfs {
+				config.MergeConfigFile(cfg, cf, cmd.Flags())
+			}
+			cfg.ConfigFilePaths = paths
 			config.MergeEnv(cfg, cmd)
 			cfg.Command = args
 			if len(cfg.Command) == 0 {
@@ -45,6 +53,10 @@ Use -- before the command when it has its own flags.`,
 				return logErr
 			}
 			defer logger.Close()
+
+			for _, p := range cfg.ConfigFilePaths {
+				logger.Info("config: loaded %s.", p)
+			}
 
 			if cfg.EnvPassthroughAll {
 				logger.Warn("Entire host environment passed to child (--env '*').")
@@ -138,11 +150,40 @@ Use -- before the command when it has its own flags.`,
 	}
 
 	registerFlags(cmd)
+	cmd.AddCommand(NewConfigGenCmd())
 	return cmd
+}
+
+// resolveConfigFiles loads config files in merge order:
+// 1. -c/--config-file flags (can repeat; merged left to right).
+// 2. CURB_CONFIG_FILE env var (if -c not set).
+// 3. Auto-discovery: walk up from CWD for .curb.yaml (if neither -c nor CURB_CONFIG_FILE is set).
+func resolveConfigFiles(cmd *cobra.Command) ([]*config.ConfigFile, []string, error) {
+	var paths []string
+	explicit, _ := cmd.Flags().GetStringSlice("config-file")
+	if len(explicit) > 0 {
+		paths = explicit
+	} else if envVal, ok := os.LookupEnv("CURB_CONFIG_FILE"); ok && envVal != "" {
+		paths = []string{envVal}
+	} else if found := config.FindConfigFile(); found != "" {
+		paths = []string{found}
+	}
+	var files []*config.ConfigFile
+	for _, p := range paths {
+		cf, err := config.LoadConfigFile(p)
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, cf)
+	}
+	return files, paths, nil
 }
 
 func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
+
+	// Config file.
+	f.StringSliceP("config-file", "c", nil, "config file path(s) (default: auto-discover .curb.yaml)")
 
 	// Network filtering.
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
@@ -167,7 +208,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")
 
 	// Logging.
-	f.String("log-file", "", "write structured JSON logs to file")
+	f.String("log-file", "", "write structured JSON logs to file (use with --domains '*' to discover needed domains, then: curb config-gen --from-log FILE)")
 	f.BoolP("verbose", "v", false, "verbose output")
 	f.Bool("debug", false, "detailed netstack/relay debug logging (implies -v)")
 	f.BoolP("quiet", "q", false, "suppress warnings")

@@ -35,6 +35,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.String("home", "", "")
 	f.String("proxy", "on", "")
 	f.String("tun", "auto", "")
+	f.StringSliceP("config-file", "c", nil, "")
 
 	cmd.SetArgs(args)
 	_ = cmd.Execute()

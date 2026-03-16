@@ -31,6 +31,7 @@ type Logger struct {
 	color   bool         // Whether stderr supports color.
 	w       io.Writer    // Output writer (defaults to os.Stderr).
 	file    *os.File     // Log file handle (nil if unset).
+
 }
 
 // New creates a Logger. If logFile is non-empty, JSON events are written to
@@ -39,10 +40,10 @@ type Logger struct {
 // If quiet is true, warnings are suppressed.
 func New(logFile string, verbose, debug, quiet bool) (*Logger, error) {
 	l := &Logger{
-		verbose: verbose || debug,
-		debug:   debug,
-		quiet:   quiet,
-		w:       os.Stderr,
+		verbose:        verbose || debug,
+		debug:          debug,
+		quiet:          quiet,
+		w:              os.Stderr,
 	}
 	l.color = isColorStderr()
 	if logFile != "" {

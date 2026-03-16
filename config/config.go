@@ -35,6 +35,7 @@ type Config struct {
 	Quiet             bool
 	DryRun            bool
 	HomePath          string
+	ConfigFilePaths   []string
 	Command           []string
 }
 
