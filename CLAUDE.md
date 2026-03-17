@@ -12,7 +12,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 
 ## Architecture
 
-- `config/` — Config struct (FromFlags, MergeEnv), defaults (paths, env vars), exclusion helpers (ParseExclusions, ApplyExclusions), config file loading (LoadConfigFile, FindConfigFile, MergeConfigFile)
+- `config/` — Config struct (FromFlags, MergeEnv), defaults (paths, env vars), exclusion helpers (ParseExclusions, ApplyExclusions), config file loading (LoadConfigFile, FindConfigFile, MergeConfigFile), profiles (LoadProfile, MergeProfiles, ListProfiles; built-in YAML in `config/profiles/`)
 - `sandbox/plan.go` — SandboxPlan, BuildPlan (merges config + capabilities into enforcement plan), FSEnforcer interface
 - `sandbox/parent_linux.go` — StartSandbox, re-exec into child namespace, signal forwarding
 - `sandbox/child_linux.go` — ChildInit, enforcement dispatch via FSEnforcer (landlockEnforcer, fsEnforcers)

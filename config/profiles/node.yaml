@@ -1,0 +1,18 @@
+# Node.js / npm / yarn / pnpm
+domains:
+  - registry.npmjs.org
+  - "*.npmjs.org"
+  - "*.yarnpkg.com"
+read:
+  - ~/.npm
+  - ~/.cache/yarn
+  - ~/.local/share/pnpm
+write:
+  - node_modules
+exec:
+  - node
+  - npm
+  - npx
+env:
+  - NODE_ENV
+  - NPM_CONFIG_REGISTRY

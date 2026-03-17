@@ -1,0 +1,14 @@
+# Python / pip
+domains:
+  - pypi.org
+  - "*.pythonhosted.org"
+read:
+  - ~/.cache/pip
+  - ~/.local/lib
+exec:
+  - python3
+  - pip
+  - pip3
+env:
+  - VIRTUAL_ENV
+  - PIP_INDEX_URL

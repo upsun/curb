@@ -1,0 +1,14 @@
+# Docker
+# Note: most setups also need --write /var/run/docker.sock and --allow-unix-sockets
+# for the daemon socket.
+domains:
+  - registry-1.docker.io
+  - auth.docker.io
+  - production.cloudflare.docker.com
+read:
+  - ~/.docker
+exec:
+  - docker
+  - docker-compose
+env:
+  - DOCKER_HOST

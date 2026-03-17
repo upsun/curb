@@ -1,0 +1,19 @@
+# GitHub
+domains:
+  - github.com
+  - api.github.com
+  - raw.githubusercontent.com
+  - "*.githubusercontent.com"
+  - objects.githubusercontent.com
+read:
+  - ~/.ssh
+  - ~/.gitconfig
+  - ~/.config/git
+exec:
+  - git
+  - ssh
+  - gh
+env:
+  - GH_TOKEN
+  - GITHUB_TOKEN
+  - SSH_AUTH_SOCK

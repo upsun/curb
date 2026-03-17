@@ -44,6 +44,11 @@ func printTemplate() {
 	fmt.Print(`# .curb.yaml — curb sandbox configuration.
 # See: https://github.com/upsun/curb
 
+# Activate named profiles (built-in: node, python, php, go, rust, git, github, docker, claude-code).
+# profiles:
+#   - node
+#   - git
+
 # Allowed network domains (supports wildcards like *.example.com).
 # domains:
 #   - example.com

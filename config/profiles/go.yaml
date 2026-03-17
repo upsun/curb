@@ -1,0 +1,14 @@
+# Go
+domains:
+  - proxy.golang.org
+  - sum.golang.org
+  - storage.googleapis.com
+read:
+  - ~/go
+exec:
+  - go
+env:
+  - GOPATH
+  - GOMODCACHE
+  - GOPROXY
+  - GOPRIVATE

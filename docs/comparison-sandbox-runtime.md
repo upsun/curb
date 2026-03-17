@@ -5,125 +5,126 @@ This document compares curb with Anthropic's
 which wraps [bubblewrap](https://github.com/containers/bubblewrap).
 The comparison covers Linux only.
 
-## Overview
-
-Both projects sandbox a subprocess with filesystem, network, and environment
-restrictions. Either can be used to sandbox short-lived commands or
-longer-running processes, though their architectures lead to different
-tradeoffs in each case.
-
-Key practical differences:
-
-- curb starts ~5x faster (41 ms vs 205 ms), which matters when sandboxing
-  many short-lived commands (e.g. repeated tool calls in an agent loop).
-- curb's default network filtering uses a MITM proxy (like srt), but
-  programs that ignore `HTTPS_PROXY` get no network (isolated namespace)
-  rather than failing silently. With `--tun always`, curb additionally
-  provides transparent packet-level filtering for non-HTTP programs.
-- curb has no external dependencies (no bubblewrap, socat, ripgrep, or
-  Node.js runtime to install).
-- Both isolate the PID namespace when available. curb skips PID NS in
-  proxy-only mode (the Go runtime must stay alive for the fd-passing
-  accept loop). srt's PID namespace requires `CLONE_NEWPID`, which may
-  not be available in nested or restricted environments.
-- srt ships a curated denylist of files an AI agent should not read
-  (`.bashrc`, `.gitconfig`, `.git/hooks`, etc.). curb's allow-only model
-  is stricter but requires the caller to specify what should be accessible.
+Both tools sandbox a subprocess with filesystem, network, and environment
+restrictions. curb is a single Go binary with no runtime dependencies; srt
+is a Node.js program that orchestrates bubblewrap, socat, and ripgrep.
 
 ## Filesystem
 
-|  | srt | curb |
-|---|---|---|
-| Mechanism | bubblewrap bind mounts + tmpfs overmounts | Mount namespace (pivot_root) + Landlock LSM (kernel 5.13+) |
-| Read model | Allow-all + denylist (scans for dangerous files with ripgrep) | Deny-all + allowlist (only listed paths are accessible) |
-| Write model | Deny-all + allowlist (`allowWrite`) | Deny-all + allowlist (`--write`) |
-| Exec control | None | Landlock `EXECUTE` right: only listed binaries can run |
-| Hidden paths | tmpfs overmount on denied dirs, `/dev/null` bind on denied files | `!` denials: tmpfs overmount on dirs, `/dev/null` bind on files; fresh `/tmp` and `/dev` |
-| Glob patterns | Literal paths only (Linux) | Supported on all path flags |
-| Host side effects | Creates ghost mount-point files for non-existent denied paths (requires cleanup) | None |
+The tools take opposite approaches to filesystem access.
 
-**srt advantage**: srt's denylist includes a curated set of dangerous files
-(`.bashrc`, `.gitconfig`, `.git/hooks`, `.mcp.json`, IDE config dirs) that
-represents accumulated knowledge of files an AI agent should not read. curb's
-allow-only model avoids needing this list, but users must assemble their own
-allowlist for each use case.
+**srt** starts with full read access and removes specific paths via a
+denylist. A curated set of files is always hidden (`.bashrc`, `.gitconfig`,
+`.git/hooks`, `.mcp.json`, IDE config dirs, etc.) -- this represents
+accumulated knowledge of files an AI agent should not read. Write access is
+denied by default; callers allowlist specific paths. srt uses ripgrep to
+scan write paths for dangerous files (configurable depth, default 3 levels).
+Glob patterns are expanded at startup on Linux (literal paths only).
+
+**curb** starts with nothing accessible and adds paths via an allowlist.
+Only listed paths exist inside the sandbox (ENOENT for everything else when
+mount NS is active, EACCES with Landlock-only). Write access is also
+deny-by-default. `!` prefix denials can hide specific paths under an
+allowed parent (tmpfs overmount on dirs, `/dev/null` bind on files). Glob
+patterns are supported on all path flags. curb additionally enforces
+executable control via Landlock's EXECUTE right -- only listed binaries can
+run.
+
+srt's denylist is easier to use out of the box for broad compatibility.
+curb's allowlist is stricter by default but requires the caller to specify
+what should be accessible -- built-in profiles (see Configuration below)
+reduce this burden for common toolchains.
 
 ## Network
 
-|  | srt | curb (proxy, default) | curb (TUN, `--tun always`) |
-|---|---|---|---|
-| Mechanism | `bwrap --unshare-net`, HTTP + SOCKS5 proxies via Unix sockets + socat | MITM proxy in parent, connection fds passed via SCM_RIGHTS | MITM proxy + TAP device + userspace TCP/IP (gvisor netstack) |
-| Traffic routing | Via `HTTP_PROXY` / `ALL_PROXY` env vars | Via `HTTPS_PROXY` / `HTTP_PROXY` env vars | Proxy env vars + transparent TAP for non-proxy traffic |
-| Non-proxy programs | No network (no interface) | No network (empty net NS, loopback only) | Domain-filtered via netstack (DNS, SNI, Host) |
-| Protocol coverage | HTTP via HTTP proxy, other TCP via SOCKS5 | HTTP/HTTPS only | All IP traffic (full TCP/IP stack) |
-| Filtering signal | CONNECT hostname / SOCKS5 destination | CONNECT hostname / HTTP Host (TLS terminated) | Proxy + DNS + TLS SNI + HTTP Host |
-| ECH handling | N/A (proxy sees hostname) | N/A (proxy terminates TLS) | Netstack: strip, allow, or deny ECH |
-| Localhost forwarding | No | `--domains localhost` | `--domains localhost` |
+Both tools use HTTP proxies for domain filtering by default. The sandboxed
+process gets an isolated network namespace (no external interfaces); proxy
+environment variables route traffic through a filtering proxy in the parent.
 
-Both curb (default) and srt use HTTP proxies for domain filtering. The key
-differences: curb's proxy terminates TLS (MITM), seeing the actual request
-regardless of ECH. srt's proxy relies on the CONNECT hostname without
-inspecting TLS content. curb's `--tun always` mode adds transparent
-packet-level filtering for programs that ignore proxy env vars.
+**srt** runs an HTTP proxy and a SOCKS5 proxy, bridged into the sandbox via
+Unix sockets and socat. The HTTP proxy handles HTTP/HTTPS (via CONNECT); the
+SOCKS5 proxy handles other TCP (SSH, git protocol, database connections).
+Domain filtering uses an allowlist/denylist checked against the CONNECT
+hostname or SOCKS5 destination. Programs that ignore proxy env vars get no
+network.
+
+**curb** runs a MITM proxy that terminates TLS in the parent process,
+making domain filtering immune to Encrypted Client Hello (ECH). Connection
+file descriptors are passed from child to parent via SCM_RIGHTS over a
+socketpair (no socat). Programs that ignore proxy env vars get no network
+(empty namespace, loopback only). With `--tun always`, curb additionally
+creates a TAP device backed by a userspace TCP/IP stack (gvisor netstack),
+providing transparent domain-filtered access for all programs regardless of
+proxy support -- filtering uses DNS queries, TLS SNI, and HTTP Host headers.
+
+curb supports IP address and CIDR range filtering via `--ips` (e.g.
+`--ips 10.0.0.0/8`). srt filters by domain only. curb also supports
+localhost forwarding (`--domains localhost`); srt does not.
 
 ## Process isolation
 
-|  | srt | curb |
-|---|---|---|
-| PID namespace | Yes (`bwrap --unshare-pid` + fresh `/proc`) | Yes (fresh `/proc` where mount NS is active) |
-| User namespace | Implicit via bubblewrap | Explicit `CLONE_NEWUSER` with UID/GID mapping |
-| Mount namespace | Always (bubblewrap requires it) | Always when FS restrictions are active |
-| Seccomp | BPF filter blocking `AF_UNIX` socket creation (applied via custom binary after socat starts) | BPF filter blocking `AF_UNIX` socket + socketpair (applied after FS enforcement, before exec) |
-
-Both create PID namespaces. curb mounts a fresh `/proc` when a mount namespace
-is active (default when FS restrictions are on), so the sandboxed process only
-sees its own PIDs.
-Cross-namespace signal delivery is restricted by user namespace UID boundaries
-(only same-UID processes can be signaled).
+Both tools create user namespaces, network namespaces, mount namespaces,
+and PID namespaces. curb mounts a fresh `/proc` when mount NS is active, so
+the sandboxed process only sees its own PIDs.
 
 Both use seccomp BPF to block `AF_UNIX` socket creation, preventing the
 sandboxed process from communicating with host services via Unix domain
-sockets. This is particularly important for abstract sockets (names starting
-with `\0`), which have no filesystem path and bypass mount NS and Landlock.
-srt applies the filter via a custom `apply-seccomp` binary after socat
-starts; curb builds the BPF program in Go with no external dependencies.
+sockets. This is important for abstract sockets (names starting with `\0`),
+which have no filesystem path and bypass mount NS and Landlock. srt applies
+the filter via a pre-built `apply-seccomp` binary after socat starts. curb
+builds the BPF program in Go (10 instructions, zero heap allocation) and
+applies it after FS enforcement, before exec. curb's filter is always-on as
+defense-in-depth; `--allow-unix-sockets` disables it for programs that need
+Unix sockets (Docker, databases via socket).
 
 ## Environment
 
-|  | srt | curb |
-|---|---|---|
-| Model | Full host environment inherited, proxy vars added | Deny-by-default: only listed vars passed |
-| Passthrough | Implicit | `--env` flag with glob patterns; `--env '*'` for full passthrough |
+srt inherits the full host environment and adds proxy variables
+(`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, tool-specific variants like
+`DOCKER_HTTP_PROXY`, `GRPC_PROXY`, etc.) plus `SANDBOX_RUNTIME=1`.
+
+curb uses a deny-by-default model. Only safe variables (`PATH`, `TERM`,
+`LANG`, `TZ`, `HOME`, etc.) are passed through. Additional variables are
+added with `--env NAME` or `--env NAME=VALUE`. `--env '*'` passes the full
+host environment.
+
+## Configuration
+
+Both tools work without any configuration file.
+
+**srt** uses a single JSON config file (`~/.srt-settings.json` by default)
+with network and filesystem settings. It also supports dynamic config
+updates via a control file descriptor (JSON lines protocol), allowing the
+caller to modify settings while the sandbox is running. srt has no concept
+of reusable profiles -- config must be assembled per invocation.
+
+**curb** uses YAML config files (`.curb.yaml`, auto-discovered by walking
+up from the current directory) and composable profiles. Profiles are named
+config bundles for common toolchains -- 9 are built in (`node`, `python`,
+`php`, `go`, `rust`, `git`, `github`, `docker`, `claude-code`) and users
+can add their own in `~/.config/curb/profiles/` or `/etc/curb/profiles/`.
+Activated via `-p node,git`, `CURB_PROFILES=node,git`, or
+`profiles: [node, git]` in `.curb.yaml`. Config layers merge in priority
+order: profiles (lowest) -> config file -> CLI flags -> env vars (highest).
 
 ## Dependencies
 
 | srt | curb |
 |---|---|
-| Node.js runtime | None |
+| Node.js (v18+) | None |
 | bubblewrap | (kernel syscalls) |
-| ripgrep | (kernel syscalls) |
 | socat | (kernel syscalls) |
-| Custom `apply-seccomp` binary | (kernel syscalls) |
+| ripgrep | (kernel syscalls) |
+| Pre-built seccomp binary | (kernel syscalls) |
 
 curb has no external runtime dependencies on Linux. Network filtering uses
-gvisor's netstack, which is compiled in.
-
-## Boot sequence
-
-srt starts bubblewrap (which creates namespaces and sets up bind mounts),
-launches socat inside the sandbox to bridge proxy sockets, applies a seccomp
-filter via a custom binary, and then runs the user command. This multi-stage
-sequence involves several process spawns and the Node.js runtime.
-
-curb re-execs itself into a new user namespace via a single `clone()` call.
-The child sets up Landlock rules, optionally creates a TAP device for
-networking, and runs the command. No intermediate processes are spawned.
+gvisor's netstack, compiled in. The seccomp filter is built in Go.
 
 ## Performance
 
 Benchmarks run via `make bench` (see `bench/bench_linux_test.go`). These
 measure end-to-end time including sandbox setup, command execution, and
-teardown. curb is benchmarked in both proxy mode (default) and TUN mode.
+teardown.
 
 | Benchmark | curb (proxy) | curb (TUN) | srt | Proxy vs srt |
 |---|---|---|---|---|
@@ -132,36 +133,30 @@ teardown. curb is benchmarked in both proxy mode (default) and TUN mode.
 | HTTP batch (10 requests) | ~86 ms | ~113 ms | ~289 ms | 3.4x |
 
 The boot benchmark runs `/usr/bin/true` inside the sandbox, isolating
-setup/teardown overhead. The HTTP benchmarks run `curl` against a local HTTP
-server with domain filtering enabled.
+setup/teardown overhead. curb's single-process architecture (re-exec via
+`clone()`) avoids the multi-process startup of srt (Node.js -> bubblewrap
+-> socat -> apply-seccomp -> command). The HTTP benchmarks run `curl`
+against a local HTTP server with domain filtering enabled.
 
-The batch benchmark makes 10 requests within a single sandbox invocation,
-so boot cost is paid once. Subtracting boot time gives per-request network
-overhead:
-
-- curb (proxy): ~4.5 ms/request
-- curb (TUN): ~7.2 ms/request
-- srt: ~8.4 ms/request
-
-Boot is the dominant difference (5x). Proxy mode is the fastest network path
-because it avoids the userspace TCP/IP stack. TUN mode adds ~50% overhead
-per request for the defense-in-depth filtering layer. For long-running
-processes that make many requests, the startup cost matters less and overall
-performance converges.
+Subtracting boot time gives per-request overhead: curb proxy ~4.5 ms, curb
+TUN ~7.2 ms, srt ~8.4 ms. Boot is the dominant difference for short-lived
+commands. For long-running processes, performance converges.
 
 ## Summary
 
-The projects make different architectural choices that lead to different
-tradeoffs:
-
-- **Filesystem**: allow-only (curb) vs deny-only (srt). Stricter by default
-  vs easier to configure for broad compatibility.
-- **Network**: both use HTTP proxies for domain filtering by default. curb's
-  MITM proxy terminates TLS, making filtering immune to ECH. curb can
-  optionally add transparent packet-level filtering (`--tun always`) for
-  non-HTTP programs. srt uses SOCKS5 for non-HTTP TCP.
-- **Non-proxy programs**: in both tools, programs ignoring proxy env vars get
-  no network (empty namespace). curb's `--tun always` mode is the exception,
-  providing domain-filtered access for all programs.
-- **Dependencies**: curb uses kernel interfaces directly with no runtime
-  dependencies. srt depends on bubblewrap, socat, ripgrep, and Node.js.
+- **Filesystem**: curb uses an allowlist (nothing accessible by default);
+  srt uses a denylist (everything readable, specific files hidden). curb
+  additionally controls which binaries can execute.
+- **Network**: both use HTTP proxies for domain filtering. curb's MITM proxy
+  terminates TLS (immune to ECH). srt adds SOCKS5 for non-HTTP TCP. curb
+  can add transparent packet-level filtering (`--tun always`). curb supports
+  IP/CIDR filtering; srt does not.
+- **Seccomp**: both block AF_UNIX sockets via seccomp BPF. curb's filter is
+  always-on with an opt-out (`--allow-unix-sockets`).
+- **Environment**: srt inherits the full host environment; curb is
+  deny-by-default.
+- **Configuration**: srt uses JSON config with dynamic updates via control
+  fd. curb uses YAML config files with composable profiles for common
+  toolchains.
+- **Dependencies**: curb is a single binary with no runtime dependencies.
+  srt requires Node.js, bubblewrap, socat, and ripgrep.

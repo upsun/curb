@@ -241,7 +241,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 
 	// --env via CURB_ENV: split and classify like FromFlags.
 	if val, ok := os.LookupEnv("CURB_ENV"); ok {
-		envPass, envSet := classifyEnvArgs(splitComma(val))
+		envPass, envSet := classifyEnvArgs(SplitComma(val))
 		if containsStar(envPass) {
 			cfg.EnvPassthroughAll = true
 			cfg.EnvPassthrough = nil
@@ -334,10 +334,11 @@ func appendEnvList(existing []string, envKey string) []string {
 	if !ok || val == "" {
 		return existing
 	}
-	return append(existing, splitComma(val)...)
+	return append(existing, SplitComma(val)...)
 }
 
-func splitComma(s string) []string {
+// SplitComma splits a comma-separated string, trimming whitespace and dropping empties.
+func SplitComma(s string) []string {
 	var result []string
 	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
