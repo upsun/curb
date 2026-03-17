@@ -34,6 +34,14 @@ Use -- before the command when it has its own flags.`,
 			if cfErr != nil {
 				return cfErr
 			}
+
+			// Collect activated profiles from config files, --profile flag, and CURB_PROFILES.
+			profileNames := collectProfiles(cmd, cfs)
+			if err := config.MergeProfiles(cfg, profileNames, cfg.Quiet); err != nil {
+				return err
+			}
+
+			// Config files override profiles.
 			for _, cf := range cfs {
 				config.MergeConfigFile(cfg, cf, cmd.Flags())
 			}
@@ -56,6 +64,9 @@ Use -- before the command when it has its own flags.`,
 
 			for _, p := range cfg.ConfigFilePaths {
 				logger.Info("config: loaded %s.", p)
+			}
+			if len(profileNames) > 0 {
+				logger.Info("profiles: %s.", strings.Join(profileNames, ", "))
 			}
 
 			if cfg.EnvPassthroughAll {
@@ -159,6 +170,7 @@ Use -- before the command when it has its own flags.`,
 
 	registerFlags(cmd)
 	cmd.AddCommand(NewConfigGenCmd())
+	cmd.AddCommand(NewProfileCmd())
 	return cmd
 }
 
@@ -187,11 +199,41 @@ func resolveConfigFiles(cmd *cobra.Command) ([]*config.ConfigFile, []string, err
 	return files, paths, nil
 }
 
+// collectProfiles gathers and deduplicates profile names from config files, --profiles flag, and CURB_PROFILES env.
+func collectProfiles(cmd *cobra.Command, cfs []*config.ConfigFile) []string {
+	var all []string
+	// 1. Config files (lowest priority for profile activation).
+	for _, cf := range cfs {
+		all = append(all, cf.Profiles...)
+	}
+	// 2. --profile flag.
+	if flagProfiles, _ := cmd.Flags().GetStringSlice("profiles"); len(flagProfiles) > 0 {
+		all = append(all, flagProfiles...)
+	}
+	// 3. CURB_PROFILES env var.
+	if val, ok := os.LookupEnv("CURB_PROFILES"); ok && val != "" {
+		all = append(all, config.SplitComma(val)...)
+	}
+	// Deduplicate while preserving order.
+	seen := make(map[string]bool)
+	names := all[:0]
+	for _, n := range all {
+		if !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 func registerFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 
 	// Config file.
 	f.StringSliceP("config-file", "c", nil, "config file path(s) (default: auto-discover .curb.yaml)")
+
+	// Profiles.
+	f.StringSliceP("profiles", "p", nil, "activate named profiles (e.g. node,git)")
 
 	// Network filtering.
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")

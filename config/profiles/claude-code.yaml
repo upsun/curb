@@ -1,0 +1,17 @@
+# Claude Code
+domains:
+  - api.anthropic.com
+  - statsig.anthropic.com
+read:
+  - ~/.claude
+  - ~/.config/claude
+write:
+  - ~/.claude
+exec:
+  - claude
+  - node
+  - npm
+  - npx
+env:
+  - ANTHROPIC_API_KEY
+  - CLAUDE_CODE_MAX_TOKENS

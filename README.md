@@ -104,10 +104,37 @@ By default, the environment is deny-by-default: only `HOME`, `PATH`, `TMPDIR`, `
 
 ### Other
 
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Print the sandbox plan without running the command |
-| `--home` | Set HOME environment variable for the sandboxed process |
+| Flag | Env Var | Description |
+|------|---------|-------------|
+| `-c`, `--config-file` | `CURB_CONFIG_FILE` | Config file path(s) (default: auto-discover `.curb.yaml`) |
+| `-p`, `--profiles` | `CURB_PROFILES` | Activate named profiles (comma-separated, e.g. `node,git`) |
+| `--dry-run` | | Print the sandbox plan without running the command |
+| `--home` | | Set HOME environment variable for the sandboxed process |
+
+## Profiles
+
+Profiles are named, reusable config bundles for common toolchains. They contain only additive allowlist fields (domains, paths, exec, env) — no scalar settings.
+
+```
+curb --profiles node,git -- npm install
+```
+
+Built-in profiles: `node`, `python`, `php`, `go`, `rust`, `git`, `github`, `docker`, `claude-code`.
+
+Profiles can also be activated via config file (`profiles: [node, git]` in `.curb.yaml`) or environment (`CURB_PROFILES=node,git`).
+
+Profile search order (first match wins):
+1. User: `$XDG_CONFIG_HOME/curb/profiles/<name>.yaml` (default `~/.config/curb/profiles/`)
+2. System: `/etc/curb/profiles/<name>.yaml`
+3. Built-in (embedded in binary)
+
+Merge order: profiles (lowest) -> config file -> CLI flags -> env vars (highest). CLI `!` exclusions can remove anything added by profiles.
+
+Manage profiles:
+```
+curb profile list          # list available profiles with source
+curb profile show node     # print profile YAML to stdout
+```
 
 ## Platform Support
 

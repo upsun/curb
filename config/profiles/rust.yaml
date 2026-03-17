@@ -1,0 +1,15 @@
+# Rust / Cargo
+domains:
+  - crates.io
+  - "*.crates.io"
+  - static.rust-lang.org
+read:
+  - ~/.cargo
+  - ~/.rustup
+exec:
+  - cargo
+  - rustc
+  - rustup
+env:
+  - CARGO_HOME
+  - RUSTUP_HOME

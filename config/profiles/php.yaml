@@ -1,0 +1,18 @@
+# PHP / Composer
+domains:
+  - packagist.org
+  - "*.packagist.org"
+  - getcomposer.org
+read:
+  - ~/.composer
+  - ~/.config/composer
+  - ~/.cache/composer
+write:
+  - vendor
+exec:
+  - php
+  - composer
+env:
+  - COMPOSER_HOME
+  - COMPOSER_CACHE_DIR
+  - PHP_INI_SCAN_DIR
