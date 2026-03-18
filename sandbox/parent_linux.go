@@ -185,24 +185,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	close(sigCh)
 	res.closeAll()
 
-	if waitErr == nil {
-		return 0, nil
-	}
-	exitErr, ok := waitErr.(*exec.ExitError)
-	if !ok {
-		return -1, fmt.Errorf("waiting for child: %w", waitErr)
-	}
-
-	// Normal exit with non-zero code.
-	if code := exitErr.ExitCode(); code >= 0 {
-		return code, nil
-	}
-
-	// Process killed by signal.
-	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-		return 128 + int(status.Signal()), nil
-	}
-	return 1, nil
+	return exitCode(waitErr)
 }
 
 // startProxyServer creates an HTTP server and starts serving in a goroutine.
@@ -266,24 +249,6 @@ func buildNetstackFilter(plan *SandboxPlan) *netstack.FilterConfig {
 	return nil
 }
 
-// buildProxyHandler creates the MITM proxy handler from the sandbox plan.
-func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
-	h := &proxy.Handler{
-		CertCache: proxy.NewCertCache(plan.CA),
-		Logger:    plan.Logger,
-		AllowHTTP: plan.AllowHTTP,
-	}
-	if len(plan.AllowedDomains) > 0 {
-		matcher := policy.NewDomainMatcher(plan.AllowedDomains)
-		h.DomainCheck = matcher.Match
-	}
-	if len(plan.AllowedIPs) > 0 {
-		ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
-		h.IPCheck = ipMatcher.Match
-	}
-	return h
-}
-
 // startLandlockOnly applies FS enforcement and exec's the target command
 // directly. Used when user namespaces are unavailable. When plan.NoUserNS
 // is true, resolveCapabilities sets UsePivotRoot=false and UseLandlock=true,
@@ -306,14 +271,3 @@ func startLandlockOnly(plan *SandboxPlan) (int, error) {
 	return -1, syscall.Exec(exe, cfg.Command, cfg.Env)
 }
 
-// catchableSignals returns all signals that can be caught (1-31, excluding SIGKILL and SIGSTOP).
-func catchableSignals() []os.Signal {
-	var sigs []os.Signal
-	for i := syscall.Signal(1); i <= 31; i++ {
-		if i == syscall.SIGKILL || i == syscall.SIGSTOP {
-			continue
-		}
-		sigs = append(sigs, i)
-	}
-	return sigs
-}
