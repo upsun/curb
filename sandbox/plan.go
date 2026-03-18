@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -76,6 +75,7 @@ type SandboxPlan struct {
 	ExecPaths        []string
 	UsePivotRoot     bool
 	UseLandlock      bool
+	UseSeatbelt      bool
 	PidNS            bool
 	NoUserNS         bool
 	NetEnabled       bool
@@ -165,33 +165,16 @@ type planRemovals struct {
 	noExecRestrict bool
 }
 
+// PlanBuilder creates a SandboxPlan from configuration and probed capabilities.
+// Each platform provides an implementation via newPlanBuilder() (build-tagged).
+type PlanBuilder interface {
+	BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error)
+}
+
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
-// It returns an error only for fatal conditions (user ns unavailable, net required but missing).
+// It delegates to the platform-specific PlanBuilder returned by newPlanBuilder().
 func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
-	if runtime.GOOS != "linux" {
-		return buildDegradedPlan(cfg, caps)
-	}
-	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet}
-	realHome, _ := os.UserHomeDir()
-	var removals planRemovals
-	if err := resolveCapabilities(plan, cfg, caps); err != nil {
-		return nil, err
-	}
-	if err := resolveFilesystem(plan, cfg, &removals, realHome); err != nil {
-		return nil, err
-	}
-	if err := resolveExec(plan, cfg, &removals, realHome); err != nil {
-		return nil, err
-	}
-	resolveNetwork(plan, cfg)
-	if err := resolveProxy(plan, cfg, caps); err != nil {
-		return nil, err
-	}
-	if err := resolveEnv(plan, cfg); err != nil {
-		return nil, err
-	}
-	resolveDenials(plan, &removals)
-	return plan, nil
+	return newPlanBuilder().BuildPlan(cfg, caps)
 }
 
 // resolveCapabilities validates system capabilities and selects enforcement layers.
@@ -441,7 +424,7 @@ func resolveProxy(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) err
 		// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
 		plan.AllowLocalhost = true
 	}
-	if cfg.TUNMode == "always" && caps.TUN != nil && !plan.NetEnabled {
+	if cfg.TUNMode == "always" && caps.TUN != nil && !plan.NetEnabled && !plan.UseSeatbelt {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "TUN/TAP hardening",
 			Reason: caps.TUN.Error(),
@@ -484,7 +467,7 @@ func resolveDenials(plan *SandboxPlan, removals *planRemovals) {
 		plan.DenyExecPaths = subpathDenials(removals.execRemoves, plan.ExecPaths)
 		plan.DenyExecPaths = resolveSymlinks(plan.DenyExecPaths)
 	}
-	if !plan.UsePivotRoot {
+	if !plan.UsePivotRoot && !plan.UseSeatbelt {
 		allDenials := len(plan.HiddenPaths) + len(plan.DenyWritePaths) + len(plan.DenyExecPaths)
 		if allDenials > 0 {
 			clog.Warnf("sub-path denials (! exclusions) cannot be enforced without mount namespaces: %v", plan.Caps.MountNS)
@@ -581,20 +564,27 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	ln := func(a ...any) { _, _ = fmt.Fprintln(w, a...) }
 
 	ln("curb: system capabilities")
-	printCap(w, "user namespaces", p.Caps.UserNS, p.capUserInfo())
-	printCap(w, "mount namespaces", p.Caps.MountNS, "")
-	printCap(w, "PID namespaces", p.Caps.PidNS, "")
-	printCap(w, "network namespaces", p.Caps.NetNS, "")
-	printCap(w, "/dev/net/tun", p.Caps.TUN, "")
-	if p.Caps.LandlockABI > 0 {
-		printCap(w, "landlock", nil, fmt.Sprintf("ABI v%d", p.Caps.LandlockABI))
+	if p.UseSeatbelt {
+		printCap(w, "seatbelt", p.Caps.Seatbelt, "sandbox-exec")
+		if p.Caps.OSVersion != "" {
+			printCap(w, "macOS version", nil, p.Caps.OSVersion)
+		}
 	} else {
-		printCap(w, "landlock", fmt.Errorf("unavailable"), "")
-	}
-	if p.Caps.Seccomp {
-		printCap(w, "seccomp", nil, "AF_UNIX blocked")
-	} else {
-		printCap(w, "seccomp", fmt.Errorf("disabled"), "")
+		printCap(w, "user namespaces", p.Caps.UserNS, p.capUserInfo())
+		printCap(w, "mount namespaces", p.Caps.MountNS, "")
+		printCap(w, "PID namespaces", p.Caps.PidNS, "")
+		printCap(w, "network namespaces", p.Caps.NetNS, "")
+		printCap(w, "/dev/net/tun", p.Caps.TUN, "")
+		if p.Caps.LandlockABI > 0 {
+			printCap(w, "landlock", nil, fmt.Sprintf("ABI v%d", p.Caps.LandlockABI))
+		} else {
+			printCap(w, "landlock", fmt.Errorf("unavailable"), "")
+		}
+		if p.Caps.Seccomp {
+			printCap(w, "seccomp", nil, "AF_UNIX blocked")
+		} else {
+			printCap(w, "seccomp", fmt.Errorf("disabled"), "")
+		}
 	}
 	ln()
 
@@ -699,6 +689,8 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 	// Enforcement method.
 	ln("  enforcement:")
 	switch {
+	case p.UseSeatbelt:
+		ln("    method:     seatbelt (sandbox-exec)")
 	case p.UsePivotRoot && p.UseLandlock:
 		ln("    method:     pivot_root + landlock")
 	case p.UsePivotRoot:
@@ -711,7 +703,13 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    method:     none (env-only)")
 	}
 	if p.AllowUnixSockets {
-		ln("    seccomp:    disabled (--allow-unix-sockets)")
+		if p.UseSeatbelt {
+			ln("    unix:       allowed (--allow-unix-sockets)")
+		} else {
+			ln("    seccomp:    disabled (--allow-unix-sockets)")
+		}
+	} else if p.UseSeatbelt {
+		ln("    unix:       blocked (seatbelt AF_UNIX deny)")
 	} else if p.Caps.Seccomp {
 		ln("    seccomp:    AF_UNIX blocked (socket + socketpair)")
 	}
@@ -984,43 +982,40 @@ func resolvConfDir() string {
 	return dir
 }
 
-// buildDegradedPlan creates a plan for non-Linux platforms where only
-// environment sanitization is available.
+// buildDegradedPlan creates a plan for platforms where only environment
+// sanitization is available. Used by degradedPlanBuilder and tests.
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan := &SandboxPlan{Caps: caps}
 
 	if len(cfg.AllowedDomains) > 0 {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "network filtering",
-			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
+			Reason: "not supported on this platform",
 			Impact: "Network filtering is not available; all network access is unrestricted.",
 		})
 	}
 	if !cfg.NoFSRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "filesystem restrictions",
-			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
+			Reason: "not supported on this platform",
 			Impact: "Filesystem restrictions are not available; all paths are accessible.",
 		})
 	}
 	if !cfg.NoExecRestrict {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "executable control",
-			Reason: fmt.Sprintf("not supported on %s", runtime.GOOS),
+			Reason: "not supported on this platform",
 			Impact: "Executable control is not available; all binaries can be executed.",
 		})
 	}
 
-	// Temp directory.
 	tmpDir, err := os.MkdirTemp("", "curb-")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	plan.TempDir = tmpDir
 
-	// Environment policy (still enforced on all platforms).
 	applyEnvPolicy(plan, cfg, tmpDir)
-	// Remove IS_SANDBOX: no user namespace isolation on this platform.
 	delete(plan.EnvSet, "IS_SANDBOX")
 
 	plan.Command = cfg.Command

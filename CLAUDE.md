@@ -12,14 +12,21 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 
 ## Architecture
 
-- `config/` — Config struct (FromFlags, MergeEnv), defaults (paths, env vars), exclusion helpers (ParseExclusions, ApplyExclusions), config file loading (LoadConfigFile, FindConfigFile, MergeConfigFile), profiles (LoadProfile, MergeProfiles, ListProfiles; built-in YAML in `config/profiles/`)
-- `sandbox/plan.go` — SandboxPlan, BuildPlan (merges config + capabilities into enforcement plan), FSEnforcer interface
-- `sandbox/parent_linux.go` — StartSandbox, re-exec into child namespace, signal forwarding
+- `config/` — Config struct (FromFlags, MergeEnv), defaults (platform-split: `defaults_linux.go`, `defaults_darwin.go`), exclusion helpers, config file loading, profiles
+- `sandbox/plan.go` — SandboxPlan, PlanBuilder interface, shared resolve* helpers, FSEnforcer interface
+- `sandbox/plan_linux.go` — linuxPlanBuilder (namespace + Landlock enforcement selection)
+- `sandbox/plan_darwin.go` — darwinPlanBuilder (Seatbelt enforcement, path canonicalization)
+- `sandbox/plan_other.go` — degradedPlanBuilder (env-only fallback)
+- `sandbox/parent_linux.go` — StartSandbox (re-exec into child namespace, signal forwarding)
+- `sandbox/parent_darwin.go` — StartSandbox (sandbox-exec spawn, MITM proxy, signal forwarding)
 - `sandbox/child_linux.go` — ChildInit, enforcement dispatch via FSEnforcer (landlockEnforcer, fsEnforcers)
 - `sandbox/mountfs_linux.go` — enforceMountNS (pivot_root allowlist), buildMountPlan, pivotRootEnforcer
+- `sandbox/seatbelt_darwin.go` — generateSBPL (SBPL profile generation from SandboxPlan)
 - `sandbox/capabilities_linux.go` — ProbeAll (user/net/mount NS with mount ops test, TUN, Landlock ABI)
-- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (ECH-proof): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing
-- `netstack/` — gvisor userspace TCP/IP: DNS filtering, TLS SNI filtering, HTTP Host filtering, localhost forwarding
+- `sandbox/capabilities_darwin.go` — ProbeAll (Seatbelt probe, macOS version)
+- `sandbox/proxy_handler.go` — buildProxyHandler (shared by Linux and macOS parents)
+- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (ECH-proof): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing. CA bundle paths platform-split (`cabundle_linux.go`, `cabundle_darwin.go`).
+- `netstack/` — gvisor userspace TCP/IP (Linux only): DNS filtering, TLS SNI filtering, HTTP Host filtering, localhost forwarding
 - `policy/` — DomainMatcher, IPMatcher, ValidateDomains/ValidateIPs, LandlockPaths, BuildLandlockRules
 - `cmd/root.go` — CLI flag registration
 
@@ -38,6 +45,17 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - `--domains` validates input: rejects URLs (suggests bare domain), IP addresses (suggests `--ips`), invalid characters, and malformed wildcards. `--ips` validates that values parse as IP addresses or CIDR prefixes.
 - `!` prefix in list flags removes from defaults AND actively denies via overmount when the path is under an allowed parent. `--read '!/path'` hides (tmpfs/dev-null), `--write '!/path'` makes read-only, `--exec '!/path'` makes noexec. `!*` clears all defaults (not deny-all). `\!` escapes literal `!`. Sub-path denials require mount NS; Landlock-only mode warns.
 
+### macOS (Seatbelt)
+
+- Apple's Seatbelt (`sandbox-exec`) provides kernel-enforced FS and network restrictions via SBPL profiles. Marked "deprecated" since macOS 10.7 but still functional and used by Codex, Homebrew, and Apple's own tools.
+- No re-exec or namespaces. Seatbelt applies at spawn time: `sandbox-exec -p '<SBPL>' -- <command>`. The child and all descendants inherit the profile.
+- FS enforcement via SBPL `file-read*`/`file-write*` rules. Sub-path denials use `(deny ...)` which overrides `(allow ...)`. Move protection via `(deny file-write-unlink)` on ancestor directories.
+- Network: MITM proxy on loopback is the sole HTTP/HTTPS filter. `--proxy off` + `--domains` is an error (no TUN/netstack on macOS). `--ips` works directly via Seatbelt IP rules without proxy.
+- AF_UNIX socket blocking via `(deny network* (socket-domain AF_UNIX))` (Seatbelt, not seccomp).
+- Path canonicalization is critical: macOS has `/var` -> `/private/var`, `/etc` -> `/private/etc`, `/tmp` -> `/private/tmp`. All paths are resolved via `filepath.EvalSymlinks` before SBPL generation.
+- No PID isolation (macOS has no PID namespaces).
+- Conservative mach-lookup allowlist: base services (opendirectoryd, logd, dirhelper) plus TLS/DNS services when network is enabled.
+
 ## Testing
 
 - Integration tests in `sandbox/parent_linux_test.go` and `sandbox/proxy_test.go` build a `curb` binary and run it.
@@ -49,3 +67,6 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - Tests that fail with exit 111 (curb setup failure) due to degraded mount NS retry with Landlock-only mode via `isSetupFailure()` + `landlockOnlyEnv()`.
 - Network-dependent tests (external HTTP) use `requireExternalHTTP(t)` to skip gracefully.
 - Write adversarial tests: try to escape each sandbox layer (env leaks, path traversal, exec bypass, namespace escapes).
+- macOS Seatbelt tests in `sandbox/parent_darwin_test.go` and `sandbox/seatbelt_darwin_test.go` require macOS with sandbox-exec.
+- `requireSeatbelt(t)` skips tests when sandbox-exec is unavailable.
+- SBPL unit tests (`seatbelt_darwin_test.go`) test profile string generation without running sandbox-exec.

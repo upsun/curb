@@ -2,7 +2,7 @@
 
 Sandbox any process. No root required.
 
-curb runs commands inside a locked-down sandbox with default-deny filesystem, network, environment, and executable restrictions — using only unprivileged Linux features. Give a program access to exactly the domains and paths it needs, and nothing else.
+curb runs commands inside a locked-down sandbox with default-deny filesystem, network, environment, and executable restrictions — using only unprivileged OS features (Linux namespaces/Landlock, macOS Seatbelt). Give a program access to exactly the domains and paths it needs, and nothing else.
 
 ## Why curb?
 
@@ -15,7 +15,7 @@ curb runs commands inside a locked-down sandbox with default-deny filesystem, ne
 
 ## When not to use curb
 
-- **macOS or Windows** — curb currently relies on Linux namespaces and Landlock. On non-Linux platforms it applies environment sanitization only (no filesystem or network restrictions).
+- **Windows** — curb relies on Linux namespaces/Landlock or macOS Seatbelt. On Windows it applies environment sanitization only (no filesystem or network restrictions).
 - **If you need root-level isolation** — curb runs entirely unprivileged. For multi-tenant or high security scenarios, a VM or container runtime is more appropriate, though the approaches can be combined.
 
 ## Installation
@@ -227,19 +227,35 @@ Sub-path denials (`!` under an allowed parent) require mount namespace support. 
 |----------|--------------|-------|
 | Linux (kernel 5.13+, mount ops) | Full | pivot_root + Landlock + MITM proxy |
 | Linux (kernel 5.13+, no mount ops) | Strong | Landlock + MITM proxy; blocked paths return EACCES not ENOENT |
-| Linux (kernel 4.18+, net NS only) | Network + env | MITM proxy for domain filtering; no FS restrictions |
 | Linux (kernel 3.8-5.12, mount ops) | Strong | pivot_root + MITM proxy (no Landlock hardening) |
-| macOS / Windows | Env only | Environment sanitization; filesystem and network restrictions unavailable |
+| macOS | Strong | Seatbelt (sandbox-exec) + MITM proxy |
+| Windows | Env only | Environment sanitization only |
 
-Full filesystem and network sandboxing is Linux-only. macOS and Windows support is limited to environment sanitization for now.
+### macOS notes
+
+macOS uses Apple's Seatbelt (`sandbox-exec`) for kernel-enforced filesystem and network restrictions. The same CLI flags work on macOS with these differences:
+
+- **No PID isolation** — macOS has no PID namespaces.
+- **No TUN/netstack** — `--tun` is ignored. `--proxy off` with `--domains` is an error.
+- **`--ips` without `--domains`** — works directly via Seatbelt IP rules (no proxy needed).
+- **`sandbox-exec` is marked deprecated** since macOS 10.7 but remains functional and is used by Codex, Homebrew, and Apple's own tools.
 
 ## How it works
+
+### Linux
 
 1. **Environment sanitization** — deny-by-default env with only safe variables passed through.
 2. **User namespace** — the child runs as uid 0 in an isolated namespace (no host privileges).
 3. **Mount namespace + pivot_root** — a new root is built from bind-mounted allowed paths. Unmounted paths don't exist. `MS_RDONLY` and `MS_NOEXEC` enforce write and exec restrictions. Landlock layers on top for defense in depth.
 4. **Network namespace + MITM proxy** — the child gets isolated loopback only. An ephemeral CA and MITM proxy in the parent filter HTTP/HTTPS by domain, immune to ECH. Programs ignoring proxy settings get no network.
 5. **TUN/TAP + netstack** (optional, `--tun always`) — a userspace TCP/IP stack provides domain-filtered access for programs that don't use proxy settings.
+
+### macOS
+
+1. **Environment sanitization** — same deny-by-default approach.
+2. **Seatbelt profile** — an SBPL (Seatbelt Profile Language) profile is generated from the sandbox plan with `(deny default)` and explicit allow rules for permitted paths, executables, and network endpoints.
+3. **sandbox-exec** — the child is spawned under `/usr/bin/sandbox-exec -p '<profile>'`. The Seatbelt profile is inherited by all child processes.
+4. **MITM proxy** — same ephemeral CA and proxy as Linux, running on localhost. The Seatbelt profile allows only the proxy port for outbound connections.
 
 ## Troubleshooting
 

@@ -18,6 +18,8 @@ type Capabilities struct {
 	LandlockABI int    // 0 = unavailable, 1-5 = version.
 	Seccomp     bool   // true = seccomp-bpf filter will be applied.
 	KernelInfo  string // e.g., "6.8.0-100-generic".
+	Seatbelt    error  // nil = ok (macOS only), non-nil = sandbox-exec unavailable.
+	OSVersion   string // macOS: e.g. "15.3.1"; empty on other platforms.
 }
 
 // userNSErrMessage returns an error message for user namespace errors.

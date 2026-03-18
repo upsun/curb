@@ -121,13 +121,15 @@ Use -- before the command when it has its own flags.`,
 			}
 			if plan.PidNS {
 				logger.Info("pid: isolated.")
-			} else {
+			} else if !plan.UseSeatbelt {
 				logger.Info("pid: unavailable (no PID namespace).")
 			}
 			if plan.NoFSRestrict {
 				logger.Info("fs: disabled (--write '*').")
 			} else {
 				switch {
+				case plan.UseSeatbelt:
+					logger.Info("fs: active (seatbelt).")
 				case plan.UsePivotRoot && plan.UseLandlock:
 					logger.Info("fs: active (pivot_root + landlock).")
 				case plan.UsePivotRoot:
@@ -142,7 +144,13 @@ Use -- before the command when it has its own flags.`,
 				logger.Info("exec: active.")
 			}
 			if plan.AllowUnixSockets {
-				logger.Info("seccomp: disabled (--allow-unix-sockets).")
+				if plan.UseSeatbelt {
+					logger.Info("unix sockets: allowed (--allow-unix-sockets).")
+				} else {
+					logger.Info("seccomp: disabled (--allow-unix-sockets).")
+				}
+			} else if plan.UseSeatbelt {
+				logger.Info("unix sockets: blocked (seatbelt).")
 			} else if caps.Seccomp {
 				logger.Info("seccomp: AF_UNIX blocked.")
 			}
