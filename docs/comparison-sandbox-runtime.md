@@ -7,7 +7,9 @@ The comparison covers Linux only.
 
 Both tools sandbox a subprocess with filesystem, network, and environment
 restrictions. curb is a single Go binary with no runtime dependencies; srt
-is a Node.js program that orchestrates bubblewrap, socat, and ripgrep.
+is a Node.js program that orchestrates bubblewrap, socat, and ripgrep. In
+benchmarks, curb boots in ~40 ms using ~14 MB; srt takes ~121–210 ms using
+~94–97 MB (see Performance below).
 
 ## Filesystem
 
@@ -122,25 +124,46 @@ gvisor's netstack, compiled in. The seccomp filter is built in Go.
 
 ## Performance
 
-Benchmarks run via `make bench` (see `bench/bench_linux_test.go`). These
-measure end-to-end time including sandbox setup, command execution, and
-teardown.
+Benchmarks run via `make bench` (see `bench/bench_linux_test.go`).
 
-| Benchmark | curb (proxy) | curb (TUN) | srt | Proxy vs srt |
+### Time
+
+End-to-end time including sandbox setup, command execution, and teardown.
+
+| Benchmark | curb (proxy) | curb (TUN) | srt (node) | srt (bun) |
 |---|---|---|---|---|
-| Boot (`true`) | ~41 ms | - | ~205 ms | 5.0x |
-| HTTP single request | ~44 ms | ~66 ms | ~229 ms | 5.2x |
-| HTTP batch (10 requests) | ~86 ms | ~113 ms | ~289 ms | 3.4x |
+| Boot (`true`) | ~40 ms | - | ~210 ms | ~121 ms |
+| HTTP single request | ~44 ms | ~67 ms | ~220 ms | ~134 ms |
+| HTTP batch (10 requests) | ~88 ms | ~114 ms | ~352 ms | ~260 ms |
 
 The boot benchmark runs `/usr/bin/true` inside the sandbox, isolating
 setup/teardown overhead. curb's single-process architecture (re-exec via
-`clone()`) avoids the multi-process startup of srt (Node.js -> bubblewrap
+`clone()`) avoids the multi-process startup of srt (runtime -> bubblewrap
 -> socat -> apply-seccomp -> command). The HTTP benchmarks run `curl`
-against a local HTTP server with domain filtering enabled.
+against a local HTTP server with domain filtering enabled. srt is
+benchmarked under both Node.js and Bun to separate JS runtime overhead
+from sandboxing overhead.
 
-Subtracting boot time gives per-request overhead: curb proxy ~4.5 ms, curb
-TUN ~7.2 ms, srt ~8.4 ms. Boot is the dominant difference for short-lived
-commands. For long-running processes, performance converges.
+Subtracting boot time gives per-request overhead: curb proxy ~5 ms, curb
+TUN ~7 ms, srt (node) ~14 ms, srt (bun) ~14 ms. Boot is the dominant
+difference for short-lived commands. Bun halves srt's boot time but
+per-request overhead is similar. For long-running processes, performance
+converges.
+
+### Memory
+
+Peak resident set size (RSS) of the sandbox process tree, reported by
+`wait4()` rusage (includes the orchestrator and all reaped children).
+
+| Benchmark | curb (proxy) | curb (TUN) | srt (node) | srt (bun) |
+|---|---|---|---|---|
+| Boot (`true`) | ~14 MB | - | ~94 MB | ~97 MB |
+| HTTP single request | ~15 MB | ~15 MB | ~93 MB | ~101 MB |
+| HTTP batch (10 requests) | ~15 MB | ~17 MB | ~93 MB | ~101 MB |
+
+curb is a single Go binary; srt starts a JS runtime, bubblewrap, socat,
+and a seccomp helper, so its baseline RSS reflects the combined footprint
+of those processes.
 
 ## Summary
 
