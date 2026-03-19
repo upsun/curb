@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2823,6 +2824,116 @@ func main() {
 	require.NoError(t, cmdErr,
 		"expected socketpair to succeed with --allow-unix-sockets: %s", outStr)
 	assert.Contains(t, outStr, "OK")
+}
+
+// TestCurb_Pdeathsig verifies the child dies when the parent is killed.
+func TestCurb_Pdeathsig(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--", "sleep", "60")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, cmd.Start())
+
+	// Give the child time to start.
+	time.Sleep(200 * time.Millisecond)
+
+	parentPID := cmd.Process.Pid
+
+	// SIGKILL the parent curb process.
+	require.NoError(t, syscall.Kill(parentPID, syscall.SIGKILL))
+	_ = cmd.Wait()
+
+	// Poll for the child to die (Pdeathsig delivers SIGKILL).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		// Try to signal all processes in the process group.
+		// If the group is gone, Kill returns an error.
+		if err := syscall.Kill(-parentPID, 0); err != nil {
+			return // Process group is gone.
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Clean up any survivors.
+	_ = syscall.Kill(-parentPID, syscall.SIGKILL)
+	t.Fatal("child process survived parent death")
+}
+
+// TestCurb_SignalEscalation verifies a second SIGINT force-kills a
+// signal-ignoring child.
+func TestCurb_SignalEscalation(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", `trap "" INT TERM HUP; while true; do :; done`)
+	require.NoError(t, cmd.Start())
+	time.Sleep(200 * time.Millisecond)
+
+	// First SIGINT: forwarded, but the child ignores it.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGINT))
+	time.Sleep(100 * time.Millisecond)
+
+	// Second SIGINT: triggers force-kill.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGINT))
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-done:
+		// Exited as expected.
+	case <-time.After(3 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("child did not exit after signal escalation")
+	}
+}
+
+// TestCurb_HUPEscalation verifies SIGHUP triggers a timed force-kill.
+func TestCurb_HUPEscalation(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--", "sh", "-c", `trap "" INT TERM HUP; while true; do :; done`)
+	require.NoError(t, cmd.Start())
+	time.Sleep(200 * time.Millisecond)
+
+	// Single SIGHUP: should trigger the 3s kill timer.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-done:
+		// Exited as expected.
+	case <-time.After(6 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("child did not exit after HUP escalation")
+	}
+}
+
+// TestCurb_NormalSignalNoEscalation verifies a single SIGTERM kills a
+// well-behaved process normally (exit 143, not 137).
+func TestCurb_NormalSignalNoEscalation(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--", "sleep", "60")
+	require.NoError(t, cmd.Start())
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		code := exitErr.ExitCode()
+		// 143 = 128 + SIGTERM(15). Not 137 (128 + SIGKILL).
+		assert.Equal(t, 143, code, "expected SIGTERM exit code, got %d", code)
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("child did not exit after SIGTERM")
+	}
 }
 
 // filterCurbOutput removes lines starting with "curb:" from output.

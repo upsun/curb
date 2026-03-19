@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
+	"time"
 )
 
 // catchableSignals returns all signals that can be caught (1-31, excluding SIGKILL and SIGSTOP).
@@ -19,6 +21,69 @@ func catchableSignals() []os.Signal {
 		sigs = append(sigs, i)
 	}
 	return sigs
+}
+
+// hupKillTimeout is the delay after SIGHUP before force-killing the child.
+// Terminal is gone after HUP so the user cannot send further signals.
+const hupKillTimeout = 3 * time.Second
+
+// termSignal extracts the syscall.Signal if sig is SIGINT, SIGTERM, or SIGHUP.
+// Returns 0 (not a termination signal) otherwise.
+func termSignal(sig os.Signal) syscall.Signal {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		return 0
+	}
+	if s == syscall.SIGINT || s == syscall.SIGTERM || s == syscall.SIGHUP {
+		return s
+	}
+	return 0
+}
+
+// forwardSignals relays signals from sigCh to proc. On a second termination
+// signal (SIGINT, SIGTERM, SIGHUP) it force-kills the child. If SIGHUP is
+// the first termination signal, a kill timer is also started (the terminal is
+// gone so the user cannot send a second signal manually).
+// Returns a stop function that cancels the HUP timer; call it after Wait().
+func forwardSignals(sigCh <-chan os.Signal, proc *os.Process, hupTimeout time.Duration) (stop func()) {
+	var (
+		mu       sync.Mutex
+		termSent bool
+		timer    *time.Timer
+		killed   sync.Once
+	)
+	kill := func() {
+		killed.Do(func() {
+			if err := proc.Kill(); err == nil {
+				fmt.Fprintf(os.Stderr, "curb: killing child (signal escalation)\n")
+			}
+		})
+	}
+	go func() {
+		for sig := range sigCh {
+			if ts := termSignal(sig); ts != 0 {
+				mu.Lock()
+				if termSent {
+					mu.Unlock()
+					kill()
+					continue
+				}
+				termSent = true
+				if ts == syscall.SIGHUP && timer == nil {
+					timer = time.AfterFunc(hupTimeout, kill)
+				}
+				mu.Unlock()
+			}
+			_ = proc.Signal(sig)
+		}
+	}()
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if timer != nil {
+			timer.Stop()
+		}
+	}
 }
 
 // exitCode extracts the exit code from a cmd.Wait() error.

@@ -84,6 +84,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	cmd := exec.Command(self)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: cloneFlags,
+		Pdeathsig:  syscall.SIGKILL,
 		UidMappings: []syscall.SysProcIDMap{
 			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
 		},
@@ -172,15 +173,12 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		_ = sockParent.Close()
 	}
 
-	// Forward signals to the child.
-	go func() {
-		for sig := range sigCh {
-			_ = cmd.Process.Signal(sig)
-		}
-	}()
+	// Forward signals to the child with escalation.
+	stopFwd := forwardSignals(sigCh, cmd.Process, hupKillTimeout)
 
 	// Wait for the child to exit.
 	waitErr := cmd.Wait()
+	stopFwd()
 	signal.Stop(sigCh)
 	close(sigCh)
 	res.closeAll()

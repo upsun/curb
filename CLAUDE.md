@@ -45,6 +45,12 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - `--domains` validates input: rejects URLs (suggests bare domain), IP addresses (suggests `--ips`), invalid characters, and malformed wildcards. `--ips` validates that values parse as IP addresses or CIDR prefixes.
 - `!` prefix in list flags removes from defaults AND actively denies via overmount when the path is under an allowed parent. `--read '!/path'` hides (tmpfs/dev-null), `--write '!/path'` makes read-only, `--exec '!/path'` makes noexec. `!*` clears all defaults (not deny-all). `\!` escapes literal `!`. Sub-path denials require mount NS; Landlock-only mode warns.
 
+### Process lifecycle
+
+- `Pdeathsig: SIGKILL` on re-exec'd child (`parent_linux.go`) and on ForkExec'd target (`child_linux.go`). When the parent dies, the kernel kills the child immediately.
+- Signal escalation (`forwardSignals` in `process_unix.go`): first SIGINT/SIGTERM/SIGHUP is forwarded normally. A second termination signal force-kills the child. SIGHUP also starts a 3s kill timer (terminal is gone, user cannot send more signals).
+- All three parent→child sites (parent_linux, parent_darwin, child_linux initLoop) use `forwardSignals`.
+
 ### macOS (Seatbelt)
 
 - Apple's Seatbelt (`sandbox-exec`) provides kernel-enforced FS and network restrictions via SBPL profiles. Marked "deprecated" since macOS 10.7 but still functional and used by Codex, Homebrew, and Apple's own tools.

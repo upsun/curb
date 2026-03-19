@@ -91,6 +91,7 @@ func initLoop(exe string, argv, env []string, cleanup func()) error {
 	pid, err := syscall.ForkExec(exe, argv, &syscall.ProcAttr{
 		Env:   env,
 		Files: []uintptr{0, 1, 2},
+		Sys:   &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL},
 	})
 	if err != nil {
 		return fmt.Errorf("fork+exec %s: %w", exe, err)
@@ -106,11 +107,8 @@ func initLoop(exe string, argv, env []string, cleanup func()) error {
 	}
 	sigCh := make(chan os.Signal, 32)
 	signal.Notify(sigCh, filtered...)
-	go func() {
-		for sig := range sigCh {
-			_ = syscall.Kill(pid, sig.(syscall.Signal))
-		}
-	}()
+	proc, _ := os.FindProcess(pid)
+	stopFwd := forwardSignals(sigCh, proc, hupKillTimeout)
 
 	// Reap loop: wait for the target to exit, silently reaping orphans.
 	var targetStatus syscall.WaitStatus
@@ -136,6 +134,7 @@ func initLoop(exe string, argv, env []string, cleanup func()) error {
 		}
 	}
 
+	stopFwd()
 	signal.Stop(sigCh)
 	close(sigCh)
 

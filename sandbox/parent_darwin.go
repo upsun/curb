@@ -47,21 +47,18 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// Set up signal forwarding before starting the child.
 	sigCh := make(chan os.Signal, 32)
 	signal.Notify(sigCh, catchableSignals()...)
-	defer signal.Stop(sigCh)
 
 	if err := cmd.Start(); err != nil {
+		signal.Stop(sigCh)
 		return -1, fmt.Errorf("starting sandbox-exec: %w", err)
 	}
 
-	// Forward signals to the child.
-	go func() {
-		for sig := range sigCh {
-			_ = cmd.Process.Signal(sig)
-		}
-	}()
+	// Forward signals to the child with escalation.
+	stopFwd := forwardSignals(sigCh, cmd.Process, hupKillTimeout)
 
 	// Wait for the child to exit.
 	waitErr := cmd.Wait()
+	stopFwd()
 	signal.Stop(sigCh)
 	close(sigCh)
 
