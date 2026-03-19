@@ -105,7 +105,13 @@ func writeMachRules(b *strings.Builder, plan *SandboxPlan) {
 }
 
 // writeReadRules emits file-read* rules for read-only paths and files.
+// When NoFSRestrict is set (--write *), all file access is allowed globally.
 func writeReadRules(b *strings.Builder, plan *SandboxPlan) {
+	if plan.NoFSRestrict {
+		b.WriteString(";; FS (unrestricted).\n")
+		b.WriteString("(allow file-read* file-write*)\n\n")
+		return
+	}
 	if len(plan.ROPaths) == 0 && len(plan.ROFiles) == 0 {
 		return
 	}
@@ -129,6 +135,9 @@ func writeReadRules(b *strings.Builder, plan *SandboxPlan) {
 
 // writeWriteRules emits file-read* file-write* rules for read-write paths and files.
 func writeWriteRules(b *strings.Builder, plan *SandboxPlan) {
+	if plan.NoFSRestrict {
+		return // already covered by writeReadRules
+	}
 	if len(plan.RWPaths) == 0 && len(plan.RWFiles) == 0 {
 		return
 	}
@@ -153,7 +162,7 @@ func writeWriteRules(b *strings.Builder, plan *SandboxPlan) {
 // writeExecRules emits process-exec and file-map-executable rules.
 // file-map-executable is needed for dyld to load shared libraries.
 func writeExecRules(b *strings.Builder, plan *SandboxPlan) {
-	if len(plan.ExecPaths) == 0 && plan.NoFSRestrict {
+	if plan.NoFSRestrict || plan.NoExecRestrict {
 		b.WriteString(";; Exec (unrestricted).\n")
 		b.WriteString("(allow process-exec)\n")
 		b.WriteString("(allow file-map-executable)\n\n")

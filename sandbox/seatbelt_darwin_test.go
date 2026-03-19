@@ -25,7 +25,6 @@ func TestGenerateSBPL_ROPaths(t *testing.T) {
 		Caps:    &Capabilities{},
 		ROPaths: []string{"/usr", "/opt"},
 		ROFiles: []string{"/private/etc/hosts"},
-		NoFSRestrict: true,
 	}
 	profile := generateSBPL(plan)
 	assert.Contains(t, profile, `(subpath "/usr")`)
@@ -38,12 +37,41 @@ func TestGenerateSBPL_RWPaths(t *testing.T) {
 		Caps:    &Capabilities{},
 		RWPaths: []string{"/private/tmp/curb-test"},
 		RWFiles: []string{"/dev/null"},
-		NoFSRestrict: true,
 	}
 	profile := generateSBPL(plan)
 	assert.Contains(t, profile, "file-read* file-write*")
 	assert.Contains(t, profile, `(subpath "/private/tmp/curb-test")`)
 	assert.Contains(t, profile, `(literal "/dev/null")`)
+}
+
+func TestGenerateSBPL_NoFSRestrict(t *testing.T) {
+	plan := &SandboxPlan{
+		Caps:         &Capabilities{},
+		NoFSRestrict: true,
+	}
+	profile := generateSBPL(plan)
+	// Global allow must be present.
+	assert.Contains(t, profile, "(allow file-read* file-write*)")
+	// Exec must be unrestricted when FS is unrestricted.
+	assert.Contains(t, profile, "(allow process-exec)")
+	assert.Contains(t, profile, "(allow file-map-executable)")
+	// No specific path subpath rules should appear.
+	assert.NotContains(t, profile, "(subpath")
+}
+
+func TestGenerateSBPL_NoExecRestrict(t *testing.T) {
+	plan := &SandboxPlan{
+		Caps:           &Capabilities{},
+		ROPaths:        []string{"/usr"},
+		NoExecRestrict: true,
+	}
+	profile := generateSBPL(plan)
+	// Exec must be unrestricted independently of FS.
+	assert.Contains(t, profile, "(allow process-exec)")
+	assert.Contains(t, profile, "(allow file-map-executable)")
+	// FS restrictions still apply.
+	assert.Contains(t, profile, `(subpath "/usr")`)
+	assert.NotContains(t, profile, "(allow file-read* file-write*)")
 }
 
 func TestGenerateSBPL_DenyRules(t *testing.T) {

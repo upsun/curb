@@ -99,6 +99,7 @@ type SandboxPlan struct {
 	DegradedLayers   []DegradedLayer
 	TempDir          string
 	NoFSRestrict     bool
+	NoExecRestrict   bool
 	Quiet            bool
 	Command          []string
 	Caps             *Capabilities
@@ -335,6 +336,7 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, realHome string) error {
 	removals.noExecRestrict = cfg.NoExecRestrict
 	if cfg.NoExecRestrict {
+		plan.NoExecRestrict = true
 		return nil
 	}
 	var execAdds []string
