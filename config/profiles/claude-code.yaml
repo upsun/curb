@@ -1,12 +1,24 @@
 # Claude Code
 domains:
   - api.anthropic.com
+  - platform.claude.com
   - statsig.anthropic.com
 read:
-  - ~/.claude
   - ~/.config/claude
+  - ~/.gitconfig
+  - ~/.config/git
 write:
   - ~/.claude
+  - ~/.claude.json
+  - !~/.claude/agents
+  - !~/.claude/commands
+  - .
+  - !./.claude/agents
+  - !./.claude/commands
+  # Workaround: Claude Code ignores $TMPDIR and hardcodes /tmp/claude-<UID>.
+  # Inside a user namespace UID is always 0.
+  - /tmp/claude-0
+
 exec:
   - claude
   - node
@@ -15,3 +27,7 @@ exec:
 env:
   - ANTHROPIC_API_KEY
   - CLAUDE_CODE_MAX_TOKENS
+  - GIT_AUTHOR_NAME
+  - GIT_AUTHOR_EMAIL
+  - GIT_COMMITTER_NAME
+  - GIT_COMMITTER_EMAIL
