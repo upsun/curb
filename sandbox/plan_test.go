@@ -219,6 +219,52 @@ func TestBuildPlan_ExecAbsPath(t *testing.T) {
 	assert.Contains(t, plan.ExecPaths, bin)
 }
 
+// chdirTemp changes to dir and restores the original working directory on cleanup.
+func chdirTemp(t *testing.T, dir string) {
+	t.Helper()
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+}
+
+func TestBuildPlan_ExecRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mybin"), nil, 0o755))
+	chdirTemp(t, dir)
+
+	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"./mybin"}}
+	plan, planErr := BuildPlan(cfg, minCaps())
+	require.NoError(t, planErr)
+	defer plan.Cleanup()
+	assert.Contains(t, plan.ExecPaths, filepath.Join(dir, "mybin"))
+}
+
+func TestBuildPlan_ExecRelativeGlob(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "dist", "linux_amd64")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	bin := filepath.Join(sub, "mybinary")
+	require.NoError(t, os.WriteFile(bin, nil, 0o755))
+	chdirTemp(t, dir)
+
+	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"./dist/*/*"}}
+	plan, planErr := BuildPlan(cfg, minCaps())
+	require.NoError(t, planErr)
+	defer plan.Cleanup()
+	assert.Contains(t, plan.ExecPaths, bin)
+}
+
+func TestBuildPlan_ExecRelativeGlobNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"./nonexistent/*"}}
+	_, planErr := BuildPlan(cfg, minCaps())
+	require.Error(t, planErr)
+	assert.Contains(t, planErr.Error(), "no matches found")
+}
+
 func TestBuildPlan_ExecNotFound(t *testing.T) {
 	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"nonexistent-binary-xyz"}}
 	_, err := BuildPlan(cfg, minCaps())

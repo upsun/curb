@@ -357,9 +357,21 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 		plan.ExecPaths = config.ApplyExclusions(config.SystemExecPaths, excludeArgs(removals.execRemoves))
 	}
 	for _, name := range execAdds {
-		if filepath.IsAbs(name) {
-			// Expand globs in absolute exec paths (e.g. /usr/bin/python*).
+		if strings.ContainsRune(name, filepath.Separator) {
+			// Path (absolute or relative): expand globs, resolve to absolute.
 			resolved := config.ExpandGlobs([]string{name})
+			if len(resolved) == 0 {
+				return fmt.Errorf("--exec %s: no matches found", name)
+			}
+			for i, r := range resolved {
+				if !filepath.IsAbs(r) {
+					abs, err := filepath.Abs(r)
+					if err != nil {
+						return fmt.Errorf("--exec %s: %w", r, err)
+					}
+					resolved[i] = abs
+				}
+			}
 			plan.ExecPaths = append(plan.ExecPaths, resolved...)
 			plan.UserPaths = append(plan.UserPaths, resolved...)
 		} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
