@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime/trace"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,18 @@ func NewRootCmd() *cobra.Command {
 Use -- before the command when it has its own flags.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if traceFile, _ := cmd.Flags().GetString("trace"); traceFile != "" {
+				f, err := os.Create(traceFile)
+				if err != nil {
+					return fmt.Errorf("trace: %w", err)
+				}
+				defer func() { _ = f.Close() }()
+				if err := trace.Start(f); err != nil {
+					return fmt.Errorf("trace: %w", err)
+				}
+				defer trace.Stop()
+			}
+
 			cfg, err := config.FromFlags(cmd)
 			if err != nil {
 				return err
@@ -165,6 +178,8 @@ Use -- before the command when it has its own flags.`,
 
 			exitCode, err := sandbox.StartSandbox(plan)
 			plan.Cleanup()
+			// Stop tracing before os.Exit (which skips defers).
+			trace.Stop()
 			if err != nil {
 				logger.Error("%v", err)
 				os.Exit(sandbox.ExitSetupFailure)
@@ -276,4 +291,8 @@ func registerFlags(cmd *cobra.Command) {
 	// Other.
 	f.Bool("dry-run", false, "print the sandbox plan without running the command")
 	f.String("home", "", "set HOME environment variable for the sandboxed process")
+
+	// Profiling (hidden).
+	f.String("trace", "", "write execution trace to file (view with: go tool trace FILE)")
+	_ = f.MarkHidden("trace")
 }
