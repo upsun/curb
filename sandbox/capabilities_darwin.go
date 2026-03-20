@@ -20,6 +20,12 @@ const MountProbeEnvKey = "_CURB_MOUNT_PROBE"
 // RunTUNProbe is a no-op on macOS.
 func RunTUNProbe() {}
 
+// probeTUN is unused on macOS (SetTUN is called instead) but satisfies the
+// method reference in Capabilities.TUN().
+func (c *Capabilities) probeTUN() error {
+	return fmt.Errorf("not supported on %s", runtime.GOOS)
+}
+
 // RunMountProbe is a no-op on macOS.
 func RunMountProbe() {}
 
@@ -32,9 +38,9 @@ func ProbeAll() *Capabilities {
 		UserNS:  unavailable,
 		MountNS: unavailable,
 		NetNS:   unavailable,
-		TUN:     unavailable,
 		PidNS:   unavailable,
 	}
+	caps.SetTUN(unavailable)
 	caps.Seatbelt = probeSeatbelt()
 	caps.OSVersion = probeOSVersion()
 	return caps

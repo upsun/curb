@@ -8,7 +8,7 @@ The comparison covers Linux only.
 Both tools sandbox a subprocess with filesystem, network, and environment
 restrictions. curb is a single Go binary with no runtime dependencies; srt
 is a Node.js program that orchestrates bubblewrap, socat, and ripgrep. In
-benchmarks, curb boots in ~40 ms using ~14 MB; srt takes ~121–210 ms using
+benchmarks, curb boots in ~13 ms using ~15 MB; srt takes ~104–201 ms using
 ~94–97 MB (see Performance below).
 
 ## Filesystem
@@ -132,9 +132,9 @@ End-to-end time including sandbox setup, command execution, and teardown.
 
 | Benchmark | curb (proxy) | curb (TUN) | srt (node) | srt (bun) |
 |---|---|---|---|---|
-| Boot (`true`) | ~40 ms | - | ~210 ms | ~121 ms |
-| HTTP single request | ~44 ms | ~67 ms | ~220 ms | ~134 ms |
-| HTTP batch (10 requests) | ~88 ms | ~114 ms | ~352 ms | ~260 ms |
+| Boot (`true`) | ~13 ms | - | ~201 ms | ~104 ms |
+| HTTP single request | ~18 ms | ~66 ms | ~221 ms | ~117 ms |
+| HTTP batch (10 requests) | ~60 ms | ~112 ms | ~276 ms | ~181 ms |
 
 The boot benchmark runs `/usr/bin/true` inside the sandbox, isolating
 setup/teardown overhead. curb's single-process architecture (re-exec via
@@ -145,7 +145,7 @@ benchmarked under both Node.js and Bun to separate JS runtime overhead
 from sandboxing overhead.
 
 Subtracting boot time gives per-request overhead: curb proxy ~5 ms, curb
-TUN ~7 ms, srt (node) ~14 ms, srt (bun) ~14 ms. Boot is the dominant
+TUN ~10 ms, srt (node) ~8 ms, srt (bun) ~8 ms. Boot is the dominant
 difference for short-lived commands. Bun halves srt's boot time but
 per-request overhead is similar. For long-running processes, performance
 converges.
@@ -157,9 +157,9 @@ Peak resident set size (RSS) of the sandbox process tree, reported by
 
 | Benchmark | curb (proxy) | curb (TUN) | srt (node) | srt (bun) |
 |---|---|---|---|---|
-| Boot (`true`) | ~14 MB | - | ~94 MB | ~97 MB |
-| HTTP single request | ~15 MB | ~15 MB | ~93 MB | ~101 MB |
-| HTTP batch (10 requests) | ~15 MB | ~17 MB | ~93 MB | ~101 MB |
+| Boot (`true`) | ~15 MB | - | ~95 MB | ~97 MB |
+| HTTP single request | ~16 MB | ~16 MB | ~94 MB | ~101 MB |
+| HTTP batch (10 requests) | ~16 MB | ~17 MB | ~94 MB | ~101 MB |
 
 curb is a single Go binary; srt starts a JS runtime, bubblewrap, socat,
 and a seccomp helper, so its baseline RSS reflects the combined footprint

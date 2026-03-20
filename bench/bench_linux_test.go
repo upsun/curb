@@ -87,8 +87,8 @@ func requireProxyNS(b *testing.B) {
 func requireNetNS(b *testing.B) {
 	b.Helper()
 	requireProxyNS(b)
-	if testCaps.TUN != nil {
-		b.Skipf("TUN/TAP unavailable: %v", testCaps.TUN)
+	if testCaps.TUN() != nil {
+		b.Skipf("TUN/TAP unavailable: %v", testCaps.TUN())
 	}
 }
 

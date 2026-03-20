@@ -1,6 +1,9 @@
 package sandbox
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 // Sentinel errors for TUN probe failures.
 var (
@@ -13,7 +16,6 @@ type Capabilities struct {
 	UserNS             error  // nil = ok, non-nil = fatal.
 	MountNS            error  // nil = ok, non-nil = Landlock-only (no sub-path denials).
 	NetNS              error  // nil = ok, non-nil = fatal if --allow-domains used.
-	TUN                error  // nil = ok, non-nil = fatal if --allow-domains used.
 	PidNS              error  // nil = ok, non-nil = degraded (no PID isolation).
 	LandlockABI        int    // 0 = unavailable, 1-5 = version.
 	Seccomp            bool   // true = seccomp-bpf filter will be applied.
@@ -21,6 +23,23 @@ type Capabilities struct {
 	Seatbelt           error  // nil = ok (macOS only), non-nil = sandbox-exec unavailable.
 	OSVersion          string // macOS: e.g. "15.3.1"; empty on other platforms.
 	AppArmorRestricted bool   // true = AppArmor is restricting unprivileged user namespaces (Linux only).
+
+	tunOnce sync.Once
+	tunErr  error // nil = ok, non-nil = TUN/TAP unavailable.
+}
+
+// TUN returns the TUN probe result, running the probe on first call.
+// The probe spawns a child process in a user+net namespace (~13ms), so
+// it is deferred until actually needed (--tun always, --proxy off, or --dry-run).
+func (c *Capabilities) TUN() error {
+	c.tunOnce.Do(func() { c.tunErr = c.probeTUN() })
+	return c.tunErr
+}
+
+// SetTUN sets the TUN result directly, skipping the probe.
+// Used on platforms where TUN is statically known (e.g. macOS: unavailable).
+func (c *Capabilities) SetTUN(err error) {
+	c.tunOnce.Do(func() { c.tunErr = err })
 }
 
 // apparmorSetupHint is appended to error messages when AppArmor is restricting user namespaces.

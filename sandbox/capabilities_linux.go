@@ -21,7 +21,6 @@ func ProbeAll() *Capabilities {
 	caps.MountNS = probeMountOps(caps.AppArmorRestricted)
 	caps.NetNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNET, "network namespace")
 	caps.PidNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWPID, "PID namespace")
-	caps.TUN = probeTUN()
 	caps.LandlockABI = probeLandlock()
 	caps.Seccomp = true // seccomp-bpf available since kernel 3.5.
 	return caps
@@ -50,7 +49,7 @@ func probeNS(flags uintptr, name string) error {
 // probeTUN checks whether /dev/net/tun is accessible and TAP creation works
 // inside a user+net namespace. The full probe spawns a child that attempts
 // TUNSETIFF, which catches AppArmor capability denials.
-func probeTUN() error {
+func (c *Capabilities) probeTUN() error {
 	f, err := os.Open("/dev/net/tun")
 	if err != nil {
 		return fmt.Errorf("%w: %w", errTUNDevice, err)

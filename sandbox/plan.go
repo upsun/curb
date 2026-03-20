@@ -217,16 +217,16 @@ func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabiliti
 	// Proxy and netstack mode selection.
 	plan.ProxyEnabled = hasFiltering && cfg.ProxyMode != "off"
 	needsNetstack := hasFiltering && !plan.ProxyEnabled
-	if cfg.TUNMode == "always" && hasFiltering && plan.ProxyEnabled && caps.TUN == nil {
+	if cfg.TUNMode == "always" && hasFiltering && plan.ProxyEnabled && caps.TUN() == nil {
 		needsNetstack = true
 	}
 	if needsNetstack {
-		if caps.TUN != nil {
+		if tunErr := caps.TUN(); tunErr != nil {
 			msg := tunDeviceErrMessage()
-			if errors.Is(caps.TUN, errTUNIoctl) {
+			if errors.Is(tunErr, errTUNIoctl) {
 				msg = tunIoctlErrMessage()
 			}
-			return fmt.Errorf("fatal: %w\n\n%s", caps.TUN, msg)
+			return fmt.Errorf("fatal: %w\n\n%s", tunErr, msg)
 		}
 	}
 	plan.NetEnabled = needsNetstack
@@ -448,10 +448,10 @@ func resolveProxy(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) err
 		// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
 		plan.AllowLocalhost = true
 	}
-	if cfg.TUNMode == "always" && caps.TUN != nil && !plan.NetEnabled && !plan.UseSeatbelt {
+	if cfg.TUNMode == "always" && caps.TUN() != nil && !plan.NetEnabled && !plan.UseSeatbelt {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
 			Layer:  "TUN/TAP hardening",
-			Reason: caps.TUN.Error(),
+			Reason: caps.TUN().Error(),
 			Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
 		})
 	}
@@ -598,7 +598,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		printCap(w, "mount namespaces", p.Caps.MountNS, "")
 		printCap(w, "PID namespaces", p.Caps.PidNS, "")
 		printCap(w, "network namespaces", p.Caps.NetNS, "")
-		printCap(w, "/dev/net/tun", p.Caps.TUN, "")
+		printCap(w, "/dev/net/tun", p.Caps.TUN(), "")
 		if p.Caps.LandlockABI > 0 {
 			printCap(w, "landlock", nil, fmt.Sprintf("ABI v%d", p.Caps.LandlockABI))
 		} else {

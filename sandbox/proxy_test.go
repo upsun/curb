@@ -121,7 +121,7 @@ func TestCurb_Proxy_ProxyOff(t *testing.T) {
 	requireUserNS(t)
 
 	// --proxy off with --domains needs TUN. If TUN is unavailable, should fail.
-	if testCaps.TUN != nil {
+	if testCaps.TUN() != nil {
 		cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "example.com", "--", "true")
 		err := cmd.Run()
 		require.Error(t, err, "--proxy off with --domains should fail without TUN")
@@ -178,7 +178,7 @@ func TestCurb_Proxy_TUNAlways_DryRun(t *testing.T) {
 // TestCurb_Proxy_TUNAlways_TUNUnavailable tests that proxy works even when TUN is unavailable.
 func TestCurb_Proxy_TUNAlways_TUNUnavailable(t *testing.T) {
 	requireProxyNS(t)
-	if testCaps.TUN == nil {
+	if testCaps.TUN() == nil {
 		t.Skip("TUN is available; this test requires TUN to be unavailable")
 	}
 

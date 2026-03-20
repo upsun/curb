@@ -22,10 +22,16 @@ func RunMountProbe() {}
 // ProbeAll on non-Linux returns all capabilities as unavailable.
 func ProbeAll() *Capabilities {
 	unavailable := fmt.Errorf("not supported on %s", runtime.GOOS)
-	return &Capabilities{
+	caps := &Capabilities{
 		UserNS:  unavailable,
 		MountNS: unavailable,
 		NetNS:   unavailable,
-		TUN:     unavailable,
 	}
+	caps.SetTUN(unavailable)
+	return caps
+}
+
+// probeTUN is unused on this platform (SetTUN is called instead).
+func (c *Capabilities) probeTUN() error {
+	return fmt.Errorf("not supported on %s", runtime.GOOS)
 }

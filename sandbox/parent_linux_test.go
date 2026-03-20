@@ -1051,8 +1051,8 @@ func requireNetNS(t *testing.T) {
 	if testCaps.NetNS != nil {
 		t.Skipf("network namespaces unavailable: %v", testCaps.NetNS)
 	}
-	if testCaps.TUN != nil {
-		t.Skipf("TUN/TAP unavailable: %v", testCaps.TUN)
+	if testCaps.TUN() != nil {
+		t.Skipf("TUN/TAP unavailable: %v", testCaps.TUN())
 	}
 }
 

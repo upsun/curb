@@ -28,11 +28,11 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 		UserNS:      nil,
 		MountNS:     nil,
 		NetNS:       nil,
-		TUN:         nil,
 		LandlockABI: 4,
 		Seccomp:     true,
 		KernelInfo:  "6.8.0-test",
 	}
+	caps.SetTUN(nil)
 	cfg := &config.Config{
 		ROPaths:   []string{"/extra"},
 		ExecAllow: []string{"/usr/bin/rg"},
@@ -154,8 +154,8 @@ func TestBuildPlan_FatalTUN(t *testing.T) {
 	caps := &Capabilities{
 		UserNS: nil,
 		NetNS:  nil,
-		TUN:    assert.AnError,
 	}
+	caps.SetTUN(assert.AnError)
 	cfg := &config.Config{
 		AllowedDomains: []string{"example.com"},
 		ProxyMode:      "off", // Without proxy, TUN is required.
@@ -171,9 +171,9 @@ func TestBuildPlan_NetNotFatalWithoutAllow(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		NetNS:       assert.AnError,
-		TUN:         assert.AnError,
 		LandlockABI: 4,
 	}
+	caps.SetTUN(assert.AnError)
 	cfg := &config.Config{}
 
 	plan, err := BuildPlan(cfg, caps)
@@ -207,11 +207,11 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 		UserNS:      nil,
 		MountNS:     nil,
 		NetNS:       nil,
-		TUN:         nil,
 		LandlockABI: 4,
 		Seccomp:     true,
 		KernelInfo:  "6.8.0-test",
 	}
+	caps.SetTUN(nil)
 	cfg := &config.Config{
 		AllowedDomains: []string{"example.com"},
 	}
