@@ -78,9 +78,11 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// PID namespace: skip for proxy-only mode where the child's initLoop
 	// handles fork+exec (PID 1 must be the Go runtime for the accept loop).
 	proxyOnly := plan.ProxyEnabled && !plan.NetEnabled
-	if plan.PidNS && !proxyOnly {
+	usePidNS := plan.PidNS && !proxyOnly
+	if usePidNS {
 		cloneFlags |= syscall.CLONE_NEWPID
 	}
+	plan.PidNS = usePidNS
 	cmd := exec.Command(self)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: cloneFlags,

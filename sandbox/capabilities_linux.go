@@ -16,8 +16,9 @@ import (
 func ProbeAll() *Capabilities {
 	caps := &Capabilities{}
 	caps.KernelInfo = probeKernel()
+	caps.AppArmorRestricted = isAppArmorRestrictingUserns()
 	caps.UserNS = probeNS(syscall.CLONE_NEWUSER, "user namespace")
-	caps.MountNS = probeMountOps()
+	caps.MountNS = probeMountOps(caps.AppArmorRestricted)
 	caps.NetNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWNET, "network namespace")
 	caps.PidNS = probeNS(syscall.CLONE_NEWUSER|syscall.CLONE_NEWPID, "PID namespace")
 	caps.TUN = probeTUN()
@@ -125,7 +126,7 @@ func RunMountProbe() {
 // probeMountOps tests whether mount operations (MS_SLAVE, tmpfs mount, bind
 // mount) work inside a user+mount namespace. This catches AppArmor policies
 // that allow namespace creation but block mount syscalls.
-func probeMountOps() error {
+func probeMountOps(appArmorRestricted bool) error {
 	self, err := os.Executable()
 	if err != nil {
 		// Can't probe; fall back to basic namespace probe.
@@ -148,8 +149,8 @@ func probeMountOps() error {
 			msg = runErr.Error()
 		}
 		e := fmt.Errorf("mount operations failed in namespace: %s", msg)
-		if isAppArmorRestrictingUserns() {
-			e = fmt.Errorf("%w; AppArmor is restricting unprivileged user namespaces (see docs/troubleshooting.md)", e)
+		if appArmorRestricted {
+			e = fmt.Errorf("%w; %s", e, apparmorSetupHint)
 		}
 		return e
 	}

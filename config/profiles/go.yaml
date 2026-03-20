@@ -5,10 +5,24 @@ domains:
   - storage.googleapis.com
 read:
   - ~/go
+  - ~/sdk
+  - /usr/local/go
+write:
+  - ~/.cache/go-build
+  - ~/go/pkg
 exec:
   - go
+  - ~/.cache/go-build
 env:
+  - CGO_ENABLED
   - GOPATH
   - GOMODCACHE
+  - GOROOT
+  - GOCACHE
+  - GOFLAGS
+  - GOMAXPROCS
+  - GONOSUMCHECK
+  - GONOSUMDB
   - GOPROXY
   - GOPRIVATE
+  - GOTOOLCHAIN

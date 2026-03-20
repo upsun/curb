@@ -57,44 +57,15 @@ Ubuntu 24.04+ restricts capabilities in user namespaces via the `unprivileged_us
 
 The recommended fix is a dedicated AppArmor profile for curb. This is safer than modifying the global `unprivileged_userns` profile, which affects all programs.
 
-### Dedicated profile (recommended)
-
-Create `/etc/apparmor.d/curb` (adjust the binary path as needed):
+### Install the profile
 
 ```
-abi <abi/4.0>,
-
-include <tunables/global>
-
-profile curb /usr/local/bin/curb {
-  include <abstractions/base>
-
-  # Allow user namespace creation.
-  userns,
-
-  # Mount operations inside user namespaces (pivot_root enforcement).
-  capability sys_admin,
-
-  # TAP device for network filtering (--domains).
-  capability net_admin,
-
-  # curb needs broad host file access for sandbox setup (bind mounts).
-  # The sandboxed child is restricted by the namespace, not AppArmor.
-  /** rwlkm,
-  /dev/net/tun rw,
-  /proc/** r,
-  /sys/** r,
-
-  # devpts nodes appear as disconnected paths in user namespaces.
-  owner file rw dev/pts/[0-9]*,
-}
+sudo curb apparmor install
 ```
 
-Load the profile:
+This writes the profile to `/etc/apparmor.d/curb` and loads it. The command is idempotent. Use `--path /path/to/curb` if the binary is not in the default location.
 
-```
-sudo apparmor_parser -r /etc/apparmor.d/curb
-```
+To preview the profile without installing, run `curb apparmor`.
 
 ### Alternative: modifying the global profile
 
