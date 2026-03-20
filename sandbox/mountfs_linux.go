@@ -77,7 +77,7 @@ func buildMountPlan(cfg *ChildConfig) []mountEntry {
 	}
 
 	// Filter out entries whose source doesn't exist.
-	// Skip /proc: enforceMountNS mounts a fresh procfs unconditionally.
+	// Skip /proc: enforceMountNS handles it separately (fresh procfs or bind-mount).
 	var result []mountEntry
 	for _, e := range entries {
 		if e.src == "/proc" {
@@ -268,15 +268,30 @@ func enforceMountNS(cfg *ChildConfig) error {
 		}
 	}
 
-	// Mount /proc (best-effort: fails on hidepid=invisible and similar restrictions).
+	// Mount /proc. In a PID namespace, mount a fresh procfs (shows only
+	// the namespace's processes). Without a PID namespace, bind-mount the
+	// host /proc (mounting a fresh procfs requires owning the PID namespace).
 	procDst := filepath.Join(newRoot, "proc")
 	if err := os.MkdirAll(procDst, 0o755); err != nil {
 		return fmt.Errorf("creating /proc: %w", err)
 	}
-	if err := syscall.Mount("proc", procDst, "proc",
-		syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
-		// Not fatal: /proc is useful but not required for FS enforcement.
-		_ = os.Remove(procDst)
+	if cfg.PidNS {
+		if err := syscall.Mount("proc", procDst, "proc",
+			syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
+			clog.Warnf("/proc mount failed: %v (os.Executable and /proc/* will be unavailable)", err)
+			_ = os.Remove(procDst)
+		}
+	} else {
+		if err := syscall.Mount("/proc", procDst, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			clog.Warnf("/proc bind-mount failed: %v (os.Executable and /proc/* will be unavailable)", err)
+			_ = os.Remove(procDst)
+		} else {
+			// Remount top-level read-only. Submounts (e.g. /proc/sys) inherited
+			// via MS_REC keep their original flags; the user namespace prevents
+			// meaningful writes regardless.
+			flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC)
+			_ = syscall.Mount("", procDst, "", flags, "")
+		}
 	}
 
 	// Mount /dev/pts if it's in the allowed paths.
@@ -383,11 +398,11 @@ func synthesizePasswd(cfg *ChildConfig, newRoot string) error {
 		if err := syscall.Mount(tmp, f.path, "", syscall.MS_BIND, ""); err != nil {
 			return fmt.Errorf("mounting synthetic %s: %w", filepath.Base(f.path), err)
 		}
-		_ = os.Remove(tmp) // Bind mount holds the inode; remove the visible name.
 		flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
 		if err := syscall.Mount("", f.path, "", flags, ""); err != nil {
 			return fmt.Errorf("remounting synthetic %s: %w", filepath.Base(f.path), err)
 		}
+		_ = os.Remove(tmp) // Bind mount holds the inode; remove the visible name.
 	}
 	return nil
 }

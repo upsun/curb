@@ -179,6 +179,7 @@ Use -- before the command when it has its own flags.`,
 	registerFlags(cmd)
 	cmd.AddCommand(NewConfigGenCmd())
 	cmd.AddCommand(NewProfileCmd())
+	cmd.AddCommand(NewApparmorCmd())
 	return cmd
 }
 

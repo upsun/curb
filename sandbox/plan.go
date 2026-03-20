@@ -183,14 +183,18 @@ func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabiliti
 	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
 
 	if caps.UserNS != nil {
+		aaHint := ""
+		if caps.AppArmorRestricted {
+			aaHint = "\n" + apparmorSetupHint
+		}
 		if caps.LandlockABI == 0 {
-			return fmt.Errorf("fatal: user namespaces and Landlock both unavailable: %w\n\n%s", caps.UserNS, userNSErrMessage())
+			return fmt.Errorf("fatal: user namespaces and Landlock both unavailable: %w\n\n%s%s", caps.UserNS, userNSErrMessage(), aaHint)
 		}
 		if hasFiltering {
-			return fmt.Errorf("--domains/--ips require user namespaces: %w", caps.UserNS)
+			return fmt.Errorf("--domains/--ips require user namespaces: %w%s", caps.UserNS, aaHint)
 		}
 		if !cfg.UnrestrictedNet {
-			return fmt.Errorf("user namespaces unavailable: network cannot be restricted; use --unrestricted-net to allow unrestricted network: %w", caps.UserNS)
+			return fmt.Errorf("user namespaces unavailable: network cannot be restricted; use --unrestricted-net to allow unrestricted network: %w%s", caps.UserNS, aaHint)
 		}
 		// Landlock-only mode: no namespaces, no network filtering.
 		// UnrestrictedNet is set by resolveNetwork from cfg.UnrestrictedNet.
@@ -378,6 +382,12 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	// inodes. Without this, symlinked binaries (e.g. ~/.local/bin/foo
 	// -> ~/.local/share/foo/binary) fail with permission denied.
 	plan.ExecPaths = resolveSymlinks(plan.ExecPaths)
+
+	// Allow exec from the sandbox temp dir so build tools (go test, cargo
+	// test, etc.) can compile and run binaries from the build cache.
+	if plan.TempDir != "" {
+		plan.ExecPaths = append(plan.ExecPaths, plan.TempDir)
+	}
 
 	// Ensure directories containing exec paths are readable so the
 	// child can stat() them for path resolution after Landlock.
