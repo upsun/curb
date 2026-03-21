@@ -46,6 +46,10 @@ const (
 
 	// TestNoSeccompEnvKey disables seccomp in tests to exercise paths without AF_UNIX blocking.
 	TestNoSeccompEnvKey = "_CURB_TEST_NO_SECCOMP"
+
+	// SOCKSAddrEnvKey is the env var holding the SOCKS5 proxy address for the
+	// _socks-connect helper (used as SSH ProxyCommand).
+	SOCKSAddrEnvKey = "_CURB_SOCKS_ADDR"
 )
 
 // FSEnforcer applies a filesystem enforcement layer to the current process.
@@ -86,6 +90,7 @@ type SandboxPlan struct {
 	AllowUnixSockets bool
 	ProxyEnabled     bool
 	ProxyPort        int
+	SOCKSPort        int
 	CACertPath       string // Host path to combined CA bundle (in TempDir).
 	SystemCACertPath string // System CA file path to bind-mount over.
 	CA               *proxy.CA
@@ -133,6 +138,7 @@ type ChildConfig struct {
 	NetEnabled       bool     `json:"net_enabled"`
 	ProxyEnabled     bool     `json:"proxy_enabled,omitempty"`
 	ProxyPort        int      `json:"proxy_port,omitempty"`
+	SOCKSPort        int      `json:"socks_port,omitempty"`
 	CACertFile       string   `json:"ca_cert_file,omitempty"`
 	CACertMountDst   string   `json:"ca_cert_mount_dst,omitempty"`
 	AllowedDomains   []string `json:"allowed_domains,omitempty"`
@@ -476,6 +482,8 @@ func resolveProxy(plan *SandboxPlan) error {
 		return nil
 	}
 	plan.ProxyPort = pickProxyPort()
+	// Adjacent port in the isolated net NS — no collision possible.
+	plan.SOCKSPort = plan.ProxyPort + 1
 	if plan.NetEnabled {
 		// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
 		plan.AllowLocalhost = true
@@ -492,7 +500,25 @@ func resolveProxy(plan *SandboxPlan) error {
 	}
 	plan.CACertPath = bundlePath
 	plan.SystemCACertPath = systemPath
+
+	// Ensure curb's own binary is accessible inside the sandbox for the
+	// _socks-connect ProxyCommand helper.
+	if plan.SOCKSPort > 0 {
+		if self, err := os.Executable(); err == nil {
+			if dir := filepath.Dir(self); dir != "" && dir != "." {
+				plan.ROPaths = appendUniq(plan.ROPaths, dir)
+				plan.ExecPaths = appendUniq(plan.ExecPaths, self)
+			}
+		}
+	}
 	return nil
+}
+
+func appendUniq(s []string, v string) []string {
+	if !slices.Contains(s, v) {
+		return append(s, v)
+	}
+	return s
 }
 
 // resolveEnv applies environment policy and sets up shell init files.
@@ -543,6 +569,7 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		NetEnabled:       p.NetEnabled,
 		ProxyEnabled:     p.ProxyEnabled,
 		ProxyPort:        p.ProxyPort,
+		SOCKSPort:        p.SOCKSPort,
 		CACertFile:       p.CACertPath,
 		CACertMountDst:   p.SystemCACertPath,
 		AllowedDomains:   p.AllowedDomains,
@@ -670,7 +697,11 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    mode:       unrestricted (--unrestricted-net)")
 	} else {
 		if p.ProxyEnabled {
-			pr("    proxy:      127.0.0.1:%d\n", p.ProxyPort)
+			pr("    proxy:      127.0.0.1:%d", p.ProxyPort)
+			if p.SOCKSPort > 0 {
+				pr(" (socks5 127.0.0.1:%d)", p.SOCKSPort)
+			}
+			pr("\n")
 		}
 		if p.NetEnabled {
 			ln("    tun:        on")
@@ -819,6 +850,25 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 			plan.EnvSet["REQUESTS_CA_BUNDLE"] = plan.CACertPath
 			plan.EnvSet["NODE_EXTRA_CA_CERTS"] = plan.CACertPath
 			plan.EnvSet["SSL_CERT_DIR"] = "" // Clear to prevent stale dir overriding the bundle file.
+		}
+		// SOCKS5 proxy env vars. Most HTTP clients prefer HTTP_PROXY/HTTPS_PROXY
+		// over ALL_PROXY, so HTTP/HTTPS still goes through the MITM proxy.
+		// ALL_PROXY covers non-HTTP tools (curl --socks5, cargo, etc.).
+		if plan.SOCKSPort > 0 {
+			socksAddr := fmt.Sprintf("127.0.0.1:%d", plan.SOCKSPort)
+			socksURL := fmt.Sprintf("socks5h://%s", socksAddr)
+			plan.EnvSet["ALL_PROXY"] = socksURL
+			plan.EnvSet["all_proxy"] = socksURL
+			plan.EnvSet[SOCKSAddrEnvKey] = socksAddr
+			// SSH ProxyCommand using built-in helper (avoids nc dependency).
+			// The curb binary must be readable+executable inside the sandbox.
+			// resolveProxy adds its directory to ExecPaths.
+			if self, err := os.Executable(); err == nil {
+				plan.EnvSet["GIT_SSH_COMMAND"] = fmt.Sprintf(
+					"ssh -o StrictHostKeyChecking=accept-new -o ProxyCommand='%s _socks-connect %%h %%p'",
+					self,
+				)
+			}
 		}
 	}
 }

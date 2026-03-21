@@ -32,14 +32,15 @@ func TestSendRecvFD(t *testing.T) {
 	defer func() { _ = r.Close() }()
 	defer func() { _ = w.Close() }()
 
-	// Send the write end from child to parent.
-	err = SendFD(child, int(w.Fd()))
+	// Send the write end from child to parent with a tag.
+	err = SendFD(child, int(w.Fd()), FDTagSOCKS5)
 	require.NoError(t, err)
 
 	// Receive it on the parent side.
-	fd, err := RecvFD(parent)
+	fd, tag, err := RecvFD(parent)
 	require.NoError(t, err)
 	assert.Greater(t, fd, 0)
+	assert.Equal(t, FDTagSOCKS5, tag)
 
 	// Write through the received fd and read from original read end.
 	received := os.NewFile(uintptr(fd), "received")

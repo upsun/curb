@@ -131,14 +131,25 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		handler := buildProxyHandler(plan)
 
 		if !plan.NetEnabled {
-			// Proxy-only: ConnListener fed by recvFDLoop.
-			addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
-			cl := proxy.NewConnListener(addr)
-			res.push(func() { _ = cl.Close() })
-			proxySrv = startProxyServer(cl, handler)
-			go recvFDLoop(sockParent, cl)
+			// Proxy-only: ConnListeners fed by recvFDLoop.
+			httpAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
+			httpCL := proxy.NewConnListener(httpAddr)
+			res.push(func() { _ = httpCL.Close() })
+			proxySrv = startProxyServer(httpCL, handler)
+
+			// SOCKS5 proxy: separate ConnListener dispatched by tag.
+			var socksCL *proxy.ConnListener
+			if plan.SOCKSPort > 0 {
+				socksAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.SOCKSPort}
+				socksCL = proxy.NewConnListener(socksAddr)
+				res.push(func() { _ = socksCL.Close() })
+				socksSrv := buildSOCKS5Server(plan)
+				go func() { _ = socksSrv.Serve(socksCL) }()
+			}
+
+			go recvFDLoop(sockParent, httpCL, socksCL)
 		} else {
-			// Proxy+TUN: real TCP listener reachable via netstack localhost forwarding.
+			// Proxy+TUN: real TCP listeners reachable via netstack localhost forwarding.
 			ln, lnErr := listenProxyPort(plan.ProxyPort)
 			if lnErr != nil {
 				abort()
@@ -146,13 +157,24 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			}
 			res.push(func() { _ = ln.Close() })
 			proxySrv = startProxyServer(ln, handler)
+
+			if plan.SOCKSPort > 0 {
+				socksLn, socksErr := listenProxyPort(plan.SOCKSPort)
+				if socksErr != nil {
+					abort()
+					return -1, fmt.Errorf("socks5 listener: %w", socksErr)
+				}
+				res.push(func() { _ = socksLn.Close() })
+				socksSrv := buildSOCKS5Server(plan)
+				go func() { _ = socksSrv.Serve(socksLn) }()
+			}
 		}
 		res.push(func() { _ = proxySrv.Close() })
 	}
 
 	// If network (TUN) is enabled, receive TAP fd, start netstack, signal child.
 	if plan.NetEnabled {
-		tapFD, recvErr := RecvFD(sockParent)
+		tapFD, _, recvErr := RecvFD(sockParent)
 		if recvErr != nil {
 			abort()
 			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
@@ -198,11 +220,14 @@ func startProxyServer(ln net.Listener, handler *proxy.Handler) *http.Server {
 // recvFDLoop receives connection fds from the child over the socketpair and
 // enqueues them into the ConnListener for the proxy server. It returns when
 // the socketpair closes (normal shutdown) or on any RecvFD error.
-func recvFDLoop(sock *os.File, cl *proxy.ConnListener) {
+func recvFDLoop(sock *os.File, httpCL, socksCL *proxy.ConnListener) {
 	for {
-		fd, err := RecvFD(sock)
+		fd, tag, err := RecvFD(sock)
 		if err != nil {
-			_ = cl.Close()
+			_ = httpCL.Close()
+			if socksCL != nil {
+				_ = socksCL.Close()
+			}
 			return
 		}
 		f := os.NewFile(uintptr(fd), "proxy-conn")
@@ -211,7 +236,14 @@ func recvFDLoop(sock *os.File, cl *proxy.ConnListener) {
 		if fileErr != nil {
 			continue
 		}
-		if enqErr := cl.Enqueue(conn); enqErr != nil {
+		var cl *proxy.ConnListener
+		switch tag {
+		case FDTagSOCKS5:
+			cl = socksCL
+		default:
+			cl = httpCL
+		}
+		if cl == nil || cl.Enqueue(conn) != nil {
 			_ = conn.Close()
 		}
 	}
@@ -268,4 +300,3 @@ func startLandlockOnly(plan *SandboxPlan) (int, error) {
 	// The OS reclaims the directory when the process exits.
 	return -1, syscall.Exec(exe, cfg.Command, cfg.Env)
 }
-

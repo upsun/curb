@@ -227,8 +227,11 @@ func writeNetworkRules(b *strings.Builder, plan *SandboxPlan) {
 	if plan.UnrestrictedNet {
 		b.WriteString("(allow network*)\n")
 	} else if plan.ProxyEnabled {
-		// Allow only outbound connections to the proxy port (proxy runs in the parent).
+		// Allow outbound connections to the proxy ports (proxy runs in the parent).
 		fmt.Fprintf(b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", plan.ProxyPort)
+		if plan.SOCKSPort > 0 {
+			fmt.Fprintf(b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", plan.SOCKSPort)
+		}
 	} else if len(plan.AllowedIPs) > 0 {
 		// Direct IP rules (no proxy needed for IP-only mode).
 		for _, ip := range plan.AllowedIPs {

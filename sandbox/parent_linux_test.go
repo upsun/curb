@@ -20,9 +20,9 @@ import (
 )
 
 var (
-	curbBin            string
-	testCaps           *Capabilities
-	testNetworkBroken  error // set if TUN/netstack forwarding probe fails
+	curbBin           string
+	testCaps          *Capabilities
+	testNetworkBroken error // set if TUN/netstack forwarding probe fails
 )
 
 func TestMain(m *testing.M) {

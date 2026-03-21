@@ -23,10 +23,12 @@ func setupProxy(t *testing.T) (*Handler, *CA, *httptest.Server) {
 	require.NoError(t, err)
 
 	h := &Handler{
-		DomainCheck: func(d string) bool { return d == "allowed.example.com" },
-		IPCheck:     func(a netip.Addr) bool { return a == netip.MustParseAddr("93.184.215.14") },
-		CertCache:   NewCertCache(ca),
-		AllowHTTP:   true,
+		FilterBase: FilterBase{
+			DomainCheck: func(d string) bool { return d == "allowed.example.com" },
+			IPCheck:     func(a netip.Addr) bool { return a == netip.MustParseAddr("93.184.215.14") },
+		},
+		CertCache: NewCertCache(ca),
+		AllowHTTP: true,
 	}
 	proxyServer := httptest.NewServer(h)
 	t.Cleanup(proxyServer.Close)
@@ -60,9 +62,11 @@ func TestHandler_CONNECT_Allowed(t *testing.T) {
 	upstreamPool.AddCert(upstreamCA.Cert)
 
 	h := &Handler{
-		DomainCheck: func(d string) bool { return d == "allowed.example.com" },
-		CertCache:   NewCertCache(proxyCa),
-		Dialer:      &net.Dialer{Timeout: 5 * time.Second},
+		FilterBase: FilterBase{
+			DomainCheck: func(d string) bool { return d == "allowed.example.com" },
+			Dialer:      &net.Dialer{Timeout: 5 * time.Second},
+		},
+		CertCache: NewCertCache(proxyCa),
 	}
 
 	proxyServer := httptest.NewServer(h)
@@ -174,10 +178,12 @@ func TestHandler_HTTP_Allowed(t *testing.T) {
 	upstreamHost := upstreamURL.Host
 
 	h := &Handler{
-		DomainCheck: func(d string) bool { return true },
-		IPCheck:     func(a netip.Addr) bool { return true },
-		CertCache:   NewCertCache(ca),
-		AllowHTTP:   true,
+		FilterBase: FilterBase{
+			DomainCheck: func(d string) bool { return true },
+			IPCheck:     func(a netip.Addr) bool { return true },
+		},
+		CertCache: NewCertCache(ca),
+		AllowHTTP: true,
 	}
 	proxyServer := httptest.NewServer(h)
 	defer proxyServer.Close()
@@ -198,9 +204,11 @@ func TestHandler_HTTP_Disabled(t *testing.T) {
 	require.NoError(t, err)
 
 	h := &Handler{
-		DomainCheck: func(d string) bool { return true },
-		CertCache:   NewCertCache(ca),
-		AllowHTTP:   false,
+		FilterBase: FilterBase{
+			DomainCheck: func(d string) bool { return true },
+		},
+		CertCache: NewCertCache(ca),
+		AllowHTTP: false,
 	}
 	proxyServer := httptest.NewServer(h)
 	defer proxyServer.Close()

@@ -40,10 +40,10 @@ type Logger struct {
 // If quiet is true, warnings are suppressed.
 func New(logFile string, verbose, debug, quiet bool) (*Logger, error) {
 	l := &Logger{
-		verbose:        verbose || debug,
-		debug:          debug,
-		quiet:          quiet,
-		w:              os.Stderr,
+		verbose: verbose || debug,
+		debug:   debug,
+		quiet:   quiet,
+		w:       os.Stderr,
 	}
 	l.color = isColorStderr()
 	if logFile != "" {

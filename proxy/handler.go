@@ -6,12 +6,9 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/upsun/curb/clog"
 )
 
 const (
@@ -21,15 +18,9 @@ const (
 // Handler is an HTTP MITM proxy handler that filters CONNECT (HTTPS) and
 // plain HTTP requests by domain and IP allowlists.
 type Handler struct {
-	DomainCheck func(string) bool
-	IPCheck     func(netip.Addr) bool
-	CertCache   *CertCache
-	Logger      *clog.Logger
-	AllowHTTP   bool
-
-	// Dialer overrides the default dialer for outbound connections.
-	// If nil, net.Dialer{Timeout: dialTimeout} is used.
-	Dialer *net.Dialer
+	FilterBase
+	CertCache *CertCache
+	AllowHTTP bool
 }
 
 // ServeHTTP implements http.Handler.
@@ -49,9 +40,9 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.checkTarget(host) {
+	if !h.CheckTarget(host) {
 		http.Error(w, "curb: domain not allowed: "+host, http.StatusForbidden)
-		h.log("proxy_connect", r.Host, "blocked", "domain")
+		h.logEvent("proxy_connect", r.Host, "blocked", "domain")
 		return
 	}
 
@@ -65,7 +56,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	// is buffered before the 200 response in the CONNECT flow.
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		h.log("proxy_connect", r.Host, "error", err.Error())
+		h.logEvent("proxy_connect", r.Host, "error", err.Error())
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
@@ -78,7 +69,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	// TLS handshake with client using generated cert.
 	cert, err := h.CertCache.certFor(host)
 	if err != nil {
-		h.log("proxy_connect", r.Host, "error", "cert: "+err.Error())
+		h.logEvent("proxy_connect", r.Host, "error", "cert: "+err.Error())
 		return
 	}
 	tlsClient := tls.Server(clientConn, &tls.Config{
@@ -86,23 +77,23 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		Certificates: []tls.Certificate{*cert},
 	})
 	if err := tlsClient.Handshake(); err != nil {
-		h.log("proxy_connect", r.Host, "error", "client handshake: "+err.Error())
+		h.logEvent("proxy_connect", r.Host, "error", "client handshake: "+err.Error())
 		return
 	}
 	defer func() { _ = tlsClient.Close() }()
 
 	// Connect to real destination.
 	target := net.JoinHostPort(host, port)
-	tlsRemote, err := tls.DialWithDialer(h.dialer(), "tcp", target, &tls.Config{
+	tlsRemote, err := tls.DialWithDialer(h.getDialer(), "tcp", target, &tls.Config{
 		ServerName: host,
 	})
 	if err != nil {
-		h.log("proxy_connect", r.Host, "error", "dial: "+err.Error())
+		h.logEvent("proxy_connect", r.Host, "error", "dial: "+err.Error())
 		return
 	}
 	defer func() { _ = tlsRemote.Close() }()
 
-	h.log("proxy_connect", r.Host, "allowed", "")
+	h.logEvent("proxy_connect", r.Host, "allowed", "")
 
 	relay(tlsClient, tlsRemote)
 }
@@ -111,7 +102,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.AllowHTTP {
 		http.Error(w, "curb: plain HTTP not allowed (use --allow-http)", http.StatusForbidden)
-		h.log("proxy_http", r.Host, "blocked", "http-disabled")
+		h.logEvent("proxy_http", r.Host, "blocked", "http-disabled")
 		return
 	}
 
@@ -121,18 +112,18 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.checkTarget(host) {
+	if !h.CheckTarget(host) {
 		http.Error(w, "curb: domain not allowed: "+host, http.StatusForbidden)
-		h.log("proxy_http", r.Host, "blocked", "domain")
+		h.logEvent("proxy_http", r.Host, "blocked", "domain")
 		return
 	}
 
 	// Dial the upstream (using request context for cancellation on client disconnect).
 	target := net.JoinHostPort(host, port)
-	upstream, err := h.dialer().DialContext(r.Context(), "tcp", target)
+	upstream, err := h.getDialer().DialContext(r.Context(), "tcp", target)
 	if err != nil {
 		http.Error(w, "curb: upstream dial failed", http.StatusBadGateway)
-		h.log("proxy_http", r.Host, "error", "dial: "+err.Error())
+		h.logEvent("proxy_http", r.Host, "error", "dial: "+err.Error())
 		return
 	}
 	defer func() { _ = upstream.Close() }()
@@ -175,25 +166,9 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = clientConn.Close() }()
 
-	h.log("proxy_http", r.Host, "allowed", "")
+	h.logEvent("proxy_http", r.Host, "allowed", "")
 
 	relay(upstream, clientConn)
-}
-
-// checkTarget checks whether a target hostname or IP is allowed.
-func (h *Handler) checkTarget(host string) bool {
-	// Try as IP first.
-	if addr, err := netip.ParseAddr(host); err == nil {
-		if h.IPCheck != nil {
-			return h.IPCheck(addr)
-		}
-		return false
-	}
-	// Domain check.
-	if h.DomainCheck != nil {
-		return h.DomainCheck(host)
-	}
-	return false
 }
 
 // splitHostPort splits host:port, using defaultPort if no port is present.
@@ -236,16 +211,3 @@ func relay(a, b net.Conn) {
 	wg.Wait()
 }
 
-func (h *Handler) dialer() *net.Dialer {
-	if h.Dialer != nil {
-		return h.Dialer
-	}
-	return &net.Dialer{Timeout: dialTimeout}
-}
-
-func (h *Handler) log(event, target, action, reason string) {
-	if h.Logger == nil {
-		return
-	}
-	h.Logger.Event(event, target, action, reason)
-}

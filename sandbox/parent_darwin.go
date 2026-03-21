@@ -33,6 +33,17 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		proxySrv = &http.Server{Handler: handler}
 		go func() { _ = proxySrv.Serve(ln) }()
 		defer proxySrv.Close()
+
+		// SOCKS5 proxy: real TCP listener.
+		if plan.SOCKSPort > 0 {
+			socksLn, socksErr := listenProxyPort(plan.SOCKSPort)
+			if socksErr != nil {
+				return -1, fmt.Errorf("socks5 listener: %w", socksErr)
+			}
+			defer socksLn.Close()
+			socksSrv := buildSOCKS5Server(plan)
+			go func() { _ = socksSrv.Serve(socksLn) }()
+		}
 	}
 
 	// Build command: sandbox-exec -p '<profile>' -- <command>

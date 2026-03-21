@@ -111,6 +111,7 @@ func TestCurb_Proxy_DryRun(t *testing.T) {
 	require.NoError(t, err, "dry-run failed: %s", outStr)
 
 	assert.Contains(t, outStr, "proxy:      127.0.0.1:")
+	assert.Contains(t, outStr, "socks5 127.0.0.1:")
 	assert.Contains(t, outStr, "ca cert:")
 	assert.Contains(t, outStr, "example.com")
 }
@@ -169,4 +170,50 @@ func TestCurb_Proxy_TUN_Unavailable(t *testing.T) {
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "proxy should work even with TUN unavailable: %s", outStr)
 	assert.Contains(t, outStr, "Example Domain")
+}
+
+// TestCurb_Proxy_SOCKS5CurlAllowed tests that curl via SOCKS5 to an allowed domain works.
+func TestCurb_Proxy_SOCKS5CurlAllowed(t *testing.T) {
+	requireProxyNS(t)
+
+	// curl uses ALL_PROXY=socks5h://... automatically.
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--domains", "example.com",
+		"--", "sh", "-c",
+		"curl -sf --connect-timeout 10 --proxy \"$ALL_PROXY\" https://example.com/ | head -c 200")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "curl via SOCKS5 to allowed domain failed: %s", outStr)
+	assert.Contains(t, outStr, "Example Domain")
+}
+
+// TestCurb_Proxy_SOCKS5CurlBlocked tests that curl via SOCKS5 to a blocked domain fails.
+func TestCurb_Proxy_SOCKS5CurlBlocked(t *testing.T) {
+	requireProxyNS(t)
+
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--domains", "example.com",
+		"--", "sh", "-c",
+		"curl -sf --connect-timeout 10 --proxy \"$ALL_PROXY\" https://blocked.example.org/ 2>&1; echo exit=$?")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	_ = err
+	assert.Contains(t, outStr, "exit=", "expected curl exit code in output")
+	assert.NotContains(t, outStr, "exit=0", "curl via SOCKS5 to blocked domain should fail")
+}
+
+// TestCurb_Proxy_SOCKS5EnvVars verifies that SOCKS5-related env vars are set.
+func TestCurb_Proxy_SOCKS5EnvVars(t *testing.T) {
+	requireProxyNS(t)
+
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--domains", "example.com",
+		"--", "sh", "-c", "echo ALL_PROXY=$ALL_PROXY; echo SOCKS_ADDR=$_CURB_SOCKS_ADDR; echo GIT_SSH=$GIT_SSH_COMMAND")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "env var check failed: %s", outStr)
+
+	assert.Contains(t, outStr, "ALL_PROXY=socks5h://127.0.0.1:")
+	assert.Contains(t, outStr, "SOCKS_ADDR=127.0.0.1:")
+	assert.Contains(t, outStr, "_socks-connect")
 }

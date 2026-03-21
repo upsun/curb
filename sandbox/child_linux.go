@@ -223,7 +223,7 @@ func setupChildNetwork(sockFile *os.File, quiet bool) error {
 	if err := routeLoopback(ifindex); err != nil {
 		childWarn(quiet, "DNS and localhost services may not work (loopback routing failed).")
 	}
-	if err := SendFD(sockFile, tapFD); err != nil {
+	if err := SendFD(sockFile, tapFD, FDTagHTTP); err != nil {
 		_ = unix.Close(tapFD)
 		return fmt.Errorf("sending TAP fd: %w", err)
 	}

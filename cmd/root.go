@@ -195,6 +195,7 @@ Use -- before the command when it has its own flags.`,
 	cmd.AddCommand(NewConfigGenCmd())
 	cmd.AddCommand(NewProfileCmd())
 	cmd.AddCommand(NewApparmorCmd())
+	cmd.AddCommand(NewSocksConnectCmd())
 	return cmd
 }
 

@@ -11,7 +11,7 @@ import (
 
 func TestGenerateSBPL_DenyDefault(t *testing.T) {
 	plan := &SandboxPlan{
-		Caps:        &Capabilities{},
+		Caps:         &Capabilities{},
 		NoFSRestrict: true,
 	}
 	profile := generateSBPL(plan)
@@ -90,8 +90,8 @@ func TestGenerateSBPL_DenyRules(t *testing.T) {
 
 func TestGenerateSBPL_MoveProtection(t *testing.T) {
 	plan := &SandboxPlan{
-		Caps:        &Capabilities{},
-		HiddenPaths: []string{"/private/var/secrets"},
+		Caps:         &Capabilities{},
+		HiddenPaths:  []string{"/private/var/secrets"},
 		NoFSRestrict: true,
 	}
 	profile := generateSBPL(plan)
@@ -128,8 +128,8 @@ func TestGenerateSBPL_UnrestrictedNet(t *testing.T) {
 
 func TestGenerateSBPL_IPOnly(t *testing.T) {
 	plan := &SandboxPlan{
-		Caps:       &Capabilities{},
-		AllowedIPs: []string{"10.0.0.1"},
+		Caps:         &Capabilities{},
+		AllowedIPs:   []string{"10.0.0.1"},
 		NoFSRestrict: true,
 	}
 	profile := generateSBPL(plan)
