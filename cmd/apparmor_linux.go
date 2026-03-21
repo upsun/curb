@@ -60,12 +60,14 @@ user namespaces on Ubuntu 24.04+.
 const profilePath = "/etc/apparmor.d/curb"
 
 // generateProfile returns the AppArmor profile for the given binary path.
+// The attachment uses alternation to also cover a "curb-test" binary built
+// by integration tests (go test ./sandbox/).
 func generateProfile(binPath string) string {
 	return fmt.Sprintf(`abi <abi/4.0>,
 
 include <tunables/global>
 
-profile curb %s flags=(attach_disconnected) {
+profile curb %s{,-test} flags=(attach_disconnected) {
   include <abstractions/base>
 
   # Allow user namespace creation.

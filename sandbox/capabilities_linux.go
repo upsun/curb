@@ -86,10 +86,9 @@ func (c *Capabilities) probeTUN() error {
 const MountProbeEnvKey = "_CURB_MOUNT_PROBE"
 
 // RunMountProbe is the entry point for the mount probe child process.
-// It tests MS_SLAVE propagation, tmpfs mount, and bind-mount inside a
-// user+mount namespace. The bind-mount test catches AppArmor policies that
-// allow tmpfs but block bind mounts (e.g. the default unprivileged_userns
-// profile on Ubuntu 24.04+).
+// It tests MS_SLAVE propagation, tmpfs mount, bind-mount, and pivot_root
+// inside a user+mount namespace. The bind-mount tests catch AppArmor
+// policies and Docker overlay filesystems that reject certain bind sources.
 func RunMountProbe() {
 	if err := prepareMountNS(); err != nil {
 		fmt.Fprintf(os.Stderr, "MS_SLAVE: %v", err)
@@ -105,8 +104,8 @@ func RunMountProbe() {
 		fmt.Fprintf(os.Stderr, "tmpfs mount: %v", err)
 		os.Exit(1)
 	}
-	// Test bind-mount: pivot_root enforcement relies on binding host paths
-	// into the new root. Use /usr as the source (exists on all Linux systems).
+
+	// Test bind-mount with /usr (exists on all Linux systems).
 	bindDst := dir + "/bind"
 	if err := os.Mkdir(bindDst, 0o755); err != nil {
 		_ = syscall.Unmount(dir, 0)
@@ -115,11 +114,36 @@ func RunMountProbe() {
 	}
 	if err := syscall.Mount("/usr", bindDst, "", syscall.MS_BIND, ""); err != nil {
 		_ = syscall.Unmount(dir, 0)
-		fmt.Fprintf(os.Stderr, "bind mount: %v", err)
+		fmt.Fprintf(os.Stderr, "bind mount /usr: %v", err)
 		os.Exit(1)
 	}
 	_ = syscall.Unmount(bindDst, 0)
-	_ = syscall.Unmount(dir, 0)
+
+	// Test bind-mount with /etc. Docker overlay filesystems may reject this
+	// with EINVAL even when /usr succeeds, because /etc contains sub-mounts
+	// (hostname, hosts, resolv.conf) injected by the container runtime.
+	if err := syscall.Mount("/etc", bindDst, "", syscall.MS_BIND, ""); err != nil {
+		_ = syscall.Unmount(dir, 0)
+		fmt.Fprintf(os.Stderr, "bind mount /etc: %v", err)
+		os.Exit(1)
+	}
+	_ = syscall.Unmount(bindDst, 0)
+
+	// Test pivot_root into the tmpfs. After pivot_root the root filesystem
+	// is the tiny tmpfs, so exit immediately via syscall to avoid Go runtime
+	// issues (e.g. /proc unavailable).
+	putOld := dir + "/.old"
+	if err := os.Mkdir(putOld, 0o755); err != nil {
+		_ = syscall.Unmount(dir, 0)
+		fmt.Fprintf(os.Stderr, "mkdir pivot old: %v", err)
+		os.Exit(1)
+	}
+	if err := syscall.PivotRoot(dir, putOld); err != nil {
+		_ = syscall.Unmount(dir, 0)
+		fmt.Fprintf(os.Stderr, "pivot_root: %v", err)
+		os.Exit(1)
+	}
+	syscall.Exit(0)
 }
 
 // probeMountOps tests whether mount operations (MS_SLAVE, tmpfs mount, bind

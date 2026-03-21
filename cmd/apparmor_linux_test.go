@@ -12,7 +12,7 @@ import (
 
 func TestGenerateProfile_DefaultPath(t *testing.T) {
 	profile := generateProfile("/usr/local/bin/curb")
-	assert.Contains(t, profile, "profile curb /usr/local/bin/curb flags=(attach_disconnected) {")
+	assert.Contains(t, profile, "profile curb /usr/local/bin/curb{,-test} flags=(attach_disconnected) {")
 	assert.Contains(t, profile, "userns,")
 	assert.Contains(t, profile, "capability sys_admin,")
 	assert.Contains(t, profile, "capability net_admin,")
@@ -24,7 +24,7 @@ func TestGenerateProfile_DefaultPath(t *testing.T) {
 
 func TestGenerateProfile_CustomPath(t *testing.T) {
 	profile := generateProfile("/opt/curb")
-	assert.Contains(t, profile, "profile curb /opt/curb flags=(attach_disconnected) {")
+	assert.Contains(t, profile, "profile curb /opt/curb{,-test} flags=(attach_disconnected) {")
 	assert.NotContains(t, profile, "/usr/local/bin/curb")
 }
 

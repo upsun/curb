@@ -1,6 +1,6 @@
 module github.com/upsun/curb
 
-go 1.26.0
+go 1.26.1
 
 require (
 	github.com/landlock-lsm/go-landlock v0.7.0
@@ -23,7 +23,12 @@ require (
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/telemetry v0.0.0-20251203150158-8fff8a5912fc // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
+	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
+	golang.org/x/vuln v1.1.4 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )
+
+tool golang.org/x/vuln/cmd/govulncheck
