@@ -535,6 +535,29 @@ func TestBuildPlan_CWDExcludedByDot(t *testing.T) {
 	assert.NotContains(t, plan.ROPaths, cwd)
 }
 
+func TestBuildPlan_RelativeWritePathResolved(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	cfg := &config.Config{ECHMode: "strip", RWPaths: []string{"."}}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	// "." must be resolved to the absolute CWD, not kept as a relative path.
+	assert.Contains(t, plan.RWPaths, cwd, "CWD should appear as absolute path")
+	for _, p := range plan.RWPaths {
+		assert.True(t, filepath.IsAbs(p), "all RWPaths must be absolute, got %q", p)
+	}
+}
+
+func TestResolveSymlinks_RelativePathsAbsolute(t *testing.T) {
+	result := resolveSymlinks([]string{".", "/usr"})
+	for _, p := range result {
+		assert.True(t, filepath.IsAbs(p), "resolveSymlinks must return absolute paths, got %q", p)
+	}
+}
+
 // --- setupShellInit ---
 
 func TestSetupShellInit_Bash(t *testing.T) {

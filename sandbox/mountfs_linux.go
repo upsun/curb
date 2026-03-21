@@ -78,9 +78,14 @@ func buildMountPlan(cfg *ChildConfig) []mountEntry {
 
 	// Filter out entries whose source doesn't exist.
 	// Skip /proc: enforceMountNS handles it separately (fresh procfs or bind-mount).
+	// Skip non-absolute paths as defense-in-depth: filepath.Join(newRoot, ".")
+	// would collapse to newRoot, corrupting the tmpfs.
 	var result []mountEntry
 	for _, e := range entries {
 		if e.src == "/proc" {
+			continue
+		}
+		if !filepath.IsAbs(e.src) {
 			continue
 		}
 		info, err := os.Stat(e.src)

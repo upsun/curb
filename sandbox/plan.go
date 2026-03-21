@@ -978,19 +978,31 @@ func appendExecDirs(roPaths, execPaths []string) []string {
 // resolveSymlinks evaluates symlinks in paths and appends any resolved paths
 // that differ from the original, so Landlock covers both the symlink and its
 // target. Errors are silently ignored (the path may not exist yet).
+//
+// Relative paths are resolved to absolute first. Without this, a relative
+// path like "." would reach enforceMountNS where filepath.Join(newRoot, ".")
+// collapses to newRoot itself, causing bind-mounts to overwrite the tmpfs
+// and leak mount-point stubs onto the host CWD.
 func resolveSymlinks(paths []string) []string {
 	seen := make(map[string]bool, len(paths))
+	var result []string
 	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
+		}
+		if seen[p] {
+			continue
+		}
+		result = append(result, p)
 		seen[p] = true
-	}
-	for _, p := range paths {
-		resolved, err := filepath.EvalSymlinks(p)
-		if err == nil && !seen[resolved] {
-			paths = append(paths, resolved)
+		if resolved, err := filepath.EvalSymlinks(p); err == nil && !seen[resolved] {
+			result = append(result, resolved)
 			seen[resolved] = true
 		}
 	}
-	return paths
+	return result
 }
 
 // resolvConfDir returns the parent directory of /etc/resolv.conf's real path,

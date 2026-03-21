@@ -212,3 +212,13 @@ func TestSynthesizePasswd(t *testing.T) {
 	assert.Contains(t, string(passwd), "nobody:x:65534:65534:")
 	assert.NotContains(t, string(passwd), "root")
 }
+
+func TestBuildMountPlan_SkipsRelativePaths(t *testing.T) {
+	cfg := &ChildConfig{
+		RWPaths: []string{"."},
+	}
+	plan := buildMountPlan(cfg)
+	for _, m := range plan {
+		assert.True(t, filepath.IsAbs(m.src), "relative path %q must not appear in mount plan", m.src)
+	}
+}
