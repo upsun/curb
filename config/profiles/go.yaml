@@ -3,6 +3,7 @@ domains:
   - proxy.golang.org
   - sum.golang.org
   - storage.googleapis.com
+  - vuln.go.dev
 read:
   - ~/go
   - ~/sdk
