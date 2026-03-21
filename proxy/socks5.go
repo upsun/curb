@@ -26,9 +26,9 @@ const (
 	socks5AtypIPv6   = 0x04
 
 	// Reply codes.
-	socks5RepSuccess        = 0x00
-	socks5RepGeneralFailure = 0x01
-	socks5RepNotAllowed     = 0x02
+	socks5RepSuccess         = 0x00
+	socks5RepGeneralFailure  = 0x01
+	socks5RepNotAllowed      = 0x02
 	socks5RepHostUnreachable = 0x04
 	socks5RepCmdNotSupported = 0x07
 )
@@ -169,4 +169,3 @@ func (s *SOCKS5Server) sendReply(conn net.Conn, rep byte) {
 		0, 0, // port 0
 	})
 }
-

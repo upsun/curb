@@ -93,6 +93,8 @@ type SandboxPlan struct {
 	SOCKSPort        int
 	CACertPath       string // Host path to combined CA bundle (in TempDir).
 	SystemCACertPath string // System CA file path to bind-mount over.
+	SSHConfigPath    string // Host path to generated SSH config (in TempDir).
+	SSHConfigDst     string // Target path to bind-mount over (~/.ssh/config).
 	CA               *proxy.CA
 	UserPaths        []string // Paths explicitly requested by the user (--read/--write/--exec adds).
 	EnvSet         map[string]string
@@ -121,32 +123,34 @@ func (p *SandboxPlan) LandlockPaths() policy.LandlockPaths {
 
 // ChildConfig is the serializable config sent from parent to child over a pipe.
 type ChildConfig struct {
-	Command          []string `json:"command"`
-	Env              []string `json:"env"`
-	ROPaths          []string `json:"ro_paths,omitempty"`
-	ROFiles          []string `json:"ro_files,omitempty"`
-	RWPaths          []string `json:"rw_paths,omitempty"`
-	RWFiles          []string `json:"rw_files,omitempty"`
-	HiddenPaths      []string `json:"hidden_paths,omitempty"`
-	DenyWritePaths   []string `json:"deny_write_paths,omitempty"`
-	DenyExecPaths    []string `json:"deny_exec_paths,omitempty"`
-	ExecPaths        []string `json:"exec_paths,omitempty"`
-	UsePivotRoot     bool     `json:"use_pivot_root,omitempty"`
-	UseLandlock      bool     `json:"use_landlock,omitempty"`
-	NoFSRestrict     bool     `json:"no_fs_restrict,omitempty"`
-	PidNS            bool     `json:"pid_ns,omitempty"`
-	NetEnabled       bool     `json:"net_enabled"`
-	ProxyEnabled     bool     `json:"proxy_enabled,omitempty"`
-	ProxyPort        int      `json:"proxy_port,omitempty"`
-	SOCKSPort        int      `json:"socks_port,omitempty"`
-	CACertFile       string   `json:"ca_cert_file,omitempty"`
-	CACertMountDst   string   `json:"ca_cert_mount_dst,omitempty"`
-	AllowedDomains   []string `json:"allowed_domains,omitempty"`
-	AllowedIPs       []string `json:"allowed_ips,omitempty"`
-	UserPaths        []string `json:"user_paths,omitempty"`
-	AllowUnixSockets bool     `json:"allow_unix_sockets,omitempty"`
-	Quiet            bool     `json:"quiet,omitempty"`
-	TempDir          string   `json:"temp_dir"`
+	Command           []string `json:"command"`
+	Env               []string `json:"env"`
+	ROPaths           []string `json:"ro_paths,omitempty"`
+	ROFiles           []string `json:"ro_files,omitempty"`
+	RWPaths           []string `json:"rw_paths,omitempty"`
+	RWFiles           []string `json:"rw_files,omitempty"`
+	HiddenPaths       []string `json:"hidden_paths,omitempty"`
+	DenyWritePaths    []string `json:"deny_write_paths,omitempty"`
+	DenyExecPaths     []string `json:"deny_exec_paths,omitempty"`
+	ExecPaths         []string `json:"exec_paths,omitempty"`
+	UsePivotRoot      bool     `json:"use_pivot_root,omitempty"`
+	UseLandlock       bool     `json:"use_landlock,omitempty"`
+	NoFSRestrict      bool     `json:"no_fs_restrict,omitempty"`
+	PidNS             bool     `json:"pid_ns,omitempty"`
+	NetEnabled        bool     `json:"net_enabled"`
+	ProxyEnabled      bool     `json:"proxy_enabled,omitempty"`
+	ProxyPort         int      `json:"proxy_port,omitempty"`
+	SOCKSPort         int      `json:"socks_port,omitempty"`
+	CACertFile        string   `json:"ca_cert_file,omitempty"`
+	CACertMountDst    string   `json:"ca_cert_mount_dst,omitempty"`
+	SSHConfigFile     string   `json:"ssh_config_file,omitempty"`
+	SSHConfigMountDst string   `json:"ssh_config_mount_dst,omitempty"`
+	AllowedDomains    []string `json:"allowed_domains,omitempty"`
+	AllowedIPs        []string `json:"allowed_ips,omitempty"`
+	UserPaths         []string `json:"user_paths,omitempty"`
+	AllowUnixSockets  bool     `json:"allow_unix_sockets,omitempty"`
+	Quiet             bool     `json:"quiet,omitempty"`
+	TempDir           string   `json:"temp_dir"`
 }
 
 // LandlockPaths returns the path sets for Landlock rule construction.
@@ -521,10 +525,14 @@ func appendUniq(s []string, v string) []string {
 	return s
 }
 
-// resolveEnv applies environment policy and sets up shell init files.
+// resolveEnv applies environment policy, sets up shell init files, and writes
+// an SSH config for ProxyCommand routing through the SOCKS5 proxy.
 func resolveEnv(plan *SandboxPlan, cfg *config.Config) error {
 	applyEnvPolicy(plan, cfg, plan.TempDir)
 	plan.Command = cfg.Command
+	if err := setupSSHConfig(plan, plan.TempDir); err != nil {
+		return err
+	}
 	return setupShellInit(plan, plan.TempDir)
 }
 
@@ -552,32 +560,34 @@ func resolveDenials(plan *SandboxPlan, removals *planRemovals) {
 // childConfig builds the ChildConfig from the plan, resolving the environment.
 func (p *SandboxPlan) childConfig() ChildConfig {
 	return ChildConfig{
-		Command:          p.Command,
-		Env:              p.ResolveEnv(),
-		ROPaths:          p.ROPaths,
-		ROFiles:          p.ROFiles,
-		RWPaths:          p.RWPaths,
-		RWFiles:          p.RWFiles,
-		HiddenPaths:      p.HiddenPaths,
-		DenyWritePaths:   p.DenyWritePaths,
-		DenyExecPaths:    p.DenyExecPaths,
-		ExecPaths:        p.ExecPaths,
-		UsePivotRoot:     p.UsePivotRoot,
-		UseLandlock:      p.UseLandlock,
-		NoFSRestrict:     p.NoFSRestrict,
-		PidNS:            p.PidNS,
-		NetEnabled:       p.NetEnabled,
-		ProxyEnabled:     p.ProxyEnabled,
-		ProxyPort:        p.ProxyPort,
-		SOCKSPort:        p.SOCKSPort,
-		CACertFile:       p.CACertPath,
-		CACertMountDst:   p.SystemCACertPath,
-		AllowedDomains:   p.AllowedDomains,
-		AllowedIPs:       p.AllowedIPs,
-		AllowUnixSockets: p.AllowUnixSockets,
-		UserPaths:        p.UserPaths,
-		Quiet:            p.Quiet,
-		TempDir:          p.TempDir,
+		Command:           p.Command,
+		Env:               p.ResolveEnv(),
+		ROPaths:           p.ROPaths,
+		ROFiles:           p.ROFiles,
+		RWPaths:           p.RWPaths,
+		RWFiles:           p.RWFiles,
+		HiddenPaths:       p.HiddenPaths,
+		DenyWritePaths:    p.DenyWritePaths,
+		DenyExecPaths:     p.DenyExecPaths,
+		ExecPaths:         p.ExecPaths,
+		UsePivotRoot:      p.UsePivotRoot,
+		UseLandlock:       p.UseLandlock,
+		NoFSRestrict:      p.NoFSRestrict,
+		PidNS:             p.PidNS,
+		NetEnabled:        p.NetEnabled,
+		ProxyEnabled:      p.ProxyEnabled,
+		ProxyPort:         p.ProxyPort,
+		SOCKSPort:         p.SOCKSPort,
+		CACertFile:        p.CACertPath,
+		CACertMountDst:    p.SystemCACertPath,
+		SSHConfigFile:     p.SSHConfigPath,
+		SSHConfigMountDst: p.SSHConfigDst,
+		AllowedDomains:    p.AllowedDomains,
+		AllowedIPs:        p.AllowedIPs,
+		AllowUnixSockets:  p.AllowUnixSockets,
+		UserPaths:         p.UserPaths,
+		Quiet:             p.Quiet,
+		TempDir:           p.TempDir,
 	}
 }
 
@@ -860,17 +870,90 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 			plan.EnvSet["ALL_PROXY"] = socksURL
 			plan.EnvSet["all_proxy"] = socksURL
 			plan.EnvSet[SOCKSAddrEnvKey] = socksAddr
-			// SSH ProxyCommand using built-in helper (avoids nc dependency).
-			// The curb binary must be readable+executable inside the sandbox.
-			// resolveProxy adds its directory to ExecPaths.
-			if self, err := os.Executable(); err == nil {
-				plan.EnvSet["GIT_SSH_COMMAND"] = fmt.Sprintf(
-					"ssh -o StrictHostKeyChecking=accept-new -o ProxyCommand='%s _socks-connect %%h %%p'",
-					self,
-				)
+		}
+	}
+
+	// If SSH_AUTH_SOCK is being passed through and the socket exists,
+	// add its path to the write list so SSH can communicate with the agent.
+	if sockPath := os.Getenv("SSH_AUTH_SOCK"); sockPath != "" {
+		if slices.Contains(plan.EnvPassthrough, "SSH_AUTH_SOCK") {
+			if _, err := os.Stat(sockPath); err == nil {
+				plan.RWFiles = appendUniq(plan.RWFiles, sockPath)
 			}
 		}
 	}
+}
+
+// setupSSHConfig writes an SSH config file that routes all connections through
+// the SOCKS5 proxy via the _socks-connect helper. SSH does not respect
+// ALL_PROXY or any proxy env var, so this is the only way to make bare ssh
+// work inside the sandbox.
+func setupSSHConfig(plan *SandboxPlan, tmpDir string) error {
+	if plan.SOCKSPort == 0 {
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil // Best-effort: skip if we can't resolve our own path.
+	}
+
+	// Determine the sandbox HOME to find ~/.ssh/config target.
+	home := plan.EnvSet["HOME"]
+	if home == "" {
+		home = tmpDir
+	}
+	targetConfig := filepath.Join(home, ".ssh", "config")
+
+	// Read the user's existing SSH config (if any) and prepend it so
+	// their Host directives take precedence. We can't use Include because
+	// we bind-mount over the original file.
+	var existing string
+	if data, readErr := os.ReadFile(targetConfig); readErr == nil {
+		existing = string(data) + "\n"
+	}
+
+	content := existing + fmt.Sprintf(`Host *
+  ProxyCommand %s _socks-connect %%h %%p
+  StrictHostKeyChecking accept-new
+`, self)
+
+	// Write to TempDir; the child bind-mounts it over ~/.ssh/config.
+	srcDir := filepath.Join(tmpDir, ".ssh")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		return fmt.Errorf("creating .ssh dir: %w", err)
+	}
+	srcConfig := filepath.Join(srcDir, "config")
+	if err := os.WriteFile(srcConfig, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("writing ssh config: %w", err)
+	}
+
+	// Ensure the target ~/.ssh/config exists so the bind-mount has
+	// something to mount over. If HOME is TempDir, srcConfig IS the
+	// target and no mount is needed.
+	if srcConfig == targetConfig {
+		return nil
+	}
+
+	// Create target mount point if it doesn't exist.
+	if err := os.MkdirAll(filepath.Dir(targetConfig), 0o700); err != nil {
+		return fmt.Errorf("creating .ssh dir for mount: %w", err)
+	}
+	if _, statErr := os.Stat(targetConfig); statErr != nil {
+		// Create an empty file as a mount point.
+		if err := os.WriteFile(targetConfig, nil, 0o644); err != nil {
+			// Non-fatal: the user's home .ssh dir may not be writable.
+			return nil
+		}
+	}
+
+	plan.SSHConfigPath = srcConfig
+	plan.SSHConfigDst = targetConfig
+
+	// Expose only the config file (not the whole .ssh directory which
+	// contains private keys) so the bind-mount target exists in the
+	// mount namespace.
+	plan.ROFiles = appendUniq(plan.ROFiles, targetConfig)
+	return nil
 }
 
 // setupShellInit writes shell init files into tmpDir so the (curb) PS1 prefix

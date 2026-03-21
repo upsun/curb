@@ -208,12 +208,11 @@ func TestCurb_Proxy_SOCKS5EnvVars(t *testing.T) {
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--domains", "example.com",
-		"--", "sh", "-c", "echo ALL_PROXY=$ALL_PROXY; echo SOCKS_ADDR=$_CURB_SOCKS_ADDR; echo GIT_SSH=$GIT_SSH_COMMAND")
+		"--", "sh", "-c", "echo ALL_PROXY=$ALL_PROXY; echo SOCKS_ADDR=$_CURB_SOCKS_ADDR")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "env var check failed: %s", outStr)
 
 	assert.Contains(t, outStr, "ALL_PROXY=socks5h://127.0.0.1:")
 	assert.Contains(t, outStr, "SOCKS_ADDR=127.0.0.1:")
-	assert.Contains(t, outStr, "_socks-connect")
 }

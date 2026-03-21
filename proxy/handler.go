@@ -210,4 +210,3 @@ func relay(a, b net.Conn) {
 	go cp(b, a)
 	wg.Wait()
 }
-

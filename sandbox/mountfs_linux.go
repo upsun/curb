@@ -273,6 +273,20 @@ func enforceMountNS(cfg *ChildConfig) error {
 		}
 	}
 
+	// Bind-mount generated SSH config over ~/.ssh/config so SSH uses the
+	// SOCKS5 ProxyCommand for all connections.
+	if cfg.SSHConfigFile != "" && cfg.SSHConfigMountDst != "" {
+		dst := filepath.Join(newRoot, cfg.SSHConfigMountDst)
+		if _, err := os.Stat(dst); err == nil {
+			if err := syscall.Mount(cfg.SSHConfigFile, dst, "", syscall.MS_BIND, ""); err != nil {
+				childWarn(cfg.Quiet, "SSH config bind-mount failed (ssh may not use SOCKS5 proxy): %v", err)
+			} else {
+				flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+				_ = syscall.Mount("", dst, "", flags, "")
+			}
+		}
+	}
+
 	// Mount /proc. In a PID namespace, mount a fresh procfs (shows only
 	// the namespace's processes). Without a PID namespace, bind-mount the
 	// host /proc (mounting a fresh procfs requires owning the PID namespace).
