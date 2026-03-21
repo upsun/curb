@@ -397,7 +397,8 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 
 	// Allow exec from the sandbox temp dir so build tools (go test, cargo
 	// test, etc.) can compile and run binaries from the build cache.
-	if plan.TempDir != "" {
+	// Skip when the user explicitly cleared all exec paths (--exec '!*').
+	if plan.TempDir != "" && !execRemoveAll {
 		plan.ExecPaths = append(plan.ExecPaths, plan.TempDir)
 	}
 
