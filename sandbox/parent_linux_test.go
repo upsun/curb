@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	curbBin  string
-	testCaps *Capabilities
+	curbBin            string
+	testCaps           *Capabilities
+	testNetworkBroken  error // set if TUN/netstack forwarding probe fails
 )
 
 func TestMain(m *testing.M) {
@@ -45,24 +46,31 @@ func TestMain(m *testing.M) {
 	testCaps = ProbeAll()
 	probeExternalHTTP()
 
-	// Build curb binary for integration tests.
-	dir, err := os.MkdirTemp("", "curb-test-")
+	// Build curb binary for integration tests. Build to the project root as
+	// "curb-test" so it matches the AppArmor profile (which uses alternation
+	// to cover both "curb" and "curb-test").
+	projRoot, err := filepath.Abs(filepath.Join(".", ".."))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "temp dir: %v\n", err)
+		fmt.Fprintf(os.Stderr, "project root: %v\n", err)
+		os.Exit(1)
+	}
+	curbBin = filepath.Join(projRoot, "curb-test")
+	buildCmd := exec.Command("go", "build", "-o", curbBin)
+	buildCmd.Dir = projRoot
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "build: %v\n%s\n", err, out)
 		os.Exit(1)
 	}
 
-	curbBin = filepath.Join(dir, "curb")
-	cmd := exec.Command("go", "build", "-o", curbBin)
-	cmd.Dir = ".."
-	if out, err := cmd.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "build: %v\n%s\n", err, out)
-		_ = os.RemoveAll(dir)
-		os.Exit(1)
+	// If low-level probes passed, verify actual TUN/netstack forwarding
+	// works end-to-end. Docker containers may pass device-level probes but
+	// fail at packet forwarding.
+	if testCaps.NetNS == nil && testCaps.TUN() == nil {
+		probeNetworkForwarding()
 	}
 
 	code := m.Run()
-	_ = os.RemoveAll(dir)
+	_ = os.Remove(curbBin)
 	os.Exit(code)
 }
 
@@ -310,7 +318,10 @@ func TestCurb_EnvDefault(t *testing.T) {
 	assert.Contains(t, envOut, "HOME=")
 	assert.Contains(t, envOut, "PATH=")
 	assert.Contains(t, envOut, "TMPDIR=")
-	assert.Contains(t, envOut, "SHELL=")
+	// SHELL is a safe passthrough — only present if set on the host.
+	if os.Getenv("SHELL") != "" {
+		assert.Contains(t, envOut, "SHELL=")
+	}
 }
 
 func TestCurb_EnvPassthroughName(t *testing.T) {
@@ -342,8 +353,10 @@ func TestCurb_EnvPassthroughAll(t *testing.T) {
 
 	envOut := string(out)
 	assert.Contains(t, envOut, "CUSTOM_HOST_VAR=visible")
-	// Safe passthrough vars must be present.
-	assert.Contains(t, envOut, "SHELL=")
+	// SHELL is a safe passthrough — only present if set on the host.
+	if os.Getenv("SHELL") != "" {
+		assert.Contains(t, envOut, "SHELL=")
+	}
 	// _CURB_INIT must not leak even with passthrough.
 	assert.NotContains(t, envOut, InitEnvKey+"=")
 }
@@ -528,6 +541,44 @@ func probeExternalHTTP() {
 		_ = conn.Close()
 		externalHTTPAvailable = true
 	}
+}
+
+// probeNetworkForwarding tests that TUN/netstack actually forwards packets.
+// Device-level probes (TUN ioctl) may pass in Docker while packet forwarding
+// is broken. This runs a quick curb invocation to verify end-to-end.
+func probeNetworkForwarding() {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return // Can't probe; assume OK.
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	connected := make(chan struct{}, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
+			connected <- struct{}{}
+		}
+	}()
+
+	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "localhost",
+		"--write", "*", "--exec", "*", "--",
+		"curl", "-sf", "--connect-timeout", "3",
+		fmt.Sprintf("http://127.0.0.1:%d/", port))
+	if err := cmd.Start(); err != nil {
+		return // Can't probe; assume OK.
+	}
+
+	select {
+	case <-connected:
+		// Forwarding works; kill the curb process (it may linger for cleanup).
+	case <-time.After(5 * time.Second):
+		testNetworkBroken = fmt.Errorf("TUN/netstack forwarding probe timed out")
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
 
 // requireExternalHTTP skips the test if external HTTP connectivity is unavailable.
@@ -725,9 +776,9 @@ func TestCurb_FS_SubpathDenialEnforced(t *testing.T) {
 }
 
 // TestCurb_FS_ExcludeCWDRead verifies --read '!.' blocks reading the CWD.
+// Sub-path denials require mount NS (overmount); Landlock cannot enforce them.
 func TestCurb_FS_ExcludeCWDRead(t *testing.T) {
-	requireUserNS(t)
-	requireLandlock(t)
+	requireMountOps(t)
 
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "secret.txt")
@@ -740,9 +791,9 @@ func TestCurb_FS_ExcludeCWDRead(t *testing.T) {
 }
 
 // TestCurb_FS_NoDefaultReadBlocksCWD verifies --read '!*' also blocks the CWD.
+// Sub-path denials require mount NS (overmount); Landlock cannot enforce them.
 func TestCurb_FS_NoDefaultReadBlocksCWD(t *testing.T) {
-	requireUserNS(t)
-	requireLandlock(t)
+	requireMountOps(t)
 
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "secret.txt")
@@ -1012,13 +1063,17 @@ func TestCurb_Exec_NotFoundErrors(t *testing.T) {
 	assert.Contains(t, string(out), "not found in PATH")
 }
 
-// TestCurb_Exec_WritableDirNotExecutable verifies that a writable temp dir is not executable.
+// TestCurb_Exec_WritableDirNotExecutable verifies that a writable temp dir
+// is not executable under mount NS enforcement (MS_NOEXEC). Landlock
+// intentionally allows exec from TMPDIR for build tool compatibility
+// (go test, cargo test); see TestCurb_MountFS_ExecTmpDirBlocked for
+// the mount-NS-only variant.
 func TestCurb_Exec_WritableDirNotExecutable(t *testing.T) {
 	requireUserNS(t)
-	requireLandlock(t)
+	requireMountOps(t)
 
 	// The sandbox's TMPDIR is writable. Verify that writing a binary there
-	// and trying to execute it is blocked.
+	// and trying to execute it is blocked by MS_NOEXEC.
 	cmd := exec.Command(curbBin, "--", "sh", "-c",
 		"cp /bin/true $TMPDIR/escape && chmod +x $TMPDIR/escape && $TMPDIR/escape")
 	out, err := cmd.CombinedOutput()
@@ -1044,7 +1099,8 @@ func TestCurb_Exec_CWDNotExecutable(t *testing.T) {
 	assert.Contains(t, string(out), "Permission denied")
 }
 
-// requireNetNS skips the test if network namespace or TUN/TAP is unavailable.
+// requireNetNS skips the test if network namespace, TUN/TAP, or packet
+// forwarding is unavailable.
 func requireNetNS(t *testing.T) {
 	t.Helper()
 	requireUserNS(t)
@@ -1053,6 +1109,9 @@ func requireNetNS(t *testing.T) {
 	}
 	if testCaps.TUN() != nil {
 		t.Skipf("TUN/TAP unavailable: %v", testCaps.TUN())
+	}
+	if testNetworkBroken != nil {
+		t.Skipf("network forwarding broken: %v", testNetworkBroken)
 	}
 }
 

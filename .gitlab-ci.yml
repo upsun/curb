@@ -1,0 +1,31 @@
+stages:
+  - test
+
+default:
+  interruptible: true
+
+variables:
+  CGO_ENABLED: "0"
+
+lint:
+  stage: test
+  image: golangci/golangci-lint:v2.10
+  script:
+    - make lint
+
+govulncheck:
+  stage: test
+  image: golang:1.26
+  script:
+    - make govulncheck
+
+test:
+  stage: test
+  image: golang:1.26
+  variables:
+    SHELL: /bin/sh
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq dnsutils > /dev/null
+  script:
+    - make test-coverage
+  coverage: '/total:\s+\(statements\)\s+\d+\.\d+%/'

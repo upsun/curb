@@ -5,6 +5,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -198,15 +199,27 @@ func TestSynthesizePasswd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(etcDir, "passwd"), []byte("root:x:0:0:root:/root:/bin/bash\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(etcDir, "group"), []byte("root:x:0:\n"), 0o644))
 
+	// Unmount any bind mounts before t.TempDir cleanup. No-op if mounts failed.
+	t.Cleanup(func() {
+		_ = syscall.Unmount(filepath.Join(etcDir, "passwd"), 0)
+		_ = syscall.Unmount(filepath.Join(etcDir, "group"), 0)
+	})
+
 	cfg := &ChildConfig{
 		Env: []string{"HOME=/app", "SHELL=/bin/bash", "USER=web"},
 	}
-	// synthesizePasswd writes temp files to the newroot base then bind-mounts
-	// them. The mount fails without a mount NS, but the temp files are written.
+	// synthesizePasswd writes temp files then bind-mounts them over the
+	// targets. Without a mount NS the mounts fail and temp files remain.
+	// In Docker the mounts may succeed and temp files are removed.
 	_ = synthesizePasswd(cfg, dir)
 
-	// Temp files are written to the newroot base, not next to the target.
-	passwd, err := os.ReadFile(filepath.Join(dir, ".synth-passwd"))
+	// Read from temp file if it exists (mount failed), otherwise from the
+	// bind-mount target (mount succeeded, temp file was removed).
+	passwdPath := filepath.Join(dir, ".synth-passwd")
+	if _, err := os.Stat(passwdPath); err != nil {
+		passwdPath = filepath.Join(etcDir, "passwd")
+	}
+	passwd, err := os.ReadFile(passwdPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(passwd), "web:x:0:0::/app:/bin/bash")
 	assert.Contains(t, string(passwd), "nobody:x:65534:65534:")
