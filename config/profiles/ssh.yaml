@@ -1,0 +1,9 @@
+# SSH client (enables unix sockets for agent forwarding).
+allow-unix-sockets: true
+read:
+  - ~/.ssh
+exec:
+  - ssh
+  - ssh-keygen
+env:
+  - SSH_AUTH_SOCK
