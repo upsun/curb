@@ -919,9 +919,9 @@ func TestCurb_FS_WriteHomeBlocked(t *testing.T) {
 	assertAccessDenied(t, string(out), "write to real home")
 }
 
-// TestCurb_FS_HomeNotAutoReadable verifies --home does not make the home
-// directory readable (it only sets the HOME env var).
-func TestCurb_FS_HomeNotAutoReadable(t *testing.T) {
+// TestCurb_FS_EnvHomeNotAutoReadable verifies that --env HOME=/path sets the
+// HOME env var but does not grant filesystem access to the home directory.
+func TestCurb_FS_EnvHomeNotAutoReadable(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
 
@@ -937,11 +937,11 @@ func TestCurb_FS_HomeNotAutoReadable(t *testing.T) {
 		}
 	}
 
-	cmd := exec.Command(curbBin, "--home", home, "--", "cat", testFile)
+	cmd := exec.Command(curbBin, "--env", "HOME="+home, "--", "cat", testFile)
 	out, runErr := cmd.CombinedOutput()
 	skipIfSetupFailed(t, runErr, string(out))
-	require.Error(t, runErr, "expected read of %s with --home to fail: %s", testFile, string(out))
-	assertAccessDenied(t, string(out), "read home with --home")
+	require.Error(t, runErr, "expected read of %s with --env HOME to fail: %s", testFile, string(out))
+	assertAccessDenied(t, string(out), "read home with --env HOME")
 }
 
 // TestCurb_Net_LoopbackDNSRouted verifies DNS works inside the sandbox via

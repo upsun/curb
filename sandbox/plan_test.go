@@ -5,6 +5,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -621,18 +622,25 @@ func TestSetupShellInit_OtherShell(t *testing.T) {
 
 func TestApplyEnvPolicy_EnvRemoveAll(t *testing.T) {
 	cfg := &config.Config{EnvPassthrough: []string{"!*"}}
-	plan := &SandboxPlan{}
+	plan := &SandboxPlan{SandboxHome: "/tmp"}
 	applyEnvPolicy(plan, cfg, "/tmp")
 
 	assert.Empty(t, plan.EnvSet)
+	assert.Empty(t, plan.SandboxHome, "!* should clear SandboxHome to suppress HOME fallback")
+	// ResolveEnv should not add HOME back.
+	env := plan.ResolveEnv()
+	for _, e := range env {
+		assert.NotContains(t, e, "HOME=", "HOME should not appear after !*")
+	}
 }
 
 func TestApplyEnvPolicy_EnvRemoveSome(t *testing.T) {
-	cfg := &config.Config{EnvPassthrough: []string{"!HOME"}}
+	// !TMPDIR removes TMPDIR from the default EnvSet.
+	cfg := &config.Config{EnvPassthrough: []string{"!TMPDIR"}}
 	plan := &SandboxPlan{}
 	applyEnvPolicy(plan, cfg, "/tmp")
 
-	_, ok := plan.EnvSet["HOME"]
+	_, ok := plan.EnvSet["TMPDIR"]
 	assert.False(t, ok)
 }
 
@@ -692,4 +700,156 @@ func TestApplyEnvPolicy_EnvRemoveAllWithAdds(t *testing.T) {
 	applyEnvPolicy(plan, cfg, "/tmp")
 
 	assert.Equal(t, []string{"GOPATH"}, plan.EnvPassthrough)
+}
+
+// --- resolveSandboxHome ---
+
+func TestResolveSandboxHome_ExplicitSet(t *testing.T) {
+	cfg := &config.Config{EnvSet: []string{"HOME=/custom/home"}}
+	home := resolveSandboxHome(cfg, "/tmp/curb-xxx")
+	assert.Equal(t, "/custom/home", home)
+}
+
+func TestResolveSandboxHome_Passthrough(t *testing.T) {
+	t.Setenv("HOME", "/host/home")
+	cfg := &config.Config{EnvPassthrough: []string{"HOME"}}
+	home := resolveSandboxHome(cfg, "/tmp/curb-xxx")
+	assert.Equal(t, "/host/home", home)
+}
+
+func TestResolveSandboxHome_RemoveAllThenAddHome(t *testing.T) {
+	// --env '!*' --env HOME should still pass through HOME.
+	t.Setenv("HOME", "/host/home")
+	cfg := &config.Config{EnvPassthrough: []string{"!*", "HOME"}}
+	home := resolveSandboxHome(cfg, "/tmp/curb-xxx")
+	assert.Equal(t, "/host/home", home)
+}
+
+func TestResolveSandboxHome_FallbackToTmpDir(t *testing.T) {
+	cfg := &config.Config{}
+	home := resolveSandboxHome(cfg, "/tmp/curb-xxx")
+	assert.Equal(t, "/tmp/curb-xxx", home)
+}
+
+func TestResolveSandboxHome_ExplicitSetBeatsPassthrough(t *testing.T) {
+	t.Setenv("HOME", "/host/home")
+	cfg := &config.Config{
+		EnvSet:         []string{"HOME=/explicit"},
+		EnvPassthrough: []string{"HOME"},
+	}
+	home := resolveSandboxHome(cfg, "/tmp/curb-xxx")
+	assert.Equal(t, "/explicit", home)
+}
+
+func TestResolveSandboxHome_PassthroughAllIncludesHOME(t *testing.T) {
+	t.Setenv("HOME", "/host/home")
+	cfg := &config.Config{EnvPassthroughAll: true}
+	home := resolveSandboxHome(cfg, "/tmp/curb-xxx")
+	assert.Equal(t, "/host/home", home)
+}
+
+// --- tilde expansion uses sandbox HOME ---
+
+func TestBuildPlan_TildeExpandsToSandboxHome(t *testing.T) {
+	// When HOME is passed through, ~ in paths should resolve to the host HOME
+	// (which equals sandbox HOME since HOME is passed through).
+	t.Setenv("HOME", "/host/home")
+	cfg := &config.Config{
+		ECHMode:        "strip",
+		ROPaths:        []string{"~/.ssh"},
+		EnvPassthrough: []string{"HOME"},
+	}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Contains(t, plan.ROPaths, "/host/home/.ssh")
+}
+
+func TestBuildPlan_TildeExpandsToTmpDirWhenNoHome(t *testing.T) {
+	// When HOME is not passed through, ~ resolves to tmpDir.
+	cfg := &config.Config{
+		ECHMode: "strip",
+		ROPaths: []string{"~/.config"},
+	}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	// ~ should have expanded to tmpDir, not os.UserHomeDir().
+	hostHome, _ := os.UserHomeDir()
+	assert.NotContains(t, plan.ROPaths, hostHome+"/.config",
+		"~ must not expand to host home when HOME is not passed through")
+
+	expected := plan.TempDir + "/.config"
+	assert.Contains(t, plan.ROPaths, expected,
+		"~ should expand to sandbox HOME (tmpDir)")
+}
+
+func TestBuildPlan_TildeExpandsToExplicitHome(t *testing.T) {
+	cfg := &config.Config{
+		ECHMode: "strip",
+		ROPaths: []string{"~/.ssh"},
+		EnvSet:  []string{"HOME=/custom"},
+	}
+	plan, err := BuildPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Contains(t, plan.ROPaths, "/custom/.ssh")
+}
+
+// --- ResolveEnv HOME fallback ---
+
+func TestResolveEnv_HomeFallbackToSandboxHome(t *testing.T) {
+	// When HOME is not set in EnvSet and not in passthrough, ResolveEnv
+	// should add HOME from SandboxHome.
+	plan := &SandboxPlan{
+		TempDir:     "/tmp/curb-test",
+		SandboxHome: "/tmp/curb-test",
+		EnvSet:      map[string]string{"TMPDIR": "/tmp/curb-test"},
+	}
+	env := plan.ResolveEnv()
+	var homeVal string
+	for _, e := range env {
+		if k, v, ok := strings.Cut(e, "="); ok && k == "HOME" {
+			homeVal = v
+		}
+	}
+	assert.Equal(t, "/tmp/curb-test", homeVal, "HOME should fall back to SandboxHome")
+}
+
+func TestResolveEnv_HomePassthroughOverridesFallback(t *testing.T) {
+	// When HOME is in passthrough, the host value should be used,
+	// not the SandboxHome fallback.
+	t.Setenv("HOME", "/host/home")
+	plan := &SandboxPlan{
+		TempDir:        "/tmp/curb-test",
+		SandboxHome:    "/host/home",
+		EnvSet:         map[string]string{"TMPDIR": "/tmp/curb-test"},
+		EnvPassthrough: []string{"HOME"},
+	}
+	env := plan.ResolveEnv()
+	var homeVal string
+	for _, e := range env {
+		if k, v, ok := strings.Cut(e, "="); ok && k == "HOME" {
+			homeVal = v
+		}
+	}
+	assert.Equal(t, "/host/home", homeVal, "passthrough HOME should override fallback")
+}
+
+func TestResolveEnv_HomeExplicitSet(t *testing.T) {
+	plan := &SandboxPlan{
+		TempDir: "/tmp/curb-test",
+		EnvSet:  map[string]string{"TMPDIR": "/tmp/curb-test", "HOME": "/explicit"},
+	}
+	env := plan.ResolveEnv()
+	var homeVal string
+	for _, e := range env {
+		if k, v, ok := strings.Cut(e, "="); ok && k == "HOME" {
+			homeVal = v
+		}
+	}
+	assert.Equal(t, "/explicit", homeVal)
 }

@@ -1,4 +1,5 @@
 # Docker
+# HOME is passed through so ~ paths below resolve to the real home directory.
 # Note: most setups also need --write /var/run/docker.sock and --allow-unix-sockets
 # for the daemon socket.
 domains:
@@ -11,4 +12,5 @@ exec:
   - docker
   - docker-compose
 env:
+  - HOME
   - DOCKER_HOST

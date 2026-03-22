@@ -1,4 +1,5 @@
 # GitHub (includes Git).
+# HOME is passed through so ~ paths below resolve to the real home directory.
 profiles:
   - git
 domains:
@@ -8,5 +9,6 @@ domains:
 exec:
   - gh
 env:
+  - HOME
   - GH_TOKEN
   - GITHUB_TOKEN

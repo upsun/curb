@@ -1,4 +1,5 @@
 # PHP / Composer
+# HOME is passed through so ~ paths below resolve to the real home directory.
 domains:
   - packagist.org
   - "*.packagist.org"
@@ -13,6 +14,7 @@ exec:
   - php
   - composer
 env:
+  - HOME
   - COMPOSER_HOME
   - COMPOSER_CACHE_DIR
   - PHP_INI_SCAN_DIR

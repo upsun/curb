@@ -1,0 +1,22 @@
+# C/C++ compiler toolchain (gcc, clang, linker, assembler).
+# Covers compiler internals that live outside standard PATH directories.
+exec:
+  - gcc
+  - g++
+  - cc
+  - c++
+  - cpp
+  - clang
+  - clang++
+  - as
+  - ld
+  - /usr/libexec/gcc
+  - /usr/lib/gcc
+env:
+  - CC
+  - CXX
+  - CFLAGS
+  - CXXFLAGS
+  - LDFLAGS
+  - CGO_CFLAGS
+  - CGO_LDFLAGS

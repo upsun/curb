@@ -166,7 +166,6 @@ func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 			{"proxy", np.cf.Proxy, &merged.Proxy},
 			{"tun", np.cf.TUN, &merged.TUN},
 			{"ech", np.cf.ECH, &merged.ECH},
-			{"home", np.cf.Home, &merged.Home},
 		} {
 			if sc.src == nil {
 				continue

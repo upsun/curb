@@ -1,4 +1,5 @@
 # Claude Code.
+# HOME is passed through so ~ paths below resolve to the real home directory.
 # Includes git config/env directly (not via profile composition, to avoid
 # inheriting SSH key access). Add -p ssh explicitly if needed.
 domains:
@@ -30,6 +31,7 @@ exec:
   - git
   - gpg
 env:
+  - HOME
   - ANTHROPIC_API_KEY
   - CLAUDE_CODE_MAX_TOKENS
   - GIT_AUTHOR_NAME

@@ -1,4 +1,5 @@
 # SSH client (enables unix sockets for agent forwarding).
+# HOME is passed through so ~ paths below resolve to the real home directory.
 allow-unix-sockets: true
 read:
   - ~/.ssh
@@ -6,4 +7,5 @@ exec:
   - ssh
   - ssh-keygen
 env:
+  - HOME
   - SSH_AUTH_SOCK

@@ -1,4 +1,7 @@
-# Go
+# Go (includes C compiler for CGO).
+# HOME is passed through so ~ paths below resolve to the real home directory.
+profiles:
+  - cc
 domains:
   - proxy.golang.org
   - sum.golang.org
@@ -15,6 +18,7 @@ exec:
   - go
   - ~/.cache/go-build
 env:
+  - HOME
   - CGO_ENABLED
   - GOPATH
   - GOMODCACHE

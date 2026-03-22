@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -33,7 +32,6 @@ func newTestCmd(args []string) *cobra.Command {
 	f.Bool("debug", false, "")
 	f.BoolP("quiet", "q", false, "")
 	f.Bool("dry-run", false, "")
-	f.String("home", "", "")
 	f.String("proxy", "on", "")
 	f.String("tun", "auto", "")
 	f.StringSliceP("config-file", "c", nil, "")
@@ -75,7 +73,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 		"--log-file", "/tmp/curb.log",
 		"-v",
 		"--dry-run",
-		"--home", "/custom/home",
 	})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
@@ -95,7 +92,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.Equal(t, "/tmp/curb.log", cfg.LogFile)
 	assert.True(t, cfg.Verbose)
 	assert.True(t, cfg.DryRun)
-	assert.Equal(t, "/custom/home", cfg.HomePath)
 }
 
 func TestFromFlags_WildcardExec(t *testing.T) {
@@ -256,39 +252,6 @@ func TestFromFlags_WildcardEnvValueNotPassthrough(t *testing.T) {
 	assert.Equal(t, []string{"FOO=*"}, cfg.EnvSet)
 }
 
-func TestFromFlags_HomeTildeExpansion(t *testing.T) {
-	cmd := newTestCmd([]string{"--home", "~"})
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	assert.Equal(t, home, cfg.HomePath)
-}
-
-func TestFromFlags_HomeTildeSlashExpansion(t *testing.T) {
-	cmd := newTestCmd([]string{"--home", "~/sandbox"})
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	assert.Equal(t, home+"/sandbox", cfg.HomePath)
-}
-
-func TestMergeEnv_HomeTildeExpansion(t *testing.T) {
-	cmd := newTestCmd(nil)
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	t.Setenv("CURB_HOME", "~")
-	MergeEnv(cfg, cmd)
-
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	assert.Equal(t, home, cfg.HomePath)
-}
-
 func TestFromFlags_InvalidECH(t *testing.T) {
 	cmd := newTestCmd([]string{"--ech", "invalid"})
 	_, err := FromFlags(cmd)
@@ -317,18 +280,6 @@ func TestMergeEnv_AllowNoSNI(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.False(t, cfg.RequireSNI)
-}
-
-func TestMergeEnv_HomeNotOverriddenWhenFlagSet(t *testing.T) {
-	cmd := newTestCmd([]string{"--home", "/cli/home"})
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	t.Setenv("CURB_HOME", "/env/home")
-	MergeEnv(cfg, cmd)
-
-	// CLI flag takes precedence.
-	assert.Equal(t, "/cli/home", cfg.HomePath)
 }
 
 func TestMergeEnv_LogFileNotOverriddenWhenFlagSet(t *testing.T) {
@@ -374,12 +325,6 @@ func TestMergeEnv_AllowHTTP(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.True(t, cfg.AllowHTTP)
-}
-
-func TestExpandHome_NonTilde(t *testing.T) {
-	result, err := expandHome("/absolute/path")
-	require.NoError(t, err)
-	assert.Equal(t, "/absolute/path", result)
 }
 
 func TestFromFlags_IPsAndUnrestrictedNet(t *testing.T) {

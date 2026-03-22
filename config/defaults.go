@@ -64,17 +64,12 @@ func ApplyExclusions(defaults, args []string) []string {
 }
 
 // DefaultEnvVars returns the default environment variables set in the sandbox.
-// HOME defaults to tmpDir unless homePath overrides it. TMPDIR is always tmpDir.
-// IS_SANDBOX=1 signals to child processes that they are running inside a
-// sandbox (e.g. to allow root-like operations that are safe in a user
-// namespace). Callers on platforms without real sandboxing should remove it.
-func DefaultEnvVars(tmpDir, homePath string) map[string]string {
-	home := homePath
-	if home == "" {
-		home = tmpDir
-	}
+// TMPDIR is always tmpDir. IS_SANDBOX=1 signals to child processes that they
+// are running inside a sandbox. HOME is not included here; it is resolved
+// separately via resolveSandboxHome (passthrough > explicit set > tmpDir fallback)
+// to allow --env HOME passthrough to take effect.
+func DefaultEnvVars(tmpDir string) map[string]string {
 	return map[string]string{
-		"HOME":       home,
 		"TMPDIR":     tmpDir,
 		"IS_SANDBOX": "1",
 	}

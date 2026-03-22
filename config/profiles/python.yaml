@@ -1,4 +1,5 @@
 # Python / pip
+# HOME is passed through so ~ paths below resolve to the real home directory.
 domains:
   - pypi.org
   - "*.pythonhosted.org"
@@ -10,5 +11,6 @@ exec:
   - pip
   - pip3
 env:
+  - HOME
   - VIRTUAL_ENV
   - PIP_INDEX_URL
