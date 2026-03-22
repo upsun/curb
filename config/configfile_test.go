@@ -30,9 +30,7 @@ env:
   - PIP_INDEX_URL
 proxy: "on"
 tun: auto
-ech: strip
 allow-http: false
-allow-no-sni: true
 unrestricted-net: false
 `), 0o644))
 
@@ -47,9 +45,7 @@ unrestricted-net: false
 	assert.Equal(t, []string{"VIRTUAL_ENV", "PIP_INDEX_URL"}, cf.Env)
 	assert.Equal(t, new("on"), cf.Proxy)
 	assert.Equal(t, new("auto"), cf.TUN)
-	assert.Equal(t, new("strip"), cf.ECH)
 	assert.Equal(t, new(false), cf.AllowHTTP)
-	assert.Equal(t, new(true), cf.AllowNoSNI)
 	assert.Equal(t, new(false), cf.UnrestrictedNet)
 }
 
@@ -177,19 +173,17 @@ func TestMergeConfigFile_ListsPrepend(t *testing.T) {
 }
 
 func TestMergeConfigFile_ScalarsNotOverriddenByCLI(t *testing.T) {
-	cmd := newTestCmd([]string{"--proxy", "off", "--ech", "deny"})
+	cmd := newTestCmd([]string{"--proxy", "off"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
 		Proxy: new("on"),
-		ECH:   new("allow"),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
 	// CLI flags take precedence.
 	assert.Equal(t, "off", cfg.ProxyMode)
-	assert.Equal(t, "deny", cfg.ECHMode)
 }
 
 func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
@@ -198,19 +192,15 @@ func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
-		Proxy:      new("off"),
-		TUN:        new("always"),
-		ECH:        new("deny"),
-		AllowHTTP:  new(true),
-		AllowNoSNI: new(true),
+		Proxy:     new("off"),
+		TUN:       new("always"),
+		AllowHTTP: new(true),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
 	assert.Equal(t, "off", cfg.ProxyMode)
 	assert.Equal(t, "always", cfg.TUNMode)
-	assert.Equal(t, "deny", cfg.ECHMode)
 	assert.True(t, cfg.AllowHTTP)
-	assert.False(t, cfg.RequireSNI) // allow-no-sni: true => RequireSNI: false
 }
 
 func TestMergeConfigFile_CLIExclusionRemovesConfigFileEntry(t *testing.T) {

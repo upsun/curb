@@ -83,8 +83,6 @@ type SandboxPlan struct {
 	AllowedDomains   []string
 	AllowedIPs       []string
 	AllowLocalhost   bool
-	ECHMode          string
-	RequireSNI       bool
 	AllowHTTP        bool
 	AllowUnixSockets bool
 	ProxyEnabled     bool
@@ -473,8 +471,6 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 			plan.AllowLocalhost = true
 		}
 	}
-	plan.ECHMode = cfg.ECHMode
-	plan.RequireSNI = cfg.RequireSNI
 	plan.AllowHTTP = cfg.AllowHTTP
 	plan.AllowUnixSockets = cfg.AllowUnixSockets
 }
@@ -713,11 +709,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 			ln("    localhost:  forwarded to host")
 		}
 		if p.NetEnabled && len(p.AllowedDomains) > 0 {
-			pr("    tls (443):  SNI filtered, ECH %s", p.ECHMode)
-			if p.RequireSNI {
-				pr(", SNI required")
-			}
-			pr("\n")
+			ln("    tls (443):  blocked (use proxy)")
 			if p.AllowHTTP {
 				ln("    http (80):  Host filtered")
 			} else {

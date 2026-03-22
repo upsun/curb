@@ -165,7 +165,6 @@ func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 		}{
 			{"proxy", np.cf.Proxy, &merged.Proxy},
 			{"tun", np.cf.TUN, &merged.TUN},
-			{"ech", np.cf.ECH, &merged.ECH},
 		} {
 			if sc.src == nil {
 				continue
@@ -183,7 +182,6 @@ func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 
 		// Booleans: only true is meaningful (false is the default).
 		orBool(&merged.AllowHTTP, np.cf.AllowHTTP)
-		orBool(&merged.AllowNoSNI, np.cf.AllowNoSNI)
 		orBool(&merged.AllowUnixSockets, np.cf.AllowUnixSockets)
 		orBool(&merged.UnrestrictedNet, np.cf.UnrestrictedNet)
 	}

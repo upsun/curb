@@ -196,137 +196,8 @@ func TestCheckPacket_CasePassthrough(t *testing.T) {
 	assert.Equal(t, "EVIL.COM.", checkedName, "raw QNAME case should be passed to Check")
 }
 
-// newStripFilter creates a DNSFilter with ECH stripping enabled for testing.
-func newStripFilter() *DNSFilter {
-	return &DNSFilter{Check: func(string) bool { return true }, stripECH: true}
-}
-
-func TestProcessECHStrip_HTTPS(t *testing.T) {
-	f := newStripFilter()
-	msg := new(dns.Msg)
-	msg.SetQuestion("example.com.", dns.TypeHTTPS)
-	msg.Response = true
-	msg.Answer = []dns.RR{
-		&dns.HTTPS{
-			SVCB: dns.SVCB{
-				Hdr:      dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeHTTPS, Class: dns.ClassINET, Ttl: 300},
-				Priority: 1,
-				Target:   ".",
-				Value: []dns.SVCBKeyValue{
-					&dns.SVCBAlpn{Alpn: []string{"h2", "h3"}},
-					&dns.SVCBECHConfig{ECH: []byte("dummy-ech-config")},
-					&dns.SVCBIPv4Hint{Hint: []net.IP{net.ParseIP("1.2.3.4")}},
-				},
-			},
-		},
-	}
-	packed, err := msg.Pack()
-	require.NoError(t, err)
-
-	result := f.processResponse(packed)
-
-	var out dns.Msg
-	require.NoError(t, out.Unpack(result))
-	require.Len(t, out.Answer, 1)
-	https, ok := out.Answer[0].(*dns.HTTPS)
-	require.True(t, ok)
-	for _, kv := range https.Value {
-		assert.NotEqual(t, dns.SVCB_ECHCONFIG, kv.Key(), "ECH SvcParam should be stripped")
-	}
-	assert.Len(t, https.Value, 2, "should retain alpn and ipv4hint")
-}
-
-func TestProcessECHStrip_SVCB(t *testing.T) {
-	f := newStripFilter()
-	msg := new(dns.Msg)
-	msg.SetQuestion("_dns.example.com.", dns.TypeSVCB)
-	msg.Response = true
-	msg.Answer = []dns.RR{
-		&dns.SVCB{
-			Hdr:      dns.RR_Header{Name: "_dns.example.com.", Rrtype: dns.TypeSVCB, Class: dns.ClassINET, Ttl: 300},
-			Priority: 1,
-			Target:   ".",
-			Value: []dns.SVCBKeyValue{
-				&dns.SVCBECHConfig{ECH: []byte("ech-data")},
-			},
-		},
-	}
-	packed, err := msg.Pack()
-	require.NoError(t, err)
-
-	result := f.processResponse(packed)
-
-	var out dns.Msg
-	require.NoError(t, out.Unpack(result))
-	require.Len(t, out.Answer, 1)
-	svcb, ok := out.Answer[0].(*dns.SVCB)
-	require.True(t, ok)
-	assert.Empty(t, svcb.Value, "ECH SvcParam should be stripped from SVCB")
-}
-
-func TestProcessECHStrip_NoECH(t *testing.T) {
-	f := newStripFilter()
-	msg := new(dns.Msg)
-	msg.SetQuestion("example.com.", dns.TypeHTTPS)
-	msg.Response = true
-	msg.Answer = []dns.RR{
-		&dns.HTTPS{
-			SVCB: dns.SVCB{
-				Hdr:      dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeHTTPS, Class: dns.ClassINET, Ttl: 300},
-				Priority: 1,
-				Target:   ".",
-				Value: []dns.SVCBKeyValue{
-					&dns.SVCBAlpn{Alpn: []string{"h2"}},
-				},
-			},
-		},
-	}
-	packed, err := msg.Pack()
-	require.NoError(t, err)
-
-	result := f.processResponse(packed)
-	assert.Equal(t, packed, result, "response without ECH should be returned unchanged")
-}
-
-func TestProcessECHStrip_InvalidDNS(t *testing.T) {
-	f := newStripFilter()
-	data := []byte{0x00, 0x01, 0x02}
-	result := f.processResponse(data)
-	assert.Equal(t, data, result, "invalid DNS should be returned unchanged")
-}
-
-func TestProcessECHStrip_Extra(t *testing.T) {
-	f := newStripFilter()
-	msg := new(dns.Msg)
-	msg.SetQuestion("example.com.", dns.TypeHTTPS)
-	msg.Response = true
-	msg.Extra = []dns.RR{
-		&dns.HTTPS{
-			SVCB: dns.SVCB{
-				Hdr:      dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeHTTPS, Class: dns.ClassINET, Ttl: 300},
-				Priority: 1,
-				Target:   ".",
-				Value: []dns.SVCBKeyValue{
-					&dns.SVCBECHConfig{ECH: []byte("ech-in-extra")},
-				},
-			},
-		},
-	}
-	packed, err := msg.Pack()
-	require.NoError(t, err)
-
-	result := f.processResponse(packed)
-
-	var out dns.Msg
-	require.NoError(t, out.Unpack(result))
-	require.Len(t, out.Extra, 1)
-	https, ok := out.Extra[0].(*dns.HTTPS)
-	require.True(t, ok)
-	assert.Empty(t, https.Value, "ECH should be stripped from Extra section too")
-}
-
-func TestProcessECHStrip_CachesIPs(t *testing.T) {
-	f := newStripFilter()
+func TestProcessResponse_CachesIPs(t *testing.T) {
+	f := &DNSFilter{Check: func(string) bool { return true }}
 
 	msg := new(dns.Msg)
 	msg.SetQuestion("example.com.", dns.TypeA)
@@ -363,8 +234,8 @@ func TestIsResolvedIP_Expiry(t *testing.T) {
 	assert.False(t, loaded, "expired entry should be deleted")
 }
 
-func TestProcessECHStrip_MinTTL(t *testing.T) {
-	f := newStripFilter()
+func TestProcessResponse_MinTTL(t *testing.T) {
+	f := &DNSFilter{Check: func(string) bool { return true }}
 
 	msg := new(dns.Msg)
 	msg.SetQuestion("short.com.", dns.TypeA)

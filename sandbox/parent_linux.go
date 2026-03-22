@@ -221,8 +221,6 @@ func recvFDLoop(sock *os.File, cl *proxy.ConnListener) {
 func buildNetstackFilter(plan *SandboxPlan) *netstack.FilterConfig {
 	if len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0 {
 		filter := &netstack.FilterConfig{
-			ECHMode:        plan.ECHMode,
-			RequireSNI:     plan.RequireSNI,
 			AllowHTTP:      plan.AllowHTTP,
 			AllowLocalhost: plan.AllowLocalhost,
 			Logger:         plan.Logger,

@@ -161,8 +161,6 @@ curb --env 'DATABASE_URL' -- ./migrate.sh
 | `--tun` | `CURB_TUN` | TUN/TAP netstack: `auto` (default) or `always`. With `auto`, TUN is used only when `--proxy off`. |
 | `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains` or `--ips`. |
 | `--allow-http` | `CURB_ALLOW_HTTP` | Allow plaintext HTTP (port 80) when domain filtering is active. |
-| `--ech` | `CURB_ECH` | ECH handling: `strip` (default), `allow`, `deny` (TUN mode only). |
-| `--allow-no-sni` | `CURB_ALLOW_NO_SNI` | Allow TLS without SNI (TUN mode only). |
 
 ### Filesystem
 
@@ -246,8 +244,8 @@ macOS uses Apple's Seatbelt (`sandbox-exec`) for kernel-enforced filesystem and 
 1. **Environment sanitization** — deny-by-default env with only safe variables passed through.
 2. **User namespace** — the child runs as uid 0 in an isolated namespace (no host privileges).
 3. **Mount namespace + pivot_root** — a new root is built from bind-mounted allowed paths. Unmounted paths don't exist. `MS_RDONLY` and `MS_NOEXEC` enforce write and exec restrictions. Landlock layers on top for defense in depth.
-4. **Network namespace + MITM proxy** — the child gets isolated loopback only. An ephemeral CA and MITM proxy in the parent filter HTTP/HTTPS by domain, immune to ECH. Programs ignoring proxy settings get no network.
-5. **TUN/TAP + netstack** (optional, `--tun always`) — a userspace TCP/IP stack provides domain-filtered access for programs that don't use proxy settings.
+4. **Network namespace + MITM proxy** — the child gets isolated loopback only. An ephemeral CA and MITM proxy in the parent filter HTTP/HTTPS by domain, regardless of Encrypted Client Hello (ECH). Programs ignoring proxy settings get no network.
+5. **TUN/TAP + netstack** (optional, `--tun always`) — a userspace TCP/IP stack provides DNS and HTTP domain filtering; port 443 is blocked (use the proxy for HTTPS).
 
 ### macOS
 

@@ -26,8 +26,6 @@ type DNSFilter struct {
 	Check func(domain string) bool
 	// Logger for DNS events.
 	Logger *clog.Logger
-	// stripECH removes ECH SvcParams from HTTPS/SVCB DNS responses.
-	stripECH bool
 	// seenBlocked tracks domains already logged as blocked to avoid repetition.
 	seenBlocked sync.Map
 	// resolvedIPs maps IP string to expiry time for the DNS IP cache.
@@ -48,17 +46,14 @@ func (f *DNSFilter) isResolvedIP(ip string) bool {
 	return true
 }
 
-// processResponse parses a DNS response, caches A/AAAA IPs for loopback
-// and ECH validation, and optionally strips ECH SvcParams from HTTPS/SVCB
-// records. It returns the (possibly modified) response.
+// processResponse parses a DNS response and caches A/AAAA IPs so loopback
+// connections to DNS-resolved IPs can be allowed.
 func (f *DNSFilter) processResponse(response []byte) []byte {
 	var msg dns.Msg
 	if err := msg.Unpack(response); err != nil {
 		return response
 	}
 
-	// Cache A/AAAA IPs so connections to these IPs can be validated
-	// (ECH residual check, loopback allowlisting).
 	for _, rr := range msg.Answer {
 		var ip string
 		switch r := rr.(type) {
@@ -73,45 +68,7 @@ func (f *DNSFilter) processResponse(response []byte) []byte {
 		f.resolvedIPs.Store(ip, time.Now().Add(ttl))
 	}
 
-	if !f.stripECH {
-		return response
-	}
-
-	// Strip ECH SvcParams from HTTPS/SVCB records.
-	modified := false
-	stripRRs := func(rrs []dns.RR) {
-		for _, rr := range rrs {
-			var svcb *dns.SVCB
-			switch r := rr.(type) {
-			case *dns.SVCB:
-				svcb = r
-			case *dns.HTTPS:
-				svcb = &r.SVCB
-			default:
-				continue
-			}
-			filtered := svcb.Value[:0]
-			for _, kv := range svcb.Value {
-				if kv.Key() == dns.SVCB_ECHCONFIG {
-					modified = true
-					continue
-				}
-				filtered = append(filtered, kv)
-			}
-			svcb.Value = filtered
-		}
-	}
-	stripRRs(msg.Answer)
-	stripRRs(msg.Extra)
-
-	if !modified {
-		return response
-	}
-	out, err := msg.Pack()
-	if err != nil {
-		return response
-	}
-	return out
+	return response
 }
 
 // handleQuery reads a DNS query from the sandbox, checks it against the

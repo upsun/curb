@@ -36,7 +36,6 @@ type routeAction int
 const (
 	routeForward  routeAction = iota // Direct forward, no inspection.
 	routeDNS                         // Route to DNS filter.
-	routeTLS                         // Route to TLS SNI inspector.
 	routeHTTP                        // Route to HTTP Host inspector.
 	routeLoopback                    // Forward to host's localhost.
 	routeDrop                        // Drop/reject connection.
@@ -49,18 +48,13 @@ type routeResult struct {
 }
 
 // newDNSFilter creates a DNSFilter from a FilterConfig, or returns nil if
-// filtering is not active. When ECHMode is ECHStrip, DNS ECH stripping and
-// IP caching are enabled, and the filter's checkIP is wired to the cache.
+// filtering is not active. The filter's checkIP is wired to the DNS IP cache
+// so loopback connections to DNS-resolved IPs can be allowed.
 func newDNSFilter(filter *FilterConfig) *DNSFilter {
 	if filter == nil || filter.Check == nil {
 		return nil
 	}
 	df := &DNSFilter{Check: filter.Check, Logger: filter.Logger}
-	if filter.ECHMode == ECHStrip {
-		df.stripECH = true
-	}
-	// Always wire the IP cache so loopback connections to DNS-resolved
-	// IPs can be allowed without explicit --domains localhost.
 	filter.checkIP = df.isResolvedIP
 	return df
 }
@@ -130,7 +124,7 @@ func routeDecision(addr tcpip.Address, port uint16, filter *FilterConfig, dnsFil
 		case dnsPort:
 			return routeResult{action: routeDNS}
 		case tlsPort:
-			return routeResult{action: routeTLS}
+			return routeResult{action: routeDrop, reason: "port 443 blocked (use proxy)"}
 		case httpPort:
 			if filter.AllowHTTP {
 				return routeResult{action: routeHTTP}
@@ -145,7 +139,7 @@ func routeDecision(addr tcpip.Address, port uint16, filter *FilterConfig, dnsFil
 }
 
 // setupTCPForwarding installs a TCP forwarder that proxies connections to the real network.
-// Routing is determined by routeDecision: DNS, TLS, HTTP, loopback, forward, or drop.
+// Routing is determined by routeDecision: DNS, HTTP, loopback, forward, or drop.
 func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilter) {
 	logger := filterLogger(filter)
 	fwd := tcp.NewForwarder(s, 0, maxTCPInFlight, func(r *tcp.ForwarderRequest) {
@@ -179,8 +173,6 @@ func setupTCPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 		switch result.action {
 		case routeDNS:
 			go dnsFilter.handleTCPQuery(local, dst)
-		case routeTLS:
-			go handleTLSConnection(local, dst, filter)
 		case routeHTTP:
 			go handleHTTPConnection(local, dst, filter)
 		case routeLoopback:
@@ -246,7 +238,7 @@ func setupUDPForwarding(s *stack.Stack, filter *FilterConfig, dnsFilter *DNSFilt
 				return true
 			}
 			go relayUDP(local, remote)
-		default: // routeDrop, routeTLS, routeHTTP
+		default: // routeDrop, routeHTTP
 			logger.Debug("udp dropped: %s (%s)", dst, result.reason)
 			_ = local.Close()
 		}

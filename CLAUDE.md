@@ -25,14 +25,14 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - `sandbox/capabilities_linux.go` — ProbeAll (user/net/mount NS with mount ops test, TUN, Landlock ABI)
 - `sandbox/capabilities_darwin.go` — ProbeAll (Seatbelt probe, macOS version)
 - `sandbox/proxy_handler.go` — buildProxyHandler (shared by Linux and macOS parents)
-- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (ECH-proof): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing. CA bundle paths platform-split (`cabundle_linux.go`, `cabundle_darwin.go`).
-- `netstack/` — gvisor userspace TCP/IP (Linux only): DNS filtering, TLS SNI filtering, HTTP Host filtering, localhost forwarding
+- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (works regardless of ECH): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing. CA bundle paths platform-split (`cabundle_linux.go`, `cabundle_darwin.go`).
+- `netstack/` — gvisor userspace TCP/IP (Linux only): DNS filtering, HTTP Host filtering, localhost forwarding. Port 443 is blocked (use proxy for HTTPS).
 - `policy/` — DomainMatcher, IPMatcher, ValidateDomains/ValidateIPs, LandlockPaths, BuildLandlockRules
 - `cmd/root.go` — CLI flag registration
 
 ## Key Design Decisions
 
-- MITM proxy (`--proxy on`, default) is the primary network filter for HTTP/HTTPS. It terminates TLS in the parent process, making domain filtering immune to ECH. Programs respecting `HTTPS_PROXY` get filtered access; programs ignoring it get no network (empty net NS). TUN/TAP + netstack (`--tun always`) is an optional hardening layer. With `--proxy off`, netstack is the sole filter (requires TUN). This mirrors the FS model: mount NS is primary, Landlock hardens.
+- MITM proxy (`--proxy on`, default) is the primary network filter for HTTP/HTTPS. It terminates TLS in the parent process, so domain filtering works regardless of Encrypted Client Hello (ECH). Programs respecting `HTTPS_PROXY` get filtered access; programs ignoring it get no network (empty net NS). TUN/TAP + netstack (`--tun always`) is an optional hardening layer that provides DNS and HTTP filtering; port 443 is blocked at the TUN layer (HTTPS must go through the proxy). With `--proxy off`, only DNS, HTTP, and IP-based filtering are available. This mirrors the FS model: mount NS is primary, Landlock hardens.
 - An ephemeral ECDSA P-256 CA is generated per invocation. The combined CA bundle (system + ephemeral) is bind-mounted over the system CA path during pivot_root, and set via env vars (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, etc.).
 - In proxy-only mode, the child runs a TCP listener on loopback and relays accepted connection fds to the parent via SCM_RIGHTS over the existing socketpair. In proxy+TUN mode, the proxy is a real TCP listener in the parent, reachable via netstack's localhost forwarding.
 - Mount namespace (pivot_root) is the preferred FS enforcement: bind-mount allowed paths into a new root, pivot_root into it. Provides default-deny (ENOENT) and supports sub-path denials via overmount. Landlock layers on top when available for defense-in-depth. Landlock-only is a capable alternative (default-deny via EACCES) but cannot enforce sub-path denials (`!` exclusions under an allowed parent).

@@ -94,10 +94,10 @@ func (l *Logger) Info(format string, args ...any) {
 // configured) and to stderr (if verbose mode is enabled).
 // Parameters:
 //
-//	event  — event type (e.g. "dns_query", "tls_connect", "http_request")
+//	event  — event type (e.g. "dns_query", "tcp_connect", "http_request")
 //	domain — the domain or destination involved
 //	action — what happened ("allowed", "blocked")
-//	reason — why (e.g. "ech", "no_sni", "domain", empty if obvious)
+//	reason — why (e.g. "domain", "port not allowed", empty if obvious)
 func (l *Logger) Event(event, domain, action, reason string) {
 	if l == nil {
 		return

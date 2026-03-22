@@ -83,14 +83,8 @@ func printTemplate() {
 # TUN/TAP netstack: auto, always.
 # tun: auto
 
-# ECH handling: strip, allow, deny.
-# ech: strip
-
 # Allow plaintext HTTP when domain filtering is active.
 # allow-http: false
-
-# Allow TLS connections without SNI.
-# allow-no-sni: false
 
 # Skip network namespace entirely.
 # unrestricted-net: false

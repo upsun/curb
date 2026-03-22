@@ -72,8 +72,8 @@ func TestEvent(t *testing.T) {
 
 func TestEvent_WithReason(t *testing.T) {
 	l, buf := newTestLogger(false)
-	l.Event("tls_connect", "evil.com", "blocked", "domain")
-	assert.Equal(t, "curb: tls_connect blocked: evil.com (domain)\n", buf.String())
+	l.Event("tcp_connect", "evil.com", "blocked", "domain")
+	assert.Equal(t, "curb: tcp_connect blocked: evil.com (domain)\n", buf.String())
 }
 
 func TestNilSafety(t *testing.T) {
@@ -103,7 +103,7 @@ func TestNew_WithLogFile(t *testing.T) {
 	require.NoError(t, err)
 
 	l.Event("dns_query", "example.com", "allowed", "")
-	l.Event("tls_connect", "blocked.com", "blocked", "domain")
+	l.Event("tcp_connect", "blocked.com", "blocked", "domain")
 	l.Close()
 
 	data, err := os.ReadFile(logPath)
@@ -111,7 +111,7 @@ func TestNew_WithLogFile(t *testing.T) {
 	s := string(data)
 	assert.Contains(t, s, `"event":"dns_query"`)
 	assert.Contains(t, s, `"action":"allowed"`)
-	assert.Contains(t, s, `"event":"tls_connect"`)
+	assert.Contains(t, s, `"event":"tcp_connect"`)
 	assert.Contains(t, s, `"reason":"domain"`)
 	// First event has no reason, so no "reason" key in that line.
 	lines := strings.Split(strings.TrimSpace(s), "\n")

@@ -26,8 +26,6 @@ type Config struct {
 	TUNMode           string // "auto" or "always", default "auto".
 	NoFSRestrict      bool
 	NoExecRestrict    bool
-	ECHMode           string
-	RequireSNI        bool
 	AllowHTTP         bool
 	AllowUnixSockets  bool
 	LogFile           string
@@ -71,15 +69,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	echMode, err := flags.GetString("ech")
-	if err != nil {
-		return nil, err
-	}
-	switch echMode {
-	case "strip", "allow", "deny":
-	default:
-		return nil, fmt.Errorf("--ech must be strip, allow, or deny (got %q)", echMode)
-	}
 	if len(allow) > 0 {
 		if err := policy.ValidateDomains(allow); err != nil {
 			return nil, err
@@ -115,10 +104,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		return nil, fmt.Errorf("--proxy on and --unrestricted-net are contradictory")
 	}
 
-	allowNoSNI, err := flags.GetBool("allow-no-sni")
-	if err != nil {
-		return nil, err
-	}
 	allowHTTP, err := flags.GetBool("allow-http")
 	if err != nil {
 		return nil, err
@@ -161,8 +146,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		ExecAllow:        execAllow,
 		EnvPassthrough:   passNames,
 		EnvSet:           setPairs,
-		ECHMode:          echMode,
-		RequireSNI:       !allowNoSNI,
 		AllowHTTP:        allowHTTP,
 		AllowUnixSockets: allowUnixSockets,
 		LogFile:          logFile,
@@ -269,20 +252,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 		}
 	}
 
-	// ECH mode: env only if flag not explicitly set.
-	if !flags.Changed("ech") {
-		if val, ok := os.LookupEnv("CURB_ECH"); ok {
-			switch val {
-			case "strip", "allow", "deny":
-				cfg.ECHMode = val
-			}
-		}
-	}
-	if !flags.Changed("allow-no-sni") {
-		if envBool("CURB_ALLOW_NO_SNI") {
-			cfg.RequireSNI = false
-		}
-	}
 	if !flags.Changed("allow-http") {
 		if envBool("CURB_ALLOW_HTTP") {
 			cfg.AllowHTTP = true

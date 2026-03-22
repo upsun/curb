@@ -1167,18 +1167,19 @@ func TestCurb_Net_TCPForwarding(t *testing.T) {
 }
 
 // TestCurb_Net_TLSWorks verifies that HTTPS connections work through the netstack.
-func TestCurb_Net_TLSWorks(t *testing.T) {
+// TestCurb_Net_TLSBlockedAtTUN verifies that port 443 is blocked at the TUN layer.
+// HTTPS must go through the MITM proxy, not the TUN.
+func TestCurb_Net_TLSBlockedAtTUN(t *testing.T) {
 	requireNetNS(t)
 
-	// Use --resolve to avoid DNS but still validate the TLS certificate.
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "*", "--write", "*", "--exec", "*", "--",
-		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
-	out, err := cmd.CombinedOutput()
-	outStr := filterCurbOutput(string(out))
-	require.NoError(t, err, "HTTPS through netstack failed: %s", outStr)
-	assert.Contains(t, outStr, "200", "expected HTTP 200 from HTTPS request")
+	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "*", "--write", "*", "--exec", "*", "-v", "--",
+		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 5 --resolve example.com:443:%s https://example.com/ 2>&1", ip))
+	out, _ := cmd.CombinedOutput()
+	outStr := string(out)
+	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
+		"expected port 443 block log message")
 }
 
 // TestCurb_Net_NoRawSocketEscape verifies that the child cannot use raw sockets to bypass TAP.
@@ -1310,8 +1311,8 @@ func TestCurb_DNS_BlockedLogMessage(t *testing.T) {
 // A passing test confirms the sandbox blocks the attack.
 
 // TestCurb_DNS_Bypass_DirectIP verifies that a process cannot reach a blocked
-// domain by using its IP address directly. WP09 closes this gap: port 80 is
-// blocked by default, and port 443 requires a matching TLS SNI.
+// domain by using its IP address directly. Port 80 is blocked by default and
+// port 443 is always blocked at the TUN layer.
 func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
 	requireNetNS(t)
 
@@ -1330,74 +1331,55 @@ func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
 		"expected connection failure for blocked port 80")
 }
 
-// --- TLS SNI filter tests ---
+// --- TLS blocked at TUN layer tests ---
+//
+// Port 443 is unconditionally dropped at the TUN layer. HTTPS must go
+// through the MITM proxy.
 
-// TestCurb_TLS_AllowedDomainSucceeds verifies that HTTPS to an allowed domain works.
-func TestCurb_TLS_AllowedDomainSucceeds(t *testing.T) {
+// TestCurb_TLS_Port443Blocked verifies that port 443 is dropped even for allowed domains.
+func TestCurb_TLS_Port443Blocked(t *testing.T) {
 	requireNetNS(t)
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
-		"--domains", "example.com", "--",
-		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
-	out, err := cmd.CombinedOutput()
-	outStr := filterCurbOutput(string(out))
-	require.NoError(t, err, "expected HTTPS to allowed domain to succeed: %s", outStr)
-	assert.Contains(t, outStr, "200", "expected HTTP 200 from allowed HTTPS")
-}
-
-// TestCurb_TLS_BlockedDomainFails verifies that HTTPS to a blocked domain is rejected.
-func TestCurb_TLS_BlockedDomainFails(t *testing.T) {
-	requireNetNS(t)
-
-	ip := resolveForTest(t, "example.com")
-
-	// Allow only "other.test" but connect via IP with SNI "example.com".
 	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
-		"--domains", "other.test", "--",
+		"--domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "5",
 		"--resolve", fmt.Sprintf("example.com:443:%s", ip), "https://example.com/")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: tls_connect blocked: example.com",
-		"expected TLS SNI block log message")
+	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
+		"expected port 443 block log message")
 }
 
-// TestCurb_TLS_DirectIPBlocked verifies that HTTPS by direct IP (no SNI match) is blocked.
+// TestCurb_TLS_DirectIPBlocked verifies that HTTPS by direct IP is blocked at port 443.
 func TestCurb_TLS_DirectIPBlocked(t *testing.T) {
 	requireNetNS(t)
 
 	ip := resolveForTest(t, "example.com")
 
-	// Connect to IP directly via HTTPS. curl sends SNI if a hostname is given,
-	// so use -k and the IP as the URL to avoid sending a hostname SNI.
 	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
 		"--domains", "other.test", "--",
 		"curl", "-sk", "--connect-timeout", "5", fmt.Sprintf("https://%s/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	// curl sends the IP as SNI, which doesn't match "other.test".
-	// Or RequireSNI blocks it because the SNI is an IP not a hostname.
-	assert.True(t,
-		strings.Contains(outStr, "curb: tls_connect blocked:"),
-		"expected TLS block log message, got: %s", outStr)
+	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
+		"expected port 443 block log message")
 }
 
-// TestCurb_TLS_PlaintextOn443Blocked verifies that non-TLS traffic on port 443 is blocked.
+// TestCurb_TLS_PlaintextOn443Blocked verifies that any traffic on port 443 is blocked.
 func TestCurb_TLS_PlaintextOn443Blocked(t *testing.T) {
 	requireNetNS(t)
 
 	ip := resolveForTest(t, "example.com")
 
-	// Send plaintext HTTP to port 443. The TLS parser should reject it.
 	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s:443/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
-	assert.Contains(t, outStr, "curb: tls_connect blocked:",
-		"expected non-TLS block on port 443")
+	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
+		"expected port 443 block log message")
 }
 
 // --- HTTP Host filter tests ---
@@ -1552,19 +1534,18 @@ s.close()
 	assert.Contains(t, outStr, "TIMEOUT", "expected non-DNS UDP to be dropped")
 }
 
-// TestCurb_Net_WildcardAllowsEverything verifies that --domains '*' with port filtering
-// still allows traffic (TLS SNI matches all, HTTP Host matches all).
-func TestCurb_Net_WildcardAllowsEverything(t *testing.T) {
+// TestCurb_Net_WildcardAllowsHTTP verifies that --domains '*' with --allow-http
+// allows HTTP traffic through the TUN. Port 443 is always blocked at TUN.
+func TestCurb_Net_WildcardAllowsHTTP(t *testing.T) {
 	requireNetNS(t)
-
-	ip := resolveForTest(t, "example.com")
+	requireExternalHTTP(t)
 
 	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
-		"--domains", "*", "--",
-		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 10 --resolve example.com:443:%s https://example.com/ | head -1", ip))
+		"--domains", "*", "--allow-http", "--",
+		"sh", "-c", "curl -sI --connect-timeout 10 http://example.com/ | head -1")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
-	require.NoError(t, err, "expected wildcard to allow HTTPS: %s", outStr)
+	require.NoError(t, err, "expected wildcard to allow HTTP: %s", outStr)
 	assert.Contains(t, outStr, "200")
 }
 

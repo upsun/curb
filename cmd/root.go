@@ -277,8 +277,6 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("env", nil, "env vars to pass/set (! prefix removes defaults, '*' for all)")
 
 	// Network options.
-	f.String("ech", "strip", "ECH handling mode: strip, allow, deny")
-	f.Bool("allow-no-sni", false, "allow TLS connections without SNI (reduces filtering)")
 	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")
 	f.Bool("allow-unix-sockets", false, "allow AF_UNIX socket creation (needed for Docker, databases via socket)")
 

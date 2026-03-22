@@ -22,9 +22,7 @@ type ConfigFile struct {
 	Env              []string `yaml:"env"`
 	Proxy            *string  `yaml:"proxy"`
 	TUN              *string  `yaml:"tun"`
-	ECH              *string  `yaml:"ech"`
 	AllowHTTP        *bool    `yaml:"allow-http"`
-	AllowNoSNI       *bool    `yaml:"allow-no-sni"`
 	AllowUnixSockets *bool `yaml:"allow-unix-sockets"`
 	UnrestrictedNet  *bool `yaml:"unrestricted-net"`
 }
@@ -120,14 +118,8 @@ func applyConfigScalars(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 	if cf.TUN != nil && !flags.Changed("tun") {
 		cfg.TUNMode = *cf.TUN
 	}
-	if cf.ECH != nil && !flags.Changed("ech") {
-		cfg.ECHMode = *cf.ECH
-	}
 	if cf.AllowHTTP != nil && !flags.Changed("allow-http") {
 		cfg.AllowHTTP = *cf.AllowHTTP
-	}
-	if cf.AllowNoSNI != nil && !flags.Changed("allow-no-sni") {
-		cfg.RequireSNI = !*cf.AllowNoSNI
 	}
 	if cf.AllowUnixSockets != nil && !flags.Changed("allow-unix-sockets") {
 		cfg.AllowUnixSockets = *cf.AllowUnixSockets

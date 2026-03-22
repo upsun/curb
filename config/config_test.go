@@ -23,8 +23,6 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("env", nil, "")
 	f.StringSlice("ips", nil, "")
 	f.Bool("unrestricted-net", false, "")
-	f.String("ech", "strip", "")
-	f.Bool("allow-no-sni", false, "")
 	f.Bool("allow-http", false, "")
 	f.Bool("allow-unix-sockets", false, "")
 	f.String("log-file", "", "")
@@ -51,8 +49,6 @@ func TestFromFlags_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.RWPaths)
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
-	assert.Equal(t, "strip", cfg.ECHMode, "ECHMode defaults to strip")
-	assert.True(t, cfg.RequireSNI, "RequireSNI defaults to true")
 	assert.False(t, cfg.AllowHTTP, "AllowHTTP defaults to false")
 	assert.Empty(t, cfg.LogFile)
 	assert.False(t, cfg.Verbose)
@@ -67,8 +63,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 		"--exec", "rg",
 		"--env", "GOPATH",
 		"--env", "FOO=bar",
-		"--ech", "allow",
-		"--allow-no-sni",
 		"--allow-http",
 		"--log-file", "/tmp/curb.log",
 		"-v",
@@ -86,8 +80,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
 	assert.False(t, cfg.NoExecRestrict)
-	assert.Equal(t, "allow", cfg.ECHMode, "--ech allow sets ECHMode")
-	assert.False(t, cfg.RequireSNI, "--allow-no-sni inverts RequireSNI")
 	assert.True(t, cfg.AllowHTTP, "--allow-http sets AllowHTTP")
 	assert.Equal(t, "/tmp/curb.log", cfg.LogFile)
 	assert.True(t, cfg.Verbose)
@@ -169,16 +161,14 @@ func TestMergeEnv_EnvOnlyBool(t *testing.T) {
 	assert.True(t, cfg.Verbose)
 }
 
-func TestMergeEnv_InvertedBools(t *testing.T) {
+func TestMergeEnv_AllowHTTPFromEnv(t *testing.T) {
 	cmd := newTestCmd(nil)
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_ECH", "deny")
 	t.Setenv("CURB_ALLOW_HTTP", "true")
 	MergeEnv(cfg, cmd)
 
-	assert.Equal(t, "deny", cfg.ECHMode)
 	assert.True(t, cfg.AllowHTTP)
 }
 
@@ -252,13 +242,6 @@ func TestFromFlags_WildcardEnvValueNotPassthrough(t *testing.T) {
 	assert.Equal(t, []string{"FOO=*"}, cfg.EnvSet)
 }
 
-func TestFromFlags_InvalidECH(t *testing.T) {
-	cmd := newTestCmd([]string{"--ech", "invalid"})
-	_, err := FromFlags(cmd)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--ech must be strip, allow, or deny")
-}
-
 func TestMergeEnv_WildcardRead(t *testing.T) {
 	cmd := newTestCmd(nil)
 	cfg, err := FromFlags(cmd)
@@ -268,18 +251,6 @@ func TestMergeEnv_WildcardRead(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"/"}, cfg.ROPaths)
-}
-
-func TestMergeEnv_AllowNoSNI(t *testing.T) {
-	cmd := newTestCmd(nil)
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	assert.True(t, cfg.RequireSNI)
-	t.Setenv("CURB_ALLOW_NO_SNI", "1")
-	MergeEnv(cfg, cmd)
-
-	assert.False(t, cfg.RequireSNI)
 }
 
 func TestMergeEnv_LogFileNotOverriddenWhenFlagSet(t *testing.T) {
@@ -302,18 +273,6 @@ func TestMergeEnv_LogFileFromEnv(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, "/env/log", cfg.LogFile)
-}
-
-func TestMergeEnv_ECHNotOverriddenWhenFlagSet(t *testing.T) {
-	cmd := newTestCmd([]string{"--ech", "allow"})
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	t.Setenv("CURB_ECH", "deny")
-	MergeEnv(cfg, cmd)
-
-	// CLI flag takes precedence.
-	assert.Equal(t, "allow", cfg.ECHMode)
 }
 
 func TestMergeEnv_AllowHTTP(t *testing.T) {

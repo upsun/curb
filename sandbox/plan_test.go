@@ -30,9 +30,7 @@ func minCaps() *Capabilities {
 
 // minCfg returns a minimal Config suitable for BuildPlan.
 func minCfg() *config.Config {
-	return &config.Config{
-		ECHMode: "strip",
-	}
+	return &config.Config{}
 }
 
 // --- splitDirsFiles ---
@@ -185,14 +183,14 @@ func TestBuildPlan_NoLandlock_WithMountNS(t *testing.T) {
 
 func TestBuildPlan_NoLandlock_NoFSRestrict(t *testing.T) {
 	caps := &Capabilities{LandlockABI: 0}
-	cfg := &config.Config{ECHMode: "strip", NoFSRestrict: true, NoExecRestrict: true}
+	cfg := &config.Config{NoFSRestrict: true, NoExecRestrict: true}
 	plan, err := BuildPlan(cfg, caps)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 }
 
 func TestBuildPlan_NoExecRestrict(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", NoExecRestrict: true}
+	cfg := &config.Config{NoExecRestrict: true}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -201,7 +199,7 @@ func TestBuildPlan_NoExecRestrict(t *testing.T) {
 }
 
 func TestBuildPlan_ExecRemoveAll(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"!*"}}
+	cfg := &config.Config{ExecAllow: []string{"!*"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -213,7 +211,7 @@ func TestBuildPlan_ExecAbsPath(t *testing.T) {
 	bin := filepath.Join(dir, "mybin")
 	require.NoError(t, os.WriteFile(bin, nil, 0o755))
 
-	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{bin}}
+	cfg := &config.Config{ExecAllow: []string{bin}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -234,7 +232,7 @@ func TestBuildPlan_ExecRelativePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mybin"), nil, 0o755))
 	chdirTemp(t, dir)
 
-	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"./mybin"}}
+	cfg := &config.Config{ExecAllow: []string{"./mybin"}}
 	plan, planErr := BuildPlan(cfg, minCaps())
 	require.NoError(t, planErr)
 	defer plan.Cleanup()
@@ -249,7 +247,7 @@ func TestBuildPlan_ExecRelativeGlob(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, nil, 0o755))
 	chdirTemp(t, dir)
 
-	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"./dist/*/*"}}
+	cfg := &config.Config{ExecAllow: []string{"./dist/*/*"}}
 	plan, planErr := BuildPlan(cfg, minCaps())
 	require.NoError(t, planErr)
 	defer plan.Cleanup()
@@ -260,21 +258,21 @@ func TestBuildPlan_ExecRelativeGlobNoMatch(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
 
-	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"./nonexistent/*"}}
+	cfg := &config.Config{ExecAllow: []string{"./nonexistent/*"}}
 	_, planErr := BuildPlan(cfg, minCaps())
 	require.Error(t, planErr)
 	assert.Contains(t, planErr.Error(), "no matches found")
 }
 
 func TestBuildPlan_ExecNotFound(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", ExecAllow: []string{"nonexistent-binary-xyz"}}
+	cfg := &config.Config{ExecAllow: []string{"nonexistent-binary-xyz"}}
 	_, err := BuildPlan(cfg, minCaps())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--exec nonexistent-binary-xyz: not found in PATH")
 }
 
 func TestBuildPlan_AllowLocalhost(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedDomains: []string{"localhost"}}
+	cfg := &config.Config{AllowedDomains: []string{"localhost"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -284,7 +282,7 @@ func TestBuildPlan_AllowLocalhost(t *testing.T) {
 }
 
 func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedDomains: []string{"*"}}
+	cfg := &config.Config{AllowedDomains: []string{"*"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -295,7 +293,7 @@ func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
 
 func TestBuildPlan_NoUserNS_LandlockAvailable(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
-	cfg := &config.Config{ECHMode: "strip", UnrestrictedNet: true}
+	cfg := &config.Config{UnrestrictedNet: true}
 	plan, err := BuildPlan(cfg, caps)
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -324,7 +322,7 @@ func TestBuildPlan_NoUserNS_NoLandlock(t *testing.T) {
 
 func TestBuildPlan_NoUserNS_WithDomains(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
-	cfg := &config.Config{ECHMode: "strip", AllowedDomains: []string{"example.com"}}
+	cfg := &config.Config{AllowedDomains: []string{"example.com"}}
 	_, err := BuildPlan(cfg, caps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--domains/--ips require user namespaces")
@@ -332,14 +330,14 @@ func TestBuildPlan_NoUserNS_WithDomains(t *testing.T) {
 
 func TestBuildPlan_NoUserNS_WithIPs(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
-	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}}
+	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
 	_, err := BuildPlan(cfg, caps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--domains/--ips require user namespaces")
 }
 
 func TestBuildPlan_NoFSRestrict(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", NoFSRestrict: true}
+	cfg := &config.Config{NoFSRestrict: true}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -350,7 +348,7 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 // --- BuildPlan IPs + UnrestrictedNet ---
 
 func TestBuildPlan_IPsEnableNet(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
+	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -361,7 +359,7 @@ func TestBuildPlan_IPsEnableNet(t *testing.T) {
 }
 
 func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
+	cfg := &config.Config{AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -371,7 +369,7 @@ func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
 }
 
 func TestBuildPlan_UnrestrictedNet(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", UnrestrictedNet: true}
+	cfg := &config.Config{UnrestrictedNet: true}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -380,7 +378,7 @@ func TestBuildPlan_UnrestrictedNet(t *testing.T) {
 }
 
 func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"127.0.0.1"}}
+	cfg := &config.Config{AllowedIPs: []string{"127.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -390,7 +388,7 @@ func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
 }
 
 func TestBuildPlan_IPsNoLoopback(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}}
+	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -400,7 +398,7 @@ func TestBuildPlan_IPsNoLoopback(t *testing.T) {
 }
 
 func TestBuildPlan_ChildConfig_AllowedIPs(t *testing.T) {
-	cfg := &config.Config{ECHMode: "strip", AllowedIPs: []string{"10.0.0.1"}}
+	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -462,7 +460,7 @@ func TestBuildPlan_ResolvesROSymlinks(t *testing.T) {
 	link := filepath.Join(dir, "link")
 	require.NoError(t, os.Symlink(realDir, link))
 
-	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{link}}
+	cfg := &config.Config{ROPaths: []string{link}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -478,7 +476,7 @@ func TestBuildPlan_ResolvesRWSymlinks(t *testing.T) {
 	link := filepath.Join(dir, "link")
 	require.NoError(t, os.Symlink(realDir, link))
 
-	cfg := &config.Config{ECHMode: "strip", RWPaths: []string{link}}
+	cfg := &config.Config{RWPaths: []string{link}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -504,7 +502,7 @@ func TestBuildPlan_CWDExcludedByRemoveAll(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 
-	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{"!*"}}
+	cfg := &config.Config{ROPaths: []string{"!*"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -516,7 +514,7 @@ func TestBuildPlan_CWDExcludedByName(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 
-	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{"!" + cwd}}
+	cfg := &config.Config{ROPaths: []string{"!" + cwd}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -528,7 +526,7 @@ func TestBuildPlan_CWDExcludedByDot(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 
-	cfg := &config.Config{ECHMode: "strip", ROPaths: []string{"!."}}
+	cfg := &config.Config{ROPaths: []string{"!."}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -540,7 +538,7 @@ func TestBuildPlan_RelativeWritePathResolved(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 
-	cfg := &config.Config{ECHMode: "strip", RWPaths: []string{"."}}
+	cfg := &config.Config{RWPaths: []string{"."}}
 	plan, err := BuildPlan(cfg, minCaps())
 	require.NoError(t, err)
 	defer plan.Cleanup()
@@ -755,7 +753,6 @@ func TestBuildPlan_TildeExpandsToSandboxHome(t *testing.T) {
 	// (which equals sandbox HOME since HOME is passed through).
 	t.Setenv("HOME", "/host/home")
 	cfg := &config.Config{
-		ECHMode:        "strip",
 		ROPaths:        []string{"~/.ssh"},
 		EnvPassthrough: []string{"HOME"},
 	}
@@ -769,7 +766,6 @@ func TestBuildPlan_TildeExpandsToSandboxHome(t *testing.T) {
 func TestBuildPlan_TildeExpandsToTmpDirWhenNoHome(t *testing.T) {
 	// When HOME is not passed through, ~ resolves to tmpDir.
 	cfg := &config.Config{
-		ECHMode: "strip",
 		ROPaths: []string{"~/.config"},
 	}
 	plan, err := BuildPlan(cfg, minCaps())
@@ -788,7 +784,6 @@ func TestBuildPlan_TildeExpandsToTmpDirWhenNoHome(t *testing.T) {
 
 func TestBuildPlan_TildeExpandsToExplicitHome(t *testing.T) {
 	cfg := &config.Config{
-		ECHMode: "strip",
 		ROPaths: []string{"~/.ssh"},
 		EnvSet:  []string{"HOME=/custom"},
 	}

@@ -18,10 +18,10 @@ Tester: Claude Code (running inside curb sandbox)
 |---|---|---|
 | HTTPS to blocked domain | Blocked | Connection reset |
 | HTTP to blocked domain | Blocked | Connection reset by peer |
-| HTTPS by raw IP (DNS bypass) | Blocked | TLS terminated by netstack |
-| TLS without SNI | Blocked | `SSL UNEXPECTED_EOF` |
-| TLS with forged SNI (allowlisted name, blocked IP) | Blocked | `SSL UNEXPECTED_EOF`; netstack does not forward |
-| TLS with no SNI (omit `server_hostname`) | Blocked | `SSL UNEXPECTED_EOF` |
+| HTTPS by raw IP (DNS bypass) | Blocked | Port 443 dropped (RST) |
+| TLS without SNI | Blocked | Port 443 dropped (RST) |
+| TLS with forged SNI (allowlisted name, blocked IP) | Blocked | Port 443 dropped (RST) |
+| TLS with no SNI (omit `server_hostname`) | Blocked | Port 443 dropped (RST) |
 | Raw TCP send (port 80) | Blocked | `connect()` succeeds, `send()` triggers `ConnectionResetError` (RST) |
 | Raw TCP on port 443 (no TLS handshake) | Blocked | 0 bytes returned, connection closed |
 | Non-standard TCP port (4443, 8080, 8443) | Blocked | Connection reset |
@@ -49,7 +49,7 @@ Tester: Claude Code (running inside curb sandbox)
 The gvisor netstack intercepts all network traffic from the sandboxed process:
 
 - **DNS filtering:** queries are handled by the netstack's DNS resolver, which only resolves allowlisted domains. Queries for other domains return REFUSED. Direct UDP/TCP DNS to external resolvers (e.g. 8.8.8.8) is also intercepted. DNS-based data exfiltration via subdomain encoding is blocked.
-- **TLS SNI filtering:** only connections with an SNI matching the allowlist are forwarded on port 443. Connections without SNI, with a non-matching SNI, or with a spoofed SNI (allowlisted name to a non-matching IP) are all terminated before the handshake completes.
+- **Port 443 blocked:** all TCP connections to port 443 receive RST at the TUN layer. HTTPS must go through the MITM proxy.
 - **HTTP Host filtering:** port 80 traffic is filtered by Host header (when `--allow-http` is enabled; otherwise port 80 is blocked entirely). Case-insensitive matching. Double Host headers, absolute URIs, and chunked TE smuggling are all rejected.
 - **Non-HTTP/S ports:** TCP connections to other ports receive RST after data is sent.
 - **UDP:** non-DNS UDP traffic is silently dropped.

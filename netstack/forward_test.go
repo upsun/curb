@@ -25,12 +25,13 @@ func TestRouteDecision(t *testing.T) {
 		wantReason string
 	}{
 		{
-			name:       "allowed TLS",
+			name:       "port 443 blocked",
 			addr:       [4]byte{93, 184, 216, 34},
 			port:       443,
 			filter:     &FilterConfig{Check: allowAll},
 			dnsFilter:  minDNSFilter,
-			wantAction: routeTLS,
+			wantAction: routeDrop,
+			wantReason: "port 443 blocked (use proxy)",
 		},
 		{
 			name:       "allowed DNS",
