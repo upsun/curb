@@ -187,7 +187,7 @@ Default: system binaries in `/usr/bin`, `/bin`, etc. Writable directories are no
 |------|---------|-------------|
 | `--env` | `CURB_ENV` | Pass through (`NAME`) or set (`NAME=VALUE`) env vars. `!` prefix removes defaults, `*` passes all. |
 
-Default: deny-by-default. Only `HOME`, `PATH`, `TMPDIR`, `TERM`, `TZ`, `LANG`, and a few safe variables are passed. Secrets (`*_KEY`, `*_TOKEN`, `*_SECRET`, etc.) are blocked.
+Default: deny-by-default. Only `PATH`, `TMPDIR`, `TERM`, `TZ`, `LANG`, and a few safe variables are passed. `HOME` defaults to a private temporary directory; use `--env HOME` to pass through the host HOME. See [docs/configuration.md](docs/configuration.md) for details on HOME and tilde expansion.
 
 ### Configuration
 
@@ -196,7 +196,6 @@ Default: deny-by-default. Only `HOME`, `PATH`, `TMPDIR`, `TERM`, `TZ`, `LANG`, a
 | `-c`, `--config-file` | `CURB_CONFIG_FILE` | Config file path(s). Default: auto-discover `.curb.yaml`. |
 | `-p`, `--profiles` | `CURB_PROFILES` | Activate named profiles (comma-separated). |
 | `--dry-run` | | Print the sandbox plan without running anything. |
-| `--home` | | Set `HOME` for the sandboxed process. |
 
 ### Output
 
@@ -263,4 +262,5 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common i
 
 ## Further reading
 
+- [Configuration guide](docs/configuration.md) — profiles, config files, environment variables, HOME and tilde expansion
 - [Comparison with Anthropic's sandbox-runtime](docs/comparison-sandbox-runtime.md)

@@ -28,7 +28,6 @@ exec:
 env:
   - VIRTUAL_ENV
   - PIP_INDEX_URL
-home: "~"
 proxy: "on"
 tun: auto
 ech: strip
@@ -46,13 +45,27 @@ unrestricted-net: false
 	assert.Equal(t, []string{"."}, cf.Write)
 	assert.Equal(t, []string{"python3", "pip"}, cf.Exec)
 	assert.Equal(t, []string{"VIRTUAL_ENV", "PIP_INDEX_URL"}, cf.Env)
-	assert.Equal(t, new("~"), cf.Home)
 	assert.Equal(t, new("on"), cf.Proxy)
 	assert.Equal(t, new("auto"), cf.TUN)
 	assert.Equal(t, new("strip"), cf.ECH)
 	assert.Equal(t, new(false), cf.AllowHTTP)
 	assert.Equal(t, new(true), cf.AllowNoSNI)
 	assert.Equal(t, new(false), cf.UnrestrictedNet)
+}
+
+func TestLoadConfigFile_HomeKeyRejected(t *testing.T) {
+	// The home: config field has been removed.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+domains:
+  - example.com
+home: "~"
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err, "home: key should be rejected as unknown")
+	assert.Contains(t, err.Error(), "home")
 }
 
 func TestLoadConfigFile_UnknownKey(t *testing.T) {
@@ -94,7 +107,6 @@ domains:
 	assert.Nil(t, cf.IPs)
 	assert.Nil(t, cf.Read)
 	assert.Nil(t, cf.Proxy)
-	assert.Nil(t, cf.Home)
 }
 
 func TestLoadConfigFile_NotFound(t *testing.T) {
@@ -191,7 +203,6 @@ func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
 		ECH:        new("deny"),
 		AllowHTTP:  new(true),
 		AllowNoSNI: new(true),
-		Home:       new("/custom/home"),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
@@ -200,20 +211,6 @@ func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
 	assert.Equal(t, "deny", cfg.ECHMode)
 	assert.True(t, cfg.AllowHTTP)
 	assert.False(t, cfg.RequireSNI) // allow-no-sni: true => RequireSNI: false
-	assert.Equal(t, "/custom/home", cfg.HomePath)
-}
-
-func TestMergeConfigFile_HomeTildeExpansion(t *testing.T) {
-	cmd := newTestCmd(nil)
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	cf := &ConfigFile{Home: new("~")}
-	MergeConfigFile(cfg, cf, cmd.Flags())
-
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	assert.Equal(t, home, cfg.HomePath)
 }
 
 func TestMergeConfigFile_CLIExclusionRemovesConfigFileEntry(t *testing.T) {

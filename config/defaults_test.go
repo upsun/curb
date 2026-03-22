@@ -51,9 +51,24 @@ func TestExpandTildes(t *testing.T) {
 }
 
 func TestDefaultEnvVars_NoSHELL(t *testing.T) {
-	env := DefaultEnvVars("/tmp", "")
+	env := DefaultEnvVars("/tmp")
 	_, ok := env["SHELL"]
 	assert.False(t, ok, "SHELL should not be in default env vars (it is a passthrough)")
+}
+
+func TestDefaultEnvVars_NoHOME(t *testing.T) {
+	// HOME is no longer set by DefaultEnvVars. It is resolved separately
+	// (passthrough > explicit set > tmpDir fallback) to avoid masking
+	// passthrough values.
+	env := DefaultEnvVars("/tmp")
+	_, ok := env["HOME"]
+	assert.False(t, ok, "HOME should not be in default env vars (resolved separately)")
+}
+
+func TestDefaultEnvVars_TMPDIR(t *testing.T) {
+	env := DefaultEnvVars("/tmp/curb-test")
+	assert.Equal(t, "/tmp/curb-test", env["TMPDIR"])
+	assert.Equal(t, "1", env["IS_SANDBOX"])
 }
 
 func TestDefaultPS1(t *testing.T) {

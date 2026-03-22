@@ -176,7 +176,7 @@ func TestMergeProfiles_ScalarsApplied(t *testing.T) {
 domains:
   - example.com
 proxy: "off"
-home: "/sandbox"
+tun: "always"
 `), 0o644))
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
@@ -189,7 +189,7 @@ home: "/sandbox"
 
 	assert.Contains(t, cfg.AllowedDomains, "example.com")
 	assert.Equal(t, "off", cfg.ProxyMode)
-	assert.Equal(t, "/sandbox", cfg.HomePath)
+	assert.Equal(t, "always", cfg.TUNMode)
 }
 
 func TestMergeProfiles_ScalarConflict(t *testing.T) {
@@ -450,6 +450,25 @@ func TestMergeProfiles_BuiltinComposition(t *testing.T) {
 	// From github profile.
 	assert.Contains(t, cfg.AllowedDomains, "github.com")
 	assert.Contains(t, cfg.ExecAllow, "gh")
+}
+
+func TestMergeProfiles_GoIncludesCC(t *testing.T) {
+	// Verify that built-in go profile composes cc.
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"go"}, cmd.Flags())
+	require.NoError(t, err)
+
+	// From cc profile (via go -> cc).
+	assert.Contains(t, cfg.ExecAllow, "gcc")
+	assert.Contains(t, cfg.ExecAllow, "/usr/libexec/gcc")
+	assert.Contains(t, cfg.EnvPassthrough, "CC")
+
+	// From go profile.
+	assert.Contains(t, cfg.ExecAllow, "go")
+	assert.Contains(t, cfg.AllowedDomains, "proxy.golang.org")
 }
 
 func TestListProfiles_IncludesBuiltins(t *testing.T) {

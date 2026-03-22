@@ -1,4 +1,5 @@
 # Node.js / npm / yarn / pnpm
+# HOME is passed through so ~ paths below resolve to the real home directory.
 domains:
   - registry.npmjs.org
   - "*.npmjs.org"
@@ -14,5 +15,6 @@ exec:
   - npm
   - npx
 env:
+  - HOME
   - NODE_ENV
   - NPM_CONFIG_REGISTRY

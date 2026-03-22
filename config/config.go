@@ -35,8 +35,7 @@ type Config struct {
 	Debug             bool
 	Quiet             bool
 	DryRun            bool
-	HomePath          string
-	ConfigFilePaths   []string
+	ConfigFilePaths []string
 	Command           []string
 }
 
@@ -148,17 +147,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	home, err := flags.GetString("home")
-	if err != nil {
-		return nil, err
-	}
-	if home != "" {
-		home, err = expandHome(home)
-		if err != nil {
-			return nil, fmt.Errorf("--home: %w", err)
-		}
-	}
-
 	// Separate --allow-env values into passthrough names and explicit name=value pairs.
 	passNames, setPairs := classifyEnvArgs(env)
 
@@ -182,8 +170,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		Debug:            debug,
 		Quiet:            quiet,
 		DryRun:           dryRun,
-		HomePath:         home,
-		Command:          cmd.Flags().Args(),
+		Command: cmd.Flags().Args(),
 	}
 
 	// Wildcard handling: '*' in list flags sets the corresponding escape hatch.
@@ -252,14 +239,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	}
 
 	// String values: env only if flag not explicitly set.
-	if !flags.Changed("home") {
-		if val, ok := os.LookupEnv("CURB_HOME"); ok {
-			if h, err := expandHome(val); err == nil {
-				val = h
-			}
-			cfg.HomePath = val
-		}
-	}
 	if !flags.Changed("log-file") {
 		if val, ok := os.LookupEnv("CURB_LOG_FILE"); ok {
 			cfg.LogFile = val
@@ -362,14 +341,3 @@ func envBool(key string) bool {
 	return val == "1" || strings.EqualFold(val, "true")
 }
 
-// expandHome resolves a leading ~ or ~/ to the user's home directory.
-func expandHome(path string) (string, error) {
-	if !strings.HasPrefix(path, "~") {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return ExpandTildes([]string{path}, home)[0], nil
-}

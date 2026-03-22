@@ -25,9 +25,8 @@ type ConfigFile struct {
 	ECH              *string  `yaml:"ech"`
 	AllowHTTP        *bool    `yaml:"allow-http"`
 	AllowNoSNI       *bool    `yaml:"allow-no-sni"`
-	AllowUnixSockets *bool    `yaml:"allow-unix-sockets"`
-	UnrestrictedNet  *bool    `yaml:"unrestricted-net"`
-	Home             *string  `yaml:"home"`
+	AllowUnixSockets *bool `yaml:"allow-unix-sockets"`
+	UnrestrictedNet  *bool `yaml:"unrestricted-net"`
 }
 
 // LoadConfigFile reads and decodes a YAML config file.
@@ -135,12 +134,5 @@ func applyConfigScalars(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 	}
 	if cf.UnrestrictedNet != nil && !flags.Changed("unrestricted-net") {
 		cfg.UnrestrictedNet = *cf.UnrestrictedNet
-	}
-	if cf.Home != nil && !flags.Changed("home") {
-		home := *cf.Home
-		if h, err := expandHome(home); err == nil {
-			home = h
-		}
-		cfg.HomePath = home
 	}
 }

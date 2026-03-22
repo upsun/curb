@@ -94,10 +94,11 @@ type SandboxPlan struct {
 	SystemCACertPath string // System CA file path to bind-mount over.
 	CA               *proxy.CA
 	UserPaths        []string // Paths explicitly requested by the user (--read/--write/--exec adds).
-	EnvSet           map[string]string
-	EnvPassthrough   []string
+	EnvSet         map[string]string
+	EnvPassthrough []string
 	DegradedLayers   []DegradedLayer
 	TempDir          string
+	SandboxHome      string // Resolved HOME for the sandbox (used for tilde expansion and env fallback).
 	NoFSRestrict     bool
 	NoExecRestrict   bool
 	Quiet            bool
@@ -259,19 +260,68 @@ func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabiliti
 	return nil
 }
 
+// createTempDir creates a temporary directory for the sandbox.
+func createTempDir() (string, error) {
+	return os.MkdirTemp("", "curb-")
+}
+
+// warnTildeToTmpDir logs a warning if any configured paths contain ~ and the
+// sandbox HOME is a temporary directory (i.e. HOME was not passed through).
+func warnTildeToTmpDir(cfg *config.Config, sandboxHome, tmpDir string) {
+	if sandboxHome != tmpDir {
+		return
+	}
+	for _, paths := range [][]string{cfg.ROPaths, cfg.RWPaths, cfg.ExecAllow} {
+		for _, p := range paths {
+			if strings.HasPrefix(p, "~/") || p == "~" {
+				clog.Warnf("~ in paths resolves to temporary directory %s (HOME not passed through); use --env HOME to use your real home", tmpDir)
+				return
+			}
+		}
+	}
+}
+
+// resolveSandboxHome determines what HOME will be inside the sandbox.
+// Priority: explicit --env HOME=/path > --env HOME passthrough > tmpDir fallback.
+func resolveSandboxHome(cfg *config.Config, tmpDir string) string {
+	// Check explicit set: --env HOME=/path.
+	for _, pair := range cfg.EnvSet {
+		if k, v, ok := strings.Cut(pair, "="); ok && k == "HOME" {
+			return v
+		}
+	}
+	// Check passthrough-all: --env '*'.
+	if cfg.EnvPassthroughAll {
+		if h, ok := os.LookupEnv("HOME"); ok {
+			return h
+		}
+	}
+	// Check explicit passthrough: --env HOME.
+	// Always check adds even after !* — "!*" clears defaults but
+	// subsequent adds still apply (e.g. --env '!*' --env HOME).
+	adds, _, _ := config.ParseExclusions(cfg.EnvPassthrough)
+	for _, name := range adds {
+		if name == "HOME" {
+			if h, ok := os.LookupEnv("HOME"); ok {
+				return h
+			}
+		}
+	}
+	return tmpDir
+}
+
 // resolveFilesystem merges default and user-configured paths, expands tildes
-// and globs, resolves symlinks, and creates the temp directory.
-func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, realHome string) error {
+// and globs, resolves symlinks. The temp directory must already be set on
+// plan.TempDir. The sandboxHome parameter controls tilde expansion.
+func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, sandboxHome string) error {
 	plan.NoFSRestrict = cfg.NoFSRestrict
 	if !cfg.NoFSRestrict {
 		// Parse exclusions, expand tildes and globs, then merge with defaults.
 		var roAdds []string
 		var roRemoveAll bool
 		roAdds, removals.roRemoves, roRemoveAll = config.ParseExclusions(cfg.ROPaths)
-		if realHome != "" {
-			roAdds = config.ExpandTildes(roAdds, realHome)
-			removals.roRemoves = config.ExpandTildes(removals.roRemoves, realHome)
-		}
+		roAdds = config.ExpandTildes(roAdds, sandboxHome)
+		removals.roRemoves = config.ExpandTildes(removals.roRemoves, sandboxHome)
 		roAdds = config.ExpandGlobs(roAdds)
 		removals.roRemoves = config.ExpandGlobs(removals.roRemoves)
 
@@ -289,10 +339,8 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 		var rwAdds []string
 		var rwRemoveAll bool
 		rwAdds, removals.rwRemoves, rwRemoveAll = config.ParseExclusions(cfg.RWPaths)
-		if realHome != "" {
-			rwAdds = config.ExpandTildes(rwAdds, realHome)
-			removals.rwRemoves = config.ExpandTildes(removals.rwRemoves, realHome)
-		}
+		rwAdds = config.ExpandTildes(rwAdds, sandboxHome)
+		removals.rwRemoves = config.ExpandTildes(removals.rwRemoves, sandboxHome)
 		rwAdds = config.ExpandGlobs(rwAdds)
 		removals.rwRemoves = config.ExpandGlobs(removals.rwRemoves)
 		rwExcl := excludeArgs(removals.rwRemoves)
@@ -325,19 +373,14 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 		plan.RWFiles = resolveSymlinks(plan.RWFiles)
 	}
 
-	// Temp directory.
-	tmpDir, err := os.MkdirTemp("", "curb-")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	plan.TempDir = tmpDir
-	plan.RWPaths = append(plan.RWPaths, tmpDir)
+	// TempDir is always writable.
+	plan.RWPaths = append(plan.RWPaths, plan.TempDir)
 	return nil
 }
 
 // resolveExec resolves exec path allowlists: parse exclusions, look up
 // binaries via PATH, resolve symlinks, and ensure exec dirs are readable.
-func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, realHome string) error {
+func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, sandboxHome string) error {
 	removals.noExecRestrict = cfg.NoExecRestrict
 	if cfg.NoExecRestrict {
 		plan.NoExecRestrict = true
@@ -346,10 +389,8 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	var execAdds []string
 	var execRemoveAll bool
 	execAdds, removals.execRemoves, execRemoveAll = config.ParseExclusions(cfg.ExecAllow)
-	if realHome != "" {
-		execAdds = config.ExpandTildes(execAdds, realHome)
-		removals.execRemoves = config.ExpandTildes(removals.execRemoves, realHome)
-	}
+	execAdds = config.ExpandTildes(execAdds, sandboxHome)
+	removals.execRemoves = config.ExpandTildes(removals.execRemoves, sandboxHome)
 	removals.execRemoves = config.ExpandGlobs(removals.execRemoves)
 	if execRemoveAll {
 		plan.ExecPaths = nil
@@ -568,6 +609,11 @@ func (p *SandboxPlan) ResolveEnv() []string {
 			}
 		}
 	}
+	// HOME fallback: use the pre-resolved SandboxHome so tilde expansion
+	// and the runtime HOME always agree.
+	if _, ok := env["HOME"]; !ok && p.SandboxHome != "" {
+		env["HOME"] = p.SandboxHome
+	}
 	result := make([]string, 0, len(env))
 	for k, v := range env {
 		result = append(result, k+"="+v)
@@ -759,12 +805,13 @@ func (p *SandboxPlan) capUserInfo() string {
 // and the temp directory. Used by both BuildPlan and buildDegradedPlan.
 func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	envAdds, envRemoves, envRemoveAll := config.ParseExclusions(cfg.EnvPassthrough)
-	plan.EnvSet = config.DefaultEnvVars(tmpDir, cfg.HomePath)
+	plan.EnvSet = config.DefaultEnvVars(tmpDir)
 	if len(cfg.Command) > 0 {
 		plan.EnvSet["PS1"] = config.DefaultPS1(cfg.Command[0], os.Getenv("NO_COLOR") != "")
 	}
 	if envRemoveAll {
 		plan.EnvSet = make(map[string]string)
+		plan.SandboxHome = "" // Suppress HOME fallback in ResolveEnv.
 	} else if len(envRemoves) > 0 {
 		for _, r := range envRemoves {
 			delete(plan.EnvSet, r)
@@ -1046,11 +1093,12 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 		})
 	}
 
-	tmpDir, err := os.MkdirTemp("", "curb-")
+	tmpDir, err := createTempDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+		return nil, err
 	}
 	plan.TempDir = tmpDir
+	plan.SandboxHome = resolveSandboxHome(cfg, tmpDir)
 
 	applyEnvPolicy(plan, cfg, tmpDir)
 	delete(plan.EnvSet, "IS_SANDBOX")

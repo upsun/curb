@@ -4,7 +4,6 @@ package sandbox
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/upsun/curb/clog"
@@ -26,8 +25,19 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*San
 	}
 
 	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet}
-	realHome, _ := os.UserHomeDir()
 	var removals planRemovals
+
+	// Create tmpDir first — needed for sandbox HOME fallback.
+	tmpDir, err := createTempDir()
+	if err != nil {
+		return nil, err
+	}
+	plan.TempDir = tmpDir
+
+	// Determine sandbox HOME before tilde expansion.
+	sandboxHome := resolveSandboxHome(cfg, tmpDir)
+	plan.SandboxHome = sandboxHome
+	warnTildeToTmpDir(cfg, sandboxHome, tmpDir)
 
 	// Validate macOS-incompatible flag combinations.
 	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
@@ -45,10 +55,10 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*San
 	plan.UseSeatbelt = true
 
 	// Reuse the generic resolve helpers.
-	if err := resolveFilesystem(plan, cfg, &removals, realHome); err != nil {
+	if err := resolveFilesystem(plan, cfg, &removals, sandboxHome); err != nil {
 		return nil, err
 	}
-	if err := resolveExec(plan, cfg, &removals, realHome); err != nil {
+	if err := resolveExec(plan, cfg, &removals, sandboxHome); err != nil {
 		return nil, err
 	}
 	resolveNetwork(plan, cfg)
