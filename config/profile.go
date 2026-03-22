@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
 )
 
@@ -83,26 +84,121 @@ func LoadProfile(name string) (*ConfigFile, error) {
 	return decodeProfile(data, name)
 }
 
-// MergeProfiles loads and merges named profiles into cfg.
-// Only list fields are applied; scalar fields in profiles are ignored with a warning.
-func MergeProfiles(cfg *Config, names []string, quiet bool) error {
-	seen := make(map[string]bool)
-	for _, name := range names {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
+// namedProfile pairs a profile name with its parsed config.
+type namedProfile struct {
+	name string
+	cf   *ConfigFile
+}
 
-		cf, err := LoadProfile(name)
+// loadProfileTree recursively loads a profile and its dependencies in
+// depth-first order. stack tracks the current recursion path for cycle
+// detection; loaded prevents processing a profile more than once.
+func loadProfileTree(name string, stack []string, loaded map[string]bool) ([]namedProfile, error) {
+	if loaded[name] {
+		return nil, nil
+	}
+	const maxDepth = 32
+	if len(stack) >= maxDepth {
+		return nil, fmt.Errorf("profile nesting too deep (max %d): %s -> %s",
+			maxDepth, strings.Join(stack, " -> "), name)
+	}
+	if slices.Contains(stack, name) {
+		idx := slices.Index(stack, name)
+		chain := append(slices.Clone(stack[idx:]), name)
+		return nil, fmt.Errorf("profile cycle: %s", strings.Join(chain, " -> "))
+	}
+
+	cf, err := LoadProfile(name)
+	if err != nil {
+		return nil, err
+	}
+
+	stack = append(stack, name)
+	var result []namedProfile
+
+	for _, dep := range cf.Profiles {
+		sub, subErr := loadProfileTree(dep, stack, loaded)
+		if subErr != nil {
+			return nil, fmt.Errorf("profile %q: %w", name, subErr)
+		}
+		result = append(result, sub...)
+	}
+
+	result = append(result, namedProfile{name: name, cf: cf})
+	loaded[name] = true
+	return result, nil
+}
+
+// stringScalarOrigin tracks which profile first set a string scalar.
+type stringScalarOrigin struct {
+	profile string
+	value   string
+}
+
+// MergeProfiles loads and merges named profiles into cfg, including any
+// profiles they compose via the "profiles" field. List fields are appended.
+// Boolean scalars are OR'd (only true is meaningful). String scalars conflict
+// if two profiles set different values. CLI flags always take precedence.
+func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
+	loaded := make(map[string]bool)
+	var ordered []namedProfile
+	for _, name := range names {
+		tree, err := loadProfileTree(name, nil, loaded)
 		if err != nil {
 			return fmt.Errorf("--profiles: %w", err)
 		}
-		mergeConfigLists(cfg, cf)
-		if !quiet {
-			warnProfileScalars(cf, name)
-		}
+		ordered = append(ordered, tree...)
 	}
+
+	// Merge lists and collect scalars with conflict detection.
+	// String scalars from different profiles must agree; booleans are OR'd.
+	stringScalars := make(map[string]stringScalarOrigin)
+	merged := new(ConfigFile)
+
+	for _, np := range ordered {
+		mergeConfigLists(cfg, np.cf)
+
+		for _, sc := range []struct {
+			field string
+			src   *string
+			dst   **string
+		}{
+			{"proxy", np.cf.Proxy, &merged.Proxy},
+			{"tun", np.cf.TUN, &merged.TUN},
+			{"ech", np.cf.ECH, &merged.ECH},
+			{"home", np.cf.Home, &merged.Home},
+		} {
+			if sc.src == nil {
+				continue
+			}
+			if prev, ok := stringScalars[sc.field]; ok {
+				if prev.value != *sc.src {
+					return fmt.Errorf("--profiles: profiles %q and %q conflict on %q: %q vs %q",
+						prev.profile, np.name, sc.field, prev.value, *sc.src)
+				}
+			} else {
+				stringScalars[sc.field] = stringScalarOrigin{profile: np.name, value: *sc.src}
+				*sc.dst = sc.src
+			}
+		}
+
+		// Booleans: only true is meaningful (false is the default).
+		orBool(&merged.AllowHTTP, np.cf.AllowHTTP)
+		orBool(&merged.AllowNoSNI, np.cf.AllowNoSNI)
+		orBool(&merged.AllowUnixSockets, np.cf.AllowUnixSockets)
+		orBool(&merged.UnrestrictedNet, np.cf.UnrestrictedNet)
+	}
+
+	applyConfigScalars(cfg, merged, flags)
 	return nil
+}
+
+// orBool sets *dst to a pointer to true if src is non-nil and true.
+func orBool(dst **bool, src *bool) {
+	if src != nil && *src {
+		t := true
+		*dst = &t
+	}
 }
 
 // ListProfiles returns available profiles from all sources.
@@ -199,39 +295,4 @@ func decodeProfile(data []byte, source string) (*ConfigFile, error) {
 		return nil, fmt.Errorf("profile %s: %w", source, err)
 	}
 	return &cf, nil
-}
-
-func warnProfileScalars(cf *ConfigFile, name string) {
-	var scalars []string
-	if len(cf.Profiles) > 0 {
-		scalars = append(scalars, "profiles")
-	}
-	if cf.Proxy != nil {
-		scalars = append(scalars, "proxy")
-	}
-	if cf.TUN != nil {
-		scalars = append(scalars, "tun")
-	}
-	if cf.ECH != nil {
-		scalars = append(scalars, "ech")
-	}
-	if cf.AllowHTTP != nil {
-		scalars = append(scalars, "allow-http")
-	}
-	if cf.AllowNoSNI != nil {
-		scalars = append(scalars, "allow-no-sni")
-	}
-	if cf.AllowUnixSockets != nil {
-		scalars = append(scalars, "allow-unix-sockets")
-	}
-	if cf.UnrestrictedNet != nil {
-		scalars = append(scalars, "unrestricted-net")
-	}
-	if cf.Home != nil {
-		scalars = append(scalars, "home")
-	}
-	if len(scalars) > 0 {
-		fmt.Fprintf(os.Stderr, "curb: warning: profile %q has fields (%s) which are ignored in profiles\n",
-			name, strings.Join(scalars, ", "))
-	}
 }

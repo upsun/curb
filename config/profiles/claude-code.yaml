@@ -1,4 +1,6 @@
-# Claude Code
+# Claude Code.
+# Includes git config/env directly (not via profile composition, to avoid
+# inheriting SSH key access). Add -p ssh explicitly if needed.
 domains:
   - api.anthropic.com
   - platform.claude.com
@@ -8,22 +10,25 @@ read:
   - ~/.gitconfig
   - ~/.config/git
 write:
+  - .
   - ~/.claude
   - ~/.claude.json
   - !~/.claude/agents
   - !~/.claude/commands
-  - .
+  - !~/.claude/CLAUDE.md
+  - !~/.claude/settings.json
   - !./.claude/agents
   - !./.claude/commands
   # Workaround: Claude Code ignores $TMPDIR and hardcodes /tmp/claude-<UID>.
   # Inside a user namespace UID is always 0.
   - /tmp/claude-0
-
 exec:
   - claude
   - node
   - npm
   - npx
+  - git
+  - gpg
 env:
   - ANTHROPIC_API_KEY
   - CLAUDE_CODE_MAX_TOKENS

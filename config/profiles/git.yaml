@@ -1,19 +1,14 @@
-# Git / SSH / GPG
-domains:
-  - github.com
-  - gitlab.com
-  - bitbucket.org
+# Git / GPG (includes SSH).
+profiles:
+  - ssh
 read:
-  - ~/.ssh
   - ~/.gitconfig
   - ~/.config/git
 exec:
   - git
-  - ssh
   - gpg
 env:
   - GIT_AUTHOR_NAME
   - GIT_AUTHOR_EMAIL
   - GIT_COMMITTER_NAME
   - GIT_COMMITTER_EMAIL
-  - SSH_AUTH_SOCK

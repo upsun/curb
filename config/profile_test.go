@@ -50,13 +50,11 @@ func TestLoadProfile_Builtin(t *testing.T) {
 }
 
 func TestLoadProfile_AllBuiltins(t *testing.T) {
-	names := []string{"node", "python", "php", "go", "rust", "git", "github", "docker", "claude-code"}
+	names := []string{"node", "python", "php", "go", "rust", "git", "github", "docker", "claude-code", "ssh"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			cf, err := LoadProfile(name)
+			_, err := LoadProfile(name)
 			require.NoError(t, err)
-			assert.NotEmpty(t, cf.Domains, "profile %s should have domains", name)
-			assert.NotEmpty(t, cf.Exec, "profile %s should have exec", name)
 		})
 	}
 }
@@ -93,8 +91,6 @@ exec:
 }
 
 func TestLoadProfile_SystemOverridesBuiltin(t *testing.T) {
-	// We can't write to /etc in tests, so just verify that builtin loading works
-	// when system dir doesn't exist (the common case).
 	cf, err := LoadProfile("python")
 	require.NoError(t, err)
 	assert.Contains(t, cf.Domains, "pypi.org")
@@ -105,20 +101,22 @@ func TestMergeProfiles(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"node", "git"}, true)
+	err = MergeProfiles(cfg, []string{"node", "github"}, cmd.Flags())
 	require.NoError(t, err)
 
-	// Node domains and git domains should both be present.
+	// Node domains and github domains should both be present.
 	assert.Contains(t, cfg.AllowedDomains, "registry.npmjs.org")
 	assert.Contains(t, cfg.AllowedDomains, "github.com")
 
-	// Exec from both profiles.
+	// Exec from all profiles (ssh inherited via github -> git -> ssh).
 	assert.Contains(t, cfg.ExecAllow, "node")
 	assert.Contains(t, cfg.ExecAllow, "git")
+	assert.Contains(t, cfg.ExecAllow, "ssh")
 
-	// Env from both profiles.
+	// Env from all profiles.
 	assert.Contains(t, cfg.EnvPassthrough, "NODE_ENV")
 	assert.Contains(t, cfg.EnvPassthrough, "GIT_AUTHOR_NAME")
+	assert.Contains(t, cfg.EnvPassthrough, "SSH_AUTH_SOCK")
 }
 
 func TestMergeProfiles_Dedup(t *testing.T) {
@@ -126,10 +124,9 @@ func TestMergeProfiles_Dedup(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"node", "node"}, true)
+	err = MergeProfiles(cfg, []string{"node", "node"}, cmd.Flags())
 	require.NoError(t, err)
 
-	// Node domains should appear only once (dedup by name).
 	count := 0
 	for _, d := range cfg.AllowedDomains {
 		if d == "registry.npmjs.org" {
@@ -144,7 +141,7 @@ func TestMergeProfiles_NotFound(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"nonexistent"}, true)
+	err = MergeProfiles(cfg, []string{"nonexistent"}, cmd.Flags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -154,38 +151,32 @@ func TestMergeProfiles_InvalidName(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"../bad"}, true)
+	err = MergeProfiles(cfg, []string{"../bad"}, cmd.Flags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid profile name")
 }
 
 func TestMergeProfiles_ProfilesBelowConfigFile(t *testing.T) {
-	// Profiles are the lowest-priority layer. Config file values should
-	// appear after profile values (higher priority = later in the list),
-	// and CLI exclusions can remove profile additions.
 	cmd := newTestCmd([]string{"--domains", "!registry.npmjs.org"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	// Simulate: profiles merged first, then config file, then CLI exclusions.
-	err = MergeProfiles(cfg, []string{"node"}, true)
+	err = MergeProfiles(cfg, []string{"node"}, cmd.Flags())
 	require.NoError(t, err)
 
-	// The exclusion from CLI is in cfg.AllowedDomains as "!registry.npmjs.org".
-	// After ApplyExclusions in BuildPlan, registry.npmjs.org will be removed.
 	assert.Contains(t, cfg.AllowedDomains, "registry.npmjs.org")
 	assert.Contains(t, cfg.AllowedDomains, "!registry.npmjs.org")
 }
 
-func TestMergeProfiles_IgnoresScalars(t *testing.T) {
+func TestMergeProfiles_ScalarsApplied(t *testing.T) {
 	dir := t.TempDir()
 	profileDir := filepath.Join(dir, "curb", "profiles")
 	require.NoError(t, os.MkdirAll(profileDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "bad.yaml"), []byte(`
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "custom.yaml"), []byte(`
 domains:
   - example.com
 proxy: "off"
-home: "/evil"
+home: "/sandbox"
 `), 0o644))
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
@@ -193,14 +184,272 @@ home: "/evil"
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"bad"}, true)
+	err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
 	require.NoError(t, err)
 
-	// List fields applied.
 	assert.Contains(t, cfg.AllowedDomains, "example.com")
-	// Scalar fields ignored.
+	assert.Equal(t, "off", cfg.ProxyMode)
+	assert.Equal(t, "/sandbox", cfg.HomePath)
+}
+
+func TestMergeProfiles_ScalarConflict(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte(`
+domains:
+  - a.com
+proxy: "off"
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte(`
+domains:
+  - b.com
+proxy: "on"
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflict")
+	assert.Contains(t, err.Error(), "proxy")
+}
+
+func TestMergeProfiles_ScalarAgreement(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte(`
+domains:
+  - a.com
+proxy: "off"
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte(`
+domains:
+  - b.com
+proxy: "off"
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
+	require.NoError(t, err)
+	assert.Equal(t, "off", cfg.ProxyMode)
+}
+
+func TestMergeProfiles_BoolNoConflict(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte(`
+domains:
+  - a.com
+allow-unix-sockets: true
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte(`
+domains:
+  - b.com
+allow-unix-sockets: true
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
+	require.NoError(t, err)
+	assert.True(t, cfg.AllowUnixSockets)
+}
+
+func TestMergeProfiles_BoolFalseIgnored(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "noop.yaml"), []byte(`
+domains:
+  - a.com
+allow-http: false
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"noop"}, cmd.Flags())
+	require.NoError(t, err)
+	assert.False(t, cfg.AllowHTTP)
+}
+
+func TestMergeProfiles_CLIWinsOverScalar(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "custom.yaml"), []byte(`
+domains:
+  - a.com
+proxy: "off"
+allow-unix-sockets: true
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd([]string{"--proxy", "on"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
+	require.NoError(t, err)
+
+	// CLI --proxy on should win over profile proxy: off.
 	assert.Equal(t, "on", cfg.ProxyMode)
-	assert.Empty(t, cfg.HomePath)
+	// Boolean not set by CLI, so profile wins.
+	assert.True(t, cfg.AllowUnixSockets)
+}
+
+func TestMergeProfiles_Composition(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "base.yaml"), []byte(`
+domains:
+  - base.com
+exec:
+  - base-tool
+allow-unix-sockets: true
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "child.yaml"), []byte(`
+profiles:
+  - base
+domains:
+  - child.com
+exec:
+  - child-tool
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"child"}, cmd.Flags())
+	require.NoError(t, err)
+
+	// Both profiles' lists should be present.
+	assert.Contains(t, cfg.AllowedDomains, "base.com")
+	assert.Contains(t, cfg.AllowedDomains, "child.com")
+	assert.Contains(t, cfg.ExecAllow, "base-tool")
+	assert.Contains(t, cfg.ExecAllow, "child-tool")
+	// Scalar from base profile should be applied.
+	assert.True(t, cfg.AllowUnixSockets)
+}
+
+func TestMergeProfiles_CompositionDedup(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "base.yaml"), []byte(`
+domains:
+  - base.com
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "child.yaml"), []byte(`
+profiles:
+  - base
+domains:
+  - child.com
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	// "base" is included by "child" AND listed explicitly — should load once.
+	err = MergeProfiles(cfg, []string{"child", "base"}, cmd.Flags())
+	require.NoError(t, err)
+
+	count := 0
+	for _, d := range cfg.AllowedDomains {
+		if d == "base.com" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestMergeProfiles_CycleDetection(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte(`
+profiles:
+  - b
+domains:
+  - a.com
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte(`
+profiles:
+  - a
+domains:
+  - b.com
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"a"}, cmd.Flags())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cycle")
+}
+
+func TestMergeProfiles_TransitiveCycle(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte("profiles: [b]\ndomains: [a.com]\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte("profiles: [c]\ndomains: [b.com]\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "c.yaml"), []byte("profiles: [a]\ndomains: [c.com]\n"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"a"}, cmd.Flags())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cycle")
+	assert.Contains(t, err.Error(), "a -> b -> c -> a")
+}
+
+func TestMergeProfiles_BuiltinComposition(t *testing.T) {
+	// Verify that built-in github profile composes git -> ssh.
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	err = MergeProfiles(cfg, []string{"github"}, cmd.Flags())
+	require.NoError(t, err)
+
+	// From ssh profile (via github -> git -> ssh).
+	assert.Contains(t, cfg.ExecAllow, "ssh")
+	assert.Contains(t, cfg.ROPaths, "~/.ssh")
+	assert.Contains(t, cfg.EnvPassthrough, "SSH_AUTH_SOCK")
+	assert.True(t, cfg.AllowUnixSockets)
+
+	// From git profile.
+	assert.Contains(t, cfg.ExecAllow, "git")
+
+	// From github profile.
+	assert.Contains(t, cfg.AllowedDomains, "github.com")
+	assert.Contains(t, cfg.ExecAllow, "gh")
 }
 
 func TestListProfiles_IncludesBuiltins(t *testing.T) {
@@ -218,6 +467,7 @@ func TestListProfiles_IncludesBuiltins(t *testing.T) {
 	assert.Equal(t, ProfileBuiltin, names["github"])
 	assert.Equal(t, ProfileBuiltin, names["docker"])
 	assert.Equal(t, ProfileBuiltin, names["claude-code"])
+	assert.Equal(t, ProfileBuiltin, names["ssh"])
 }
 
 func TestListProfiles_UserOverridesBuiltin(t *testing.T) {
@@ -233,11 +483,8 @@ func TestListProfiles_UserOverridesBuiltin(t *testing.T) {
 	for _, p := range profiles {
 		found[p.Name] = p.Source
 	}
-	// "node" should show as user (overridden).
 	assert.Equal(t, ProfileUser, found["node"])
-	// "custom" is a user-only profile.
 	assert.Equal(t, ProfileUser, found["custom"])
-	// "python" is still builtin.
 	assert.Equal(t, ProfileBuiltin, found["python"])
 }
 

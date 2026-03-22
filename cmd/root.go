@@ -50,7 +50,7 @@ Use -- before the command when it has its own flags.`,
 
 			// Collect activated profiles from config files, --profile flag, and CURB_PROFILES.
 			profileNames := collectProfiles(cmd, cfs)
-			if err := config.MergeProfiles(cfg, profileNames, cfg.Quiet); err != nil {
+			if err := config.MergeProfiles(cfg, profileNames, cmd.Flags()); err != nil {
 				return err
 			}
 

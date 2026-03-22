@@ -108,8 +108,13 @@ func mergeConfigLists(cfg *Config, cf *ConfigFile) {
 // Scalars: config-file values apply only if the corresponding CLI flag was not explicitly set.
 func MergeConfigFile(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 	mergeConfigLists(cfg, cf)
+	applyConfigScalars(cfg, cf, flags)
+}
 
-	// Scalars: only if the CLI flag was not explicitly set.
+// applyConfigScalars applies scalar and boolean fields from cf to cfg.
+// Each field is applied only if the corresponding CLI flag was not
+// explicitly set. Used by both MergeConfigFile and MergeProfiles.
+func applyConfigScalars(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 	if cf.Proxy != nil && !flags.Changed("proxy") {
 		cfg.ProxyMode = *cf.Proxy
 	}
