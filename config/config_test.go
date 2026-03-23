@@ -24,6 +24,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("ips", nil, "")
 	f.Bool("unrestricted-net", false, "")
 	f.Bool("allow-unix-sockets", false, "")
+	f.Bool("host-loopback", false, "")
 	f.String("log-file", "", "")
 	f.BoolP("verbose", "v", false, "")
 	f.Bool("debug", false, "")
@@ -285,6 +286,28 @@ func TestFromFlags_UnrestrictedNetWithIPs(t *testing.T) {
 	_, err := FromFlags(cmd)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--unrestricted-net cannot be combined")
+}
+
+func TestFromFlags_HostLoopback(t *testing.T) {
+	cmd := newTestCmd([]string{"--host-loopback"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+	assert.True(t, cfg.HostLoopback)
+}
+
+func TestFromFlags_HostLoopbackWithUnrestrictedNet(t *testing.T) {
+	cmd := newTestCmd([]string{"--host-loopback", "--unrestricted-net"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--host-loopback cannot be combined with --unrestricted-net")
+}
+
+func TestFromFlags_HostLoopbackWithDomains(t *testing.T) {
+	cmd := newTestCmd([]string{"--host-loopback", "--domains", "github.com"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+	assert.True(t, cfg.HostLoopback)
+	assert.Equal(t, []string{"github.com"}, cfg.AllowedDomains)
 }
 
 func TestFromFlags_InvalidDomain(t *testing.T) {

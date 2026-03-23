@@ -22,6 +22,7 @@ type ConfigFile struct {
 	Env              []string `yaml:"env"`
 	AllowUnixSockets *bool `yaml:"allow-unix-sockets"`
 	UnrestrictedNet  *bool `yaml:"unrestricted-net"`
+	HostLoopback     *bool `yaml:"host-loopback"`
 }
 
 // LoadConfigFile reads and decodes a YAML config file.
@@ -114,5 +115,8 @@ func applyConfigScalars(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 	}
 	if cf.UnrestrictedNet != nil && !flags.Changed("unrestricted-net") {
 		cfg.UnrestrictedNet = *cf.UnrestrictedNet
+	}
+	if cf.HostLoopback != nil && !flags.Changed("host-loopback") {
+		cfg.HostLoopback = *cf.HostLoopback
 	}
 }

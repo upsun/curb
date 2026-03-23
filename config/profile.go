@@ -153,6 +153,7 @@ func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 		// Booleans: only true is meaningful (false is the default).
 		orBool(&merged.AllowUnixSockets, np.cf.AllowUnixSockets)
 		orBool(&merged.UnrestrictedNet, np.cf.UnrestrictedNet)
+		orBool(&merged.HostLoopback, np.cf.HostLoopback)
 	}
 
 	applyConfigScalars(cfg, merged, flags)

@@ -25,6 +25,7 @@ type Config struct {
 	NoFSRestrict      bool
 	NoExecRestrict    bool
 	AllowUnixSockets  bool
+	HostLoopback      bool
 	LogFile           string
 	Verbose           bool
 	Debug             bool
@@ -76,8 +77,15 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 			return nil, err
 		}
 	}
+	hostLoopback, err := flags.GetBool("host-loopback")
+	if err != nil {
+		return nil, err
+	}
 	if unrestrictedNet && (len(allow) > 0 || len(ips) > 0) {
 		return nil, fmt.Errorf("--unrestricted-net cannot be combined with --domains or --ips")
+	}
+	if hostLoopback && unrestrictedNet {
+		return nil, fmt.Errorf("--host-loopback cannot be combined with --unrestricted-net (host network is already direct)")
 	}
 
 	allowUnixSockets, err := flags.GetBool("allow-unix-sockets")
@@ -117,6 +125,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		EnvPassthrough:   passNames,
 		EnvSet:           setPairs,
 		AllowUnixSockets: allowUnixSockets,
+		HostLoopback:     hostLoopback,
 		LogFile:          logFile,
 		Verbose:          verbose,
 		Debug:            debug,
@@ -204,6 +213,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
 	mergeBoolEnv(flags, &cfg.AllowUnixSockets, "allow-unix-sockets", "CURB_ALLOW_UNIX_SOCKETS")
+	mergeBoolEnv(flags, &cfg.HostLoopback, "host-loopback", "CURB_HOST_LOOPBACK")
 }
 
 // classifyEnvArgs separates env args into passthrough names and explicit name=value pairs.

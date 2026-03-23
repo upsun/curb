@@ -57,8 +57,12 @@ stream without terminating TLS.
 SCM_RIGHTS over a socketpair (no socat).
 
 curb supports IP address and CIDR range filtering via `--ips` (e.g.
-`--ips 10.0.0.0/8`). srt filters by domain only. curb also supports
-localhost forwarding (`--domains localhost`); srt does not.
+`--ips 10.0.0.0/8`). srt filters by domain only.
+
+Both tools set `NO_PROXY` to bypass the proxy for localhost, so
+sandbox-internal servers (e.g. dev servers started by the sandboxed
+process) are reachable directly. curb additionally supports forwarding
+localhost traffic to the host via `--host-loopback`; srt does not.
 
 ## Process isolation
 
@@ -168,7 +172,9 @@ of those processes.
   additionally controls which binaries can execute.
 - **Network**: both use HTTP and SOCKS5 proxies for domain filtering (based
   on CONNECT hostname, not TLS SNI, so unaffected by ECH). Both use CONNECT
-  passthrough for HTTPS. curb supports IP/CIDR filtering; srt does not.
+  passthrough for HTTPS. Both set `NO_PROXY` for sandbox-internal localhost.
+  curb supports IP/CIDR filtering and host-localhost forwarding
+  (`--host-loopback`); srt does not.
 - **Seccomp**: both block AF_UNIX sockets via seccomp BPF. curb's filter is
   always-on with an opt-out (`--allow-unix-sockets`).
 - **Environment**: srt inherits the full host environment; curb is

@@ -125,10 +125,10 @@ Allow access to specific IP ranges (e.g. a local service):
 curb --ips '192.168.1.0/24' -- python3 client.py
 ```
 
-Forward localhost services from the host into the sandbox:
+Forward host localhost services into the sandbox:
 
 ```
-curb --domains localhost -- curl http://127.0.0.1:8080/
+curb --host-loopback --domains github.com -- curl http://127.0.0.1:8080/
 ```
 
 Hide a sensitive file under an otherwise-allowed path:
@@ -155,9 +155,10 @@ curb --env 'DATABASE_URL' -- ./migrate.sh
 
 | Flag | Env var | Description |
 |------|---------|-------------|
-| `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all, `localhost` for localhost forwarding. |
+| `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all. |
 | `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
-| `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains` or `--ips`. |
+| `--host-loopback` | `CURB_HOST_LOOPBACK` | Forward localhost/127.0.0.1 traffic to the host loopback. Cannot combine with `--unrestricted-net`. |
+| `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains`, `--ips`, or `--host-loopback`. |
 
 ### Filesystem
 

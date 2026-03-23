@@ -48,6 +48,9 @@ const (
 	// SOCKSAddrEnvKey is the env var holding the SOCKS5 proxy address for the
 	// _socks-connect helper (used as SSH ProxyCommand).
 	SOCKSAddrEnvKey = "_CURB_SOCKS_ADDR"
+
+	// defaultNoProxy is the NO_PROXY value for sandbox-internal localhost.
+	defaultNoProxy = "localhost,127.0.0.1,::1"
 )
 
 // FSEnforcer applies a filesystem enforcement layer to the current process.
@@ -82,7 +85,7 @@ type SandboxPlan struct {
 	UnrestrictedNet  bool
 	AllowedDomains   []string
 	AllowedIPs       []string
-	AllowLocalhost   bool
+	HostLoopback     bool
 	AllowUnixSockets bool
 	ProxyEnabled     bool
 	ProxyPort        int
@@ -177,7 +180,7 @@ func BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*Sa
 
 // resolveCapabilities validates system capabilities and selects enforcement layers.
 func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
-	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
+	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0 || cfg.HostLoopback) && !cfg.UnrestrictedNet
 
 	if caps.UserNS != nil {
 		aaHint := ""
@@ -439,16 +442,7 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 	plan.UnrestrictedNet = cfg.UnrestrictedNet
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.AllowedIPs = cfg.AllowedIPs
-	// Wildcard or "localhost" in allowed domains implies localhost access.
-	plan.AllowLocalhost = slices.Contains(cfg.AllowedDomains, "*") ||
-		slices.Contains(cfg.AllowedDomains, "localhost")
-	// Loopback IPs in the allowlist also imply localhost forwarding.
-	if len(cfg.AllowedIPs) > 0 {
-		ipMatcher := policy.NewIPMatcher(cfg.AllowedIPs)
-		if ipMatcher.ContainsLoopback() {
-			plan.AllowLocalhost = true
-		}
-	}
+	plan.HostLoopback = cfg.HostLoopback
 	plan.AllowUnixSockets = cfg.AllowUnixSockets
 }
 
@@ -675,8 +669,10 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		if !p.ProxyEnabled && len(p.AllowedDomains) == 0 && len(p.AllowedIPs) == 0 {
 			ln("    allowed:    none (no network interface)")
 		}
-		if p.AllowLocalhost {
-			ln("    localhost:  forwarded to host")
+		if p.HostLoopback {
+			ln("    localhost:  forwarded to host (--host-loopback)")
+		} else if p.ProxyEnabled {
+			ln("    localhost:  sandbox-internal (NO_PROXY)")
 		}
 		ln("    blocked:    everything else")
 	}
@@ -800,6 +796,19 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 			plan.EnvSet["ALL_PROXY"] = socksURL
 			plan.EnvSet["all_proxy"] = socksURL
 			plan.EnvSet[SOCKSAddrEnvKey] = socksAddr
+		}
+	}
+
+	// NO_PROXY: bypass the proxy for localhost so sandbox-internal
+	// servers are reachable directly. When HostLoopback is true
+	// (--host-loopback), skip this so traffic goes through the proxy
+	// to host localhost. Respect user-provided NO_PROXY.
+	if plan.ProxyEnabled && !plan.HostLoopback {
+		if _, ok := plan.EnvSet["NO_PROXY"]; !ok {
+			plan.EnvSet["NO_PROXY"] = defaultNoProxy
+		}
+		if _, ok := plan.EnvSet["no_proxy"]; !ok {
+			plan.EnvSet["no_proxy"] = defaultNoProxy
 		}
 	}
 

@@ -42,7 +42,7 @@ Unknown keys are rejected. All fields are optional.
 
 ### Scalar fields
 
-`allow-unix-sockets`, `unrestricted-net` — applied only when the corresponding CLI flag was not explicitly set.
+`allow-unix-sockets`, `host-loopback`, `unrestricted-net` — applied only when the corresponding CLI flag was not explicitly set.
 
 ## Profiles
 

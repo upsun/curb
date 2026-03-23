@@ -126,8 +126,10 @@ Use -- before the command when it has its own flags.`,
 					parts = append(parts, "IPs: "+strings.Join(plan.AllowedIPs, ", "))
 				}
 				logger.Info("net: allowed %s.", strings.Join(parts, "; "))
+			} else if plan.ProxyEnabled && plan.HostLoopback {
+				logger.Info("net: host localhost only (--host-loopback).")
 			} else if plan.ProxyEnabled {
-				logger.Info("net: localhost only.")
+				logger.Info("net: sandbox-internal localhost only.")
 			} else {
 				logger.Info("net: disabled (no --domains or --ips).")
 			}
@@ -263,6 +265,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 	f.StringSlice("ips", nil, "allowed IP addresses or CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16, ::1)")
 	f.Bool("unrestricted-net", false, "allow unrestricted network access (no filtering)")
+	f.Bool("host-loopback", false, "forward localhost/127.0.0.1 traffic to the host loopback")
 
 	// Filesystem (supports glob patterns and ! exclusions).
 	f.StringSlice("read", nil, "readable paths (! prefix denies/hides, '!*' clears all)")

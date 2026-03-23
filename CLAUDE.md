@@ -35,7 +35,7 @@ go test ./sandbox/ -run TestCurb_FS_ -v  # run a subset
 - Landlock requires different access rights for files vs directories. `DefaultROFiles` and `DefaultROPaths` are separate. `splitDirsFiles()` in plan.go classifies user-added paths via `os.Stat()`.
 - `/etc` is not a blanket default. Only specific files/dirs are exposed (ssl, ca-certificates, ld.so, resolv.conf, hosts, passwd, etc.). Use `--read /etc` to restore full access.
 - `/proc` is safe as default RO: user namespace blocks ptrace-guarded access across namespace boundaries.
-- `--domains localhost` enables localhost forwarding (internally sets `AllowLocalhost` on the plan).
+- When the proxy is enabled, `NO_PROXY=localhost,127.0.0.1,::1` is set by default so sandbox-internal servers are reachable. `--host-loopback` suppresses this and forwards localhost traffic through the proxy to the host. User-provided `--env NO_PROXY=...` takes precedence.
 - `--ips` allows connections to specific IP addresses or CIDR ranges. Works alongside or independently of `--domains`. IP-matched connections bypass domain filtering (forwarded directly on any port via SOCKS5 or CONNECT). In IPs-only mode (no `--domains`), DNS queries are not intercepted.
 - `--unrestricted-net` skips network namespace creation entirely, allowing unrestricted network access while keeping FS sandboxing. Cannot be combined with `--domains` or `--ips`.
 - `--domains` validates input: rejects URLs (suggests bare domain), IP addresses (suggests `--ips`), invalid characters, and malformed wildcards. `--ips` validates that values parse as IP addresses or CIDR prefixes.

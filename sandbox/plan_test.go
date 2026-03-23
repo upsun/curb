@@ -277,24 +277,29 @@ func TestBuildPlan_ExecNotFound_Skipped(t *testing.T) {
 	}
 }
 
-func TestBuildPlan_AllowLocalhost(t *testing.T) {
-	cfg := &config.Config{AllowedDomains: []string{"localhost"}}
+func TestBuildPlan_HostLoopback(t *testing.T) {
+	cfg := &config.Config{HostLoopback: true}
 	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
-	assert.True(t, plan.AllowLocalhost)
+	assert.True(t, plan.HostLoopback)
+	assert.True(t, plan.ProxyEnabled)
+	// NO_PROXY should not be set when HostLoopback is true.
+	_, hasNoProxy := plan.EnvSet["NO_PROXY"]
+	assert.False(t, hasNoProxy)
 }
 
-func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
-	cfg := &config.Config{AllowedDomains: []string{"*"}}
+func TestBuildPlan_HostLoopbackWithDomains(t *testing.T) {
+	cfg := &config.Config{HostLoopback: true, AllowedDomains: []string{"github.com"}}
 	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
-	assert.True(t, plan.AllowLocalhost)
+	assert.True(t, plan.HostLoopback)
+	assert.True(t, plan.ProxyEnabled)
 }
 
 func TestBuildPlan_NoUserNS_LandlockAvailable(t *testing.T) {
@@ -383,24 +388,40 @@ func TestBuildPlan_UnrestrictedNet(t *testing.T) {
 	assert.False(t, plan.ProxyEnabled)
 }
 
-func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
+func TestBuildPlan_IPsWithoutHostLoopback(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"127.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
-	assert.True(t, plan.AllowLocalhost)
+	// HostLoopback is only set by --host-loopback, not by loopback IPs.
+	assert.False(t, plan.HostLoopback)
+	assert.True(t, plan.ProxyEnabled)
 }
 
-func TestBuildPlan_IPsNoLoopback(t *testing.T) {
-	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
+func TestBuildPlan_NoProxy_SetByDefault(t *testing.T) {
+	cfg := &config.Config{AllowedDomains: []string{"example.com"}}
 	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
-	assert.False(t, plan.AllowLocalhost)
+	assert.Equal(t, defaultNoProxy, plan.EnvSet["NO_PROXY"])
+	assert.Equal(t, defaultNoProxy, plan.EnvSet["no_proxy"])
+}
+
+func TestBuildPlan_NoProxy_UserOverride(t *testing.T) {
+	cfg := &config.Config{
+		AllowedDomains: []string{"example.com"},
+		EnvSet:         []string{"NO_PROXY=custom"},
+	}
+	plan, err := BuildPlan(cfg, minCaps(), nil)
+	if err != nil {
+		t.Skip("network namespaces not available:", err)
+	}
+	defer plan.Cleanup()
+	assert.Equal(t, "custom", plan.EnvSet["NO_PROXY"])
 }
 
 func TestBuildPlan_ChildConfig_AllowedIPs(t *testing.T) {
