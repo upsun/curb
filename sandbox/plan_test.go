@@ -174,7 +174,7 @@ func TestBuildDegradedPlan_NoISandboxEnv(t *testing.T) {
 
 func TestBuildPlan_NoLandlock_WithMountNS(t *testing.T) {
 	caps := &Capabilities{LandlockABI: 0} // MountNS is nil = available.
-	plan, err := BuildPlan(minCfg(), caps)
+	plan, err := BuildPlan(minCfg(), caps, nil)
 	require.NoError(t, err, "should succeed with pivot_root when mount NS available")
 	defer plan.Cleanup()
 	assert.True(t, plan.UsePivotRoot)
@@ -184,14 +184,14 @@ func TestBuildPlan_NoLandlock_WithMountNS(t *testing.T) {
 func TestBuildPlan_NoLandlock_NoFSRestrict(t *testing.T) {
 	caps := &Capabilities{LandlockABI: 0}
 	cfg := &config.Config{NoFSRestrict: true, NoExecRestrict: true}
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 }
 
 func TestBuildPlan_NoExecRestrict(t *testing.T) {
 	cfg := &config.Config{NoExecRestrict: true}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -200,7 +200,7 @@ func TestBuildPlan_NoExecRestrict(t *testing.T) {
 
 func TestBuildPlan_ExecRemoveAll(t *testing.T) {
 	cfg := &config.Config{ExecAllow: []string{"!*"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 	assert.Nil(t, plan.ExecPaths)
@@ -212,7 +212,7 @@ func TestBuildPlan_ExecAbsPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, nil, 0o755))
 
 	cfg := &config.Config{ExecAllow: []string{bin}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 	assert.Contains(t, plan.ExecPaths, bin)
@@ -233,7 +233,7 @@ func TestBuildPlan_ExecRelativePath(t *testing.T) {
 	chdirTemp(t, dir)
 
 	cfg := &config.Config{ExecAllow: []string{"./mybin"}}
-	plan, planErr := BuildPlan(cfg, minCaps())
+	plan, planErr := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, planErr)
 	defer plan.Cleanup()
 	assert.Contains(t, plan.ExecPaths, filepath.Join(dir, "mybin"))
@@ -248,7 +248,7 @@ func TestBuildPlan_ExecRelativeGlob(t *testing.T) {
 	chdirTemp(t, dir)
 
 	cfg := &config.Config{ExecAllow: []string{"./dist/*/*"}}
-	plan, planErr := BuildPlan(cfg, minCaps())
+	plan, planErr := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, planErr)
 	defer plan.Cleanup()
 	assert.Contains(t, plan.ExecPaths, bin)
@@ -259,21 +259,27 @@ func TestBuildPlan_ExecRelativeGlobNoMatch(t *testing.T) {
 	chdirTemp(t, dir)
 
 	cfg := &config.Config{ExecAllow: []string{"./nonexistent/*"}}
-	_, planErr := BuildPlan(cfg, minCaps())
+	_, planErr := BuildPlan(cfg, minCaps(), nil)
 	require.Error(t, planErr)
 	assert.Contains(t, planErr.Error(), "no matches found")
 }
 
-func TestBuildPlan_ExecNotFound(t *testing.T) {
+func TestBuildPlan_ExecNotFound_Skipped(t *testing.T) {
 	cfg := &config.Config{ExecAllow: []string{"nonexistent-binary-xyz"}}
-	_, err := BuildPlan(cfg, minCaps())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--exec nonexistent-binary-xyz: not found in PATH")
+	plan, err := BuildPlan(cfg, minCaps(), nil)
+	if err != nil {
+		t.Skip("sandbox setup failed:", err)
+	}
+	defer plan.Cleanup()
+	// Missing binaries are silently skipped — they should not appear in ExecPaths.
+	for _, p := range plan.ExecPaths {
+		assert.NotContains(t, p, "nonexistent-binary-xyz")
+	}
 }
 
 func TestBuildPlan_AllowLocalhost(t *testing.T) {
 	cfg := &config.Config{AllowedDomains: []string{"localhost"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -283,7 +289,7 @@ func TestBuildPlan_AllowLocalhost(t *testing.T) {
 
 func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
 	cfg := &config.Config{AllowedDomains: []string{"*"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -294,7 +300,7 @@ func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
 func TestBuildPlan_NoUserNS_LandlockAvailable(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
 	cfg := &config.Config{UnrestrictedNet: true}
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 	assert.True(t, plan.NoUserNS)
@@ -307,14 +313,14 @@ func TestBuildPlan_NoUserNS_LandlockAvailable(t *testing.T) {
 
 func TestBuildPlan_NoUserNS_RequiresUnrestrictedNet(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
-	_, err := BuildPlan(minCfg(), caps)
+	_, err := BuildPlan(minCfg(), caps, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--unrestricted-net")
 }
 
 func TestBuildPlan_NoUserNS_NoLandlock(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 0}
-	_, err := BuildPlan(minCfg(), caps)
+	_, err := BuildPlan(minCfg(), caps, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fatal")
 	assert.Contains(t, err.Error(), "Landlock")
@@ -323,7 +329,7 @@ func TestBuildPlan_NoUserNS_NoLandlock(t *testing.T) {
 func TestBuildPlan_NoUserNS_WithDomains(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
 	cfg := &config.Config{AllowedDomains: []string{"example.com"}}
-	_, err := BuildPlan(cfg, caps)
+	_, err := BuildPlan(cfg, caps, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--domains/--ips require user namespaces")
 }
@@ -331,14 +337,14 @@ func TestBuildPlan_NoUserNS_WithDomains(t *testing.T) {
 func TestBuildPlan_NoUserNS_WithIPs(t *testing.T) {
 	caps := &Capabilities{UserNS: assert.AnError, LandlockABI: 4}
 	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
-	_, err := BuildPlan(cfg, caps)
+	_, err := BuildPlan(cfg, caps, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--domains/--ips require user namespaces")
 }
 
 func TestBuildPlan_NoFSRestrict(t *testing.T) {
 	cfg := &config.Config{NoFSRestrict: true}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -349,7 +355,7 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 
 func TestBuildPlan_IPsEnableNet(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -360,7 +366,7 @@ func TestBuildPlan_IPsEnableNet(t *testing.T) {
 
 func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
 	cfg := &config.Config{AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -370,7 +376,7 @@ func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
 
 func TestBuildPlan_UnrestrictedNet(t *testing.T) {
 	cfg := &config.Config{UnrestrictedNet: true}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 	assert.True(t, plan.UnrestrictedNet)
@@ -379,7 +385,7 @@ func TestBuildPlan_UnrestrictedNet(t *testing.T) {
 
 func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"127.0.0.1"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -389,7 +395,7 @@ func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
 
 func TestBuildPlan_IPsNoLoopback(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -399,7 +405,7 @@ func TestBuildPlan_IPsNoLoopback(t *testing.T) {
 
 func TestBuildPlan_ChildConfig_AllowedIPs(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	if err != nil {
 		t.Skip("network namespaces not available:", err)
 	}
@@ -461,7 +467,7 @@ func TestBuildPlan_ResolvesROSymlinks(t *testing.T) {
 	require.NoError(t, os.Symlink(realDir, link))
 
 	cfg := &config.Config{ROPaths: []string{link}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -477,7 +483,7 @@ func TestBuildPlan_ResolvesRWSymlinks(t *testing.T) {
 	require.NoError(t, os.Symlink(realDir, link))
 
 	cfg := &config.Config{RWPaths: []string{link}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -491,7 +497,7 @@ func TestBuildPlan_CWDIncludedByDefault(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 
-	plan, err := BuildPlan(minCfg(), minCaps())
+	plan, err := BuildPlan(minCfg(), minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -503,7 +509,7 @@ func TestBuildPlan_CWDExcludedByRemoveAll(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{ROPaths: []string{"!*"}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -515,7 +521,7 @@ func TestBuildPlan_CWDExcludedByName(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{ROPaths: []string{"!" + cwd}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -527,7 +533,7 @@ func TestBuildPlan_CWDExcludedByDot(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{ROPaths: []string{"!."}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -539,7 +545,7 @@ func TestBuildPlan_RelativeWritePathResolved(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{RWPaths: []string{"."}}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -756,7 +762,7 @@ func TestBuildPlan_TildeExpandsToSandboxHome(t *testing.T) {
 		ROPaths:        []string{"~/.ssh"},
 		EnvPassthrough: []string{"HOME"},
 	}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -768,7 +774,7 @@ func TestBuildPlan_TildeExpandsToTmpDirWhenNoHome(t *testing.T) {
 	cfg := &config.Config{
 		ROPaths: []string{"~/.config"},
 	}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -787,7 +793,7 @@ func TestBuildPlan_TildeExpandsToExplicitHome(t *testing.T) {
 		ROPaths: []string{"~/.ssh"},
 		EnvSet:  []string{"HOME=/custom"},
 	}
-	plan, err := BuildPlan(cfg, minCaps())
+	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 )
 
@@ -18,12 +19,12 @@ func newPlanBuilder() PlanBuilder { return darwinPlanBuilder{} }
 // It reuses the same resolve* helpers as Linux but sets UseSeatbelt instead of
 // pivot_root/Landlock. All paths are canonicalized to resolve macOS symlinks
 // (e.g. /var -> /private/var, /etc -> /private/etc, /tmp -> /private/tmp).
-func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
+func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*SandboxPlan, error) {
 	if caps.Seatbelt != nil {
 		return nil, fmt.Errorf("fatal: sandbox-exec is required on macOS: %w", caps.Seatbelt)
 	}
 
-	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet}
+	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet, Logger: logger}
 	var removals planRemovals
 
 	// Create tmpDir first — needed for sandbox HOME fallback.
@@ -48,7 +49,7 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*San
 	if err := resolveFilesystem(plan, cfg, &removals, sandboxHome); err != nil {
 		return nil, err
 	}
-	if err := resolveExec(plan, cfg, &removals, sandboxHome); err != nil {
+	if err := resolveExec(plan, cfg, &removals, sandboxHome, logger); err != nil {
 		return nil, err
 	}
 	resolveNetwork(plan, cfg)

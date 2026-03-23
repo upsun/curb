@@ -38,7 +38,7 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 		DryRun:    true,
 	}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -60,7 +60,7 @@ func TestBuildPlan_NoLandlock_MountNSAvailable(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err, "mount NS available: should use pivot_root without landlock")
 	defer plan.Cleanup()
 	assert.True(t, plan.UsePivotRoot)
@@ -76,7 +76,7 @@ func TestBuildPlan_BothUnavailable_Fatal(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	_, err := BuildPlan(cfg, caps)
+	_, err := BuildPlan(cfg, caps, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mount namespaces and landlock both unavailable")
 }
@@ -90,7 +90,7 @@ func TestBuildPlan_NoMountNS_LandlockOnly(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -114,7 +114,7 @@ func TestBuildPlan_NoMountNS_SubpathDenialWarns(t *testing.T) {
 		ROPaths: []string{"/etc", "!/etc/shadow"},
 	}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err, "sub-path denials should warn, not error")
 	defer plan.Cleanup()
 	assert.Contains(t, plan.HiddenPaths, "/etc/shadow")
@@ -127,7 +127,7 @@ func TestBuildPlan_FatalUserNS(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	assert.Error(t, err)
 	assert.Nil(t, plan)
 	assert.Contains(t, err.Error(), "fatal")
@@ -143,7 +143,7 @@ func TestBuildPlan_FatalNetNS(t *testing.T) {
 		AllowedDomains: []string{"example.com"},
 	}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	assert.Error(t, err)
 	assert.Nil(t, plan)
 	assert.Contains(t, err.Error(), "fatal")
@@ -157,7 +157,7 @@ func TestBuildPlan_NetNotFatalWithoutAllow(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err, "net errors are not fatal without --domains/--ips")
 	defer plan.Cleanup()
 	assert.False(t, plan.ProxyEnabled)
@@ -173,7 +173,7 @@ func TestBuildPlan_EnvPolicy(t *testing.T) {
 		EnvPassthrough: []string{"GOPATH"},
 	}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -196,7 +196,7 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 		AllowedDomains: []string{"example.com"},
 	}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
@@ -228,7 +228,7 @@ func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 

@@ -100,12 +100,11 @@ Use -- before the command when it has its own flags.`,
 			if os.Getenv(sandbox.TestNoSeccompEnvKey) == "1" {
 				caps.Seccomp = false
 			}
-			plan, err := sandbox.BuildPlan(cfg, caps)
+			plan, err := sandbox.BuildPlan(cfg, caps, logger)
 			if err != nil {
 				return err
 			}
 			defer plan.Cleanup()
-			plan.Logger = logger
 
 			if cfg.DryRun {
 				plan.PrintDryRun(os.Stderr)

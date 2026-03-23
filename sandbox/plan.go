@@ -172,13 +172,13 @@ type planRemovals struct {
 // PlanBuilder creates a SandboxPlan from configuration and probed capabilities.
 // Each platform provides an implementation via newPlanBuilder() (build-tagged).
 type PlanBuilder interface {
-	BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error)
+	BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*SandboxPlan, error)
 }
 
 // BuildPlan resolves the sandbox enforcement plan from config and capabilities.
 // It delegates to the platform-specific PlanBuilder returned by newPlanBuilder().
-func BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
-	return newPlanBuilder().BuildPlan(cfg, caps)
+func BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*SandboxPlan, error) {
+	return newPlanBuilder().BuildPlan(cfg, caps, logger)
 }
 
 // resolveCapabilities validates system capabilities and selects enforcement layers.
@@ -367,7 +367,8 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 
 // resolveExec resolves exec path allowlists: parse exclusions, look up
 // binaries via PATH, resolve symlinks, and ensure exec dirs are readable.
-func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, sandboxHome string) error {
+// Binaries not found in PATH are silently skipped (logged at debug level).
+func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, sandboxHome string, logger *clog.Logger) error {
 	removals.noExecRestrict = cfg.NoExecRestrict
 	if cfg.NoExecRestrict {
 		plan.NoExecRestrict = true
@@ -403,10 +404,11 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 			plan.ExecPaths = append(plan.ExecPaths, resolved...)
 			plan.UserPaths = append(plan.UserPaths, resolved...)
 		} else if abs, lookErr := exec.LookPath(name); lookErr == nil {
+			logger.Debug("exec: %s -> %s", name, abs)
 			plan.ExecPaths = append(plan.ExecPaths, abs)
 			plan.UserPaths = append(plan.UserPaths, abs)
 		} else {
-			return fmt.Errorf("--exec %s: not found in PATH", name)
+			logger.Debug("exec: %s not found in PATH, skipping", name)
 		}
 	}
 	if len(cfg.Command) > 0 {

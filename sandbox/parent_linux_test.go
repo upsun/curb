@@ -987,14 +987,14 @@ func TestCurb_Exec_NoExecRestrict(t *testing.T) {
 	assert.Contains(t, string(out), "curb: info: exec: disabled (--exec '*').")
 }
 
-// TestCurb_Exec_NotFoundErrors verifies that --exec with an unknown name errors.
-func TestCurb_Exec_NotFoundErrors(t *testing.T) {
+// TestCurb_Exec_NotFoundSkipped verifies that --exec with an unknown name
+// is silently skipped (the command still runs).
+func TestCurb_Exec_NotFoundSkipped(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--exec", "nonexistent_tool_xyz", "--", "echo", "hello")
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "expected --exec with nonexistent tool to error: %s", string(out))
-	assert.Contains(t, string(out), "not found in PATH")
+	out, err := runOrRetryLandlockOnly(t, "--exec", "nonexistent_tool_xyz", "--", "echo", "hello")
+	require.NoError(t, err, "expected --exec with nonexistent tool to be skipped: %s", string(out))
+	assert.Contains(t, string(out), "hello")
 }
 
 // TestCurb_Exec_WritableDirNotExecutable verifies that a writable temp dir

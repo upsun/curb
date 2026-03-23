@@ -2,7 +2,10 @@
 
 package sandbox
 
-import "github.com/upsun/curb/config"
+import (
+	"github.com/upsun/curb/clog"
+	"github.com/upsun/curb/config"
+)
 
 // linuxPlanBuilder implements PlanBuilder using Linux namespaces, pivot_root,
 // Landlock, seccomp, and the MITM proxy for network filtering.
@@ -10,8 +13,8 @@ type linuxPlanBuilder struct{}
 
 func newPlanBuilder() PlanBuilder { return linuxPlanBuilder{} }
 
-func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
-	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet}
+func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*SandboxPlan, error) {
+	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet, Logger: logger}
 	var removals planRemovals
 
 	// Create tmpDir first — needed for sandbox HOME fallback.
@@ -32,7 +35,7 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*Sand
 	if err := resolveFilesystem(plan, cfg, &removals, sandboxHome); err != nil {
 		return nil, err
 	}
-	if err := resolveExec(plan, cfg, &removals, sandboxHome); err != nil {
+	if err := resolveExec(plan, cfg, &removals, sandboxHome, logger); err != nil {
 		return nil, err
 	}
 	resolveNetwork(plan, cfg)

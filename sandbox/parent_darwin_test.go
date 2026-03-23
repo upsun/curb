@@ -101,7 +101,7 @@ func TestSeatbelt_PlanBuilder(t *testing.T) {
 	cfg := &config.Config{
 		Command: []string{"/bin/echo", "test"},
 	}
-	plan, err := BuildPlan(cfg, caps)
+	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
