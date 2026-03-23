@@ -157,8 +157,7 @@ curb --env 'DATABASE_URL' -- ./migrate.sh
 |------|---------|-------------|
 | `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all, `localhost` for localhost forwarding. |
 | `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
-| `--proxy` | `CURB_PROXY` | MITM proxy mode: `on` (default) or `off`. |
-| `--tun` | `CURB_TUN` | TUN/TAP netstack: `auto` (default) or `always`. With `auto`, TUN is used only when `--proxy off`. |
+| `--tun` | `CURB_TUN` | Enable TUN/TAP netstack for defense-in-depth (DNS and HTTP filtering at the packet level). |
 | `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains` or `--ips`. |
 | `--allow-http` | `CURB_ALLOW_HTTP` | Allow plaintext HTTP (port 80) when domain filtering is active. |
 
@@ -233,7 +232,7 @@ Sub-path denials (`!` under an allowed parent) require mount namespace support. 
 macOS uses Apple's Seatbelt (`sandbox-exec`) for kernel-enforced filesystem and network restrictions. The same CLI flags work on macOS with these differences:
 
 - **No PID isolation** — macOS has no PID namespaces.
-- **No TUN/netstack** — `--tun` is ignored. `--proxy off` with `--domains` is an error.
+- **No TUN/netstack** — `--tun` is ignored on macOS.
 - **`--ips` without `--domains`** — works directly via Seatbelt IP rules (no proxy needed).
 - **`sandbox-exec` is marked deprecated** since macOS 10.7 but remains functional and is used by Codex, Homebrew, and Apple's own tools.
 
@@ -245,7 +244,7 @@ macOS uses Apple's Seatbelt (`sandbox-exec`) for kernel-enforced filesystem and 
 2. **User namespace** — the child runs as uid 0 in an isolated namespace (no host privileges).
 3. **Mount namespace + pivot_root** — a new root is built from bind-mounted allowed paths. Unmounted paths don't exist. `MS_RDONLY` and `MS_NOEXEC` enforce write and exec restrictions. Landlock layers on top for defense in depth.
 4. **Network namespace + MITM proxy** — the child gets isolated loopback only. An ephemeral CA and MITM proxy in the parent filter HTTP/HTTPS by domain, regardless of Encrypted Client Hello (ECH). Programs ignoring proxy settings get no network.
-5. **TUN/TAP + netstack** (optional, `--tun always`) — a userspace TCP/IP stack provides DNS and HTTP domain filtering; port 443 is blocked (use the proxy for HTTPS).
+5. **TUN/TAP + netstack** (optional, `--tun`) — a userspace TCP/IP stack provides DNS and HTTP domain filtering at the packet level; port 443 is blocked (use the proxy for HTTPS).
 
 ### macOS
 

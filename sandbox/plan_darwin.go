@@ -39,17 +39,12 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*San
 	plan.SandboxHome = sandboxHome
 	warnTildeToTmpDir(cfg, sandboxHome, tmpDir)
 
-	// Validate macOS-incompatible flag combinations.
 	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
-	if hasFiltering && cfg.ProxyMode == "off" && len(cfg.AllowedDomains) > 0 {
-		return nil, fmt.Errorf("--proxy off with --domains is not supported on macOS (no TUN/netstack fallback)")
-	}
-	if cfg.TUNMode == "always" {
+	if cfg.TUNEnabled {
 		clog.Warnf("--tun ignored on macOS (no TUN device support)")
 	}
 
-	// Proxy mode selection (macOS: proxy is the only network filter for HTTP/HTTPS).
-	plan.ProxyEnabled = hasFiltering && cfg.ProxyMode != "off"
+	plan.ProxyEnabled = hasFiltering
 
 	// Seatbelt enforcement.
 	plan.UseSeatbelt = true
@@ -62,7 +57,7 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*San
 		return nil, err
 	}
 	resolveNetwork(plan, cfg)
-	if err := resolveProxy(plan, cfg, caps); err != nil {
+	if err := resolveProxy(plan); err != nil {
 		return nil, err
 	}
 	if err := resolveEnv(plan, cfg); err != nil {

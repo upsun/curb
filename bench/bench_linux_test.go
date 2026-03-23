@@ -335,12 +335,12 @@ func BenchmarkHTTPSingle(b *testing.B) {
 		var rss rssTracker
 		for b.Loop() {
 			cmd := exec.Command(curbBin,
-				"--proxy", "off",
+				"--tun",
 				"--domains", "localhost",
 				"--allow-http",
 				"--write", "*",
 				"--exec", "*",
-				"--", curlBin, "-so", "/dev/null", url,
+				"--", curlBin, "--noproxy", "*", "-so", "/dev/null", url,
 			)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				b.Fatalf("curb: %v\n%s", err, out)
@@ -394,11 +394,11 @@ func BenchmarkHTTPBatch(b *testing.B) {
 	b.Run("curb-tun", func(b *testing.B) {
 		requireNetNS(b)
 		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
-		shCmd := curlLoop(httpBatchSize, fmt.Sprintf("-so /dev/null %s", url))
+		shCmd := curlLoop(httpBatchSize, fmt.Sprintf("--noproxy '*' -so /dev/null %s", url))
 		var rss rssTracker
 		for b.Loop() {
 			cmd := exec.Command(curbBin,
-				"--proxy", "off",
+				"--tun",
 				"--domains", "localhost",
 				"--allow-http",
 				"--write", "*",

@@ -110,30 +110,9 @@ func TestCurb_Proxy_DryRun(t *testing.T) {
 	outStr := string(out)
 	require.NoError(t, err, "dry-run failed: %s", outStr)
 
-	assert.Contains(t, outStr, "proxy:")
-	assert.Contains(t, outStr, "on (127.0.0.1:")
+	assert.Contains(t, outStr, "proxy:      127.0.0.1:")
 	assert.Contains(t, outStr, "ca cert:")
 	assert.Contains(t, outStr, "example.com")
-}
-
-// TestCurb_Proxy_ProxyOff verifies that --proxy off falls through to TUN requirement.
-func TestCurb_Proxy_ProxyOff(t *testing.T) {
-	requireUserNS(t)
-
-	// --proxy off with --domains needs TUN. If TUN is unavailable, should fail.
-	if testCaps.TUN() != nil {
-		cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "example.com", "--", "true")
-		err := cmd.Run()
-		require.Error(t, err, "--proxy off with --domains should fail without TUN")
-	} else {
-		// TUN is available: --proxy off should use netstack.
-		cmd := exec.Command(curbBin, "--proxy", "off", "--dry-run", "--domains", "example.com", "--", "echo")
-		out, err := cmd.CombinedOutput()
-		outStr := string(out)
-		require.NoError(t, err, "dry-run failed: %s", outStr)
-		assert.Contains(t, outStr, "proxy:      off")
-		assert.Contains(t, outStr, "tun:        auto (on)")
-	}
 }
 
 // TestCurb_Proxy_WildcardDomains tests that --domains '*' allows all HTTPS traffic through proxy.
@@ -149,12 +128,12 @@ func TestCurb_Proxy_WildcardDomains(t *testing.T) {
 	assert.Contains(t, outStr, "Example Domain")
 }
 
-// TestCurb_Proxy_TUNAlways_CurlAllowed tests proxy+TUN with --tun always.
-func TestCurb_Proxy_TUNAlways_CurlAllowed(t *testing.T) {
+// TestCurb_Proxy_TUN_CurlAllowed tests proxy+TUN with --tun.
+func TestCurb_Proxy_TUN_CurlAllowed(t *testing.T) {
 	requireNetNS(t)
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
-		"--tun", "always", "--domains", "example.com",
+		"--tun", "--domains", "example.com",
 		"--", "sh", "-c", "curl -sf --connect-timeout 10 https://example.com/ | head -c 200")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -162,29 +141,29 @@ func TestCurb_Proxy_TUNAlways_CurlAllowed(t *testing.T) {
 	assert.Contains(t, outStr, "Example Domain")
 }
 
-// TestCurb_Proxy_TUNAlways_DryRun verifies dry-run output with proxy+TUN.
-func TestCurb_Proxy_TUNAlways_DryRun(t *testing.T) {
+// TestCurb_Proxy_TUN_DryRun verifies dry-run output with proxy+TUN.
+func TestCurb_Proxy_TUN_DryRun(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--dry-run", "--tun", "always", "--domains", "example.com", "--", "echo")
+	cmd := exec.Command(curbBin, "--dry-run", "--tun", "--domains", "example.com", "--", "echo")
 	out, err := cmd.CombinedOutput()
 	outStr := string(out)
 	require.NoError(t, err, "dry-run failed: %s", outStr)
 
 	assert.Contains(t, outStr, "proxy:")
-	assert.Contains(t, outStr, "tun:        always")
+	assert.Contains(t, outStr, "tun:        on")
 }
 
-// TestCurb_Proxy_TUNAlways_TUNUnavailable tests that proxy works even when TUN is unavailable.
-func TestCurb_Proxy_TUNAlways_TUNUnavailable(t *testing.T) {
+// TestCurb_Proxy_TUN_Unavailable tests that proxy works even when TUN is unavailable.
+func TestCurb_Proxy_TUN_Unavailable(t *testing.T) {
 	requireProxyNS(t)
 	if testCaps.TUN() == nil {
 		t.Skip("TUN is available; this test requires TUN to be unavailable")
 	}
 
-	// --tun always but TUN is unavailable: should degrade to proxy-only with a warning.
+	// --tun but TUN is unavailable: should degrade to proxy-only with a warning.
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
-		"--tun", "always", "--domains", "example.com",
+		"--tun", "--domains", "example.com",
 		"--", "sh", "-c", "curl -sf --connect-timeout 10 https://example.com/ | head -c 200")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))

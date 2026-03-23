@@ -348,7 +348,7 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 // --- BuildPlan IPs + UnrestrictedNet ---
 
 func TestBuildPlan_IPsEnableNet(t *testing.T) {
-	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
+	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}, TUNEnabled: true}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)
@@ -359,7 +359,7 @@ func TestBuildPlan_IPsEnableNet(t *testing.T) {
 }
 
 func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
-	cfg := &config.Config{AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}, ProxyMode: "off"}
+	cfg := &config.Config{AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}, TUNEnabled: true}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
 		t.Skip("network namespaces or TUN not available:", err)

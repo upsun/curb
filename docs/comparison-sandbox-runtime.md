@@ -54,7 +54,7 @@ network.
 making domain filtering immune to Encrypted Client Hello (ECH). Connection
 file descriptors are passed from child to parent via SCM_RIGHTS over a
 socketpair (no socat). Programs that ignore proxy env vars get no network
-(empty namespace, loopback only). With `--tun always`, curb additionally
+(empty namespace, loopback only). With `--tun`, curb additionally
 creates a TAP device backed by a userspace TCP/IP stack (gvisor netstack),
 providing DNS and HTTP domain filtering for all programs regardless of
 proxy support. Port 443 is blocked at the TUN layer; HTTPS must go through
@@ -173,7 +173,7 @@ of those processes.
   additionally controls which binaries can execute.
 - **Network**: both use HTTP proxies for domain filtering. curb's MITM proxy
   terminates TLS, so filtering works regardless of ECH. srt adds SOCKS5 for non-HTTP TCP. curb
-  can add transparent packet-level filtering (`--tun always`). curb supports
+  can add transparent packet-level filtering (`--tun`). curb supports
   IP/CIDR filtering; srt does not.
 - **Seccomp**: both block AF_UNIX sockets via seccomp BPF. curb's filter is
   always-on with an opt-out (`--allow-unix-sockets`).

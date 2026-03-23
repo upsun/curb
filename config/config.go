@@ -22,8 +22,7 @@ type Config struct {
 	EnvPassthroughAll bool
 	AllowedIPs        []string
 	UnrestrictedNet   bool
-	ProxyMode         string // "on" or "off", default "on".
-	TUNMode           string // "auto" or "always", default "auto".
+	TUNEnabled        bool
 	NoFSRestrict      bool
 	NoExecRestrict    bool
 	AllowHTTP         bool
@@ -79,29 +78,12 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 			return nil, err
 		}
 	}
-	proxyMode, err := flags.GetString("proxy")
+	tunEnabled, err := flags.GetBool("tun")
 	if err != nil {
 		return nil, err
-	}
-	switch proxyMode {
-	case "on", "off":
-	default:
-		return nil, fmt.Errorf("--proxy must be on or off (got %q)", proxyMode)
-	}
-	tunMode, err := flags.GetString("tun")
-	if err != nil {
-		return nil, err
-	}
-	switch tunMode {
-	case "auto", "always":
-	default:
-		return nil, fmt.Errorf("--tun must be auto or always (got %q)", tunMode)
 	}
 	if unrestrictedNet && (len(allow) > 0 || len(ips) > 0) {
 		return nil, fmt.Errorf("--unrestricted-net cannot be combined with --domains or --ips")
-	}
-	if flags.Changed("proxy") && proxyMode == "on" && unrestrictedNet {
-		return nil, fmt.Errorf("--proxy on and --unrestricted-net are contradictory")
 	}
 
 	allowHTTP, err := flags.GetBool("allow-http")
@@ -139,8 +121,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		AllowedDomains:   allow,
 		AllowedIPs:       ips,
 		UnrestrictedNet:  unrestrictedNet,
-		ProxyMode:        proxyMode,
-		TUNMode:          tunMode,
+		TUNEnabled:       tunEnabled,
 		ROPaths:          ro,
 		RWPaths:          rw,
 		ExecAllow:        execAllow,
@@ -234,23 +215,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	mergeBoolEnv(flags, &cfg.Debug, "debug", "CURB_DEBUG")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
-	// Proxy/TUN mode: env only if flag not explicitly set.
-	if !flags.Changed("proxy") {
-		if val, ok := os.LookupEnv("CURB_PROXY"); ok {
-			switch val {
-			case "on", "off":
-				cfg.ProxyMode = val
-			}
-		}
-	}
-	if !flags.Changed("tun") {
-		if val, ok := os.LookupEnv("CURB_TUN"); ok {
-			switch val {
-			case "auto", "always":
-				cfg.TUNMode = val
-			}
-		}
-	}
+	mergeBoolEnv(flags, &cfg.TUNEnabled, "tun", "CURB_TUN")
 
 	if !flags.Changed("allow-http") {
 		if envBool("CURB_ALLOW_HTTP") {

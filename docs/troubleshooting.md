@@ -19,7 +19,7 @@ sudo sysctl --system
 
 ## /dev/net/tun not available
 
-`/dev/net/tun` is required for `--tun always` or `--proxy off --domains`. The default proxy mode (`--proxy on`) does not need `/dev/net/tun`.
+`/dev/net/tun` is required for `--tun`. Without `--tun`, the proxy provides domain filtering without needing `/dev/net/tun`.
 
 To create the device node (requires root):
 
@@ -45,7 +45,7 @@ To enable full sandboxing (network filtering, mount NS, PID isolation), add:
 docker run --security-opt seccomp=unconfined --security-opt apparmor=unconfined ...
 ```
 
-For TUN mode (`--tun always` or `--proxy off --domains`), also pass `--device /dev/net/tun`.
+For TUN mode (`--tun`), also pass `--device /dev/net/tun`.
 
 Docker containers share the host kernel, so Landlock support depends on the host (kernel 5.13+).
 

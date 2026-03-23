@@ -563,7 +563,7 @@ func probeNetworkForwarding() {
 		}
 	}()
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "localhost",
+	cmd := exec.Command(curbBin, "--tun", "--domains", "localhost",
 		"--write", "*", "--exec", "*", "--",
 		"curl", "-sf", "--connect-timeout", "3",
 		fmt.Sprintf("http://127.0.0.1:%d/", port))
@@ -950,7 +950,7 @@ func TestCurb_Net_LoopbackDNSRouted(t *testing.T) {
 	requireUserNS(t)
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "*", "--", "getent", "hosts", "example.com")
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "*", "--", "getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected DNS resolution to succeed: %s", string(out))
 	assert.NotEmpty(t, strings.TrimSpace(string(out)), "getent should return at least one address")
@@ -1158,8 +1158,8 @@ func TestCurb_Net_TCPForwarding(t *testing.T) {
 	// mount namespace support.
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "*", "--allow-http", "--write", "*", "--exec", "*", "--",
-		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
+	cmd := exec.Command(curbBin, "--tun", "--domains", "*", "--allow-http", "--write", "*", "--exec", "*", "--",
+		"sh", "-c", fmt.Sprintf("curl --noproxy '*' -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "curl through netstack failed: %s", outStr)
@@ -1174,8 +1174,8 @@ func TestCurb_Net_TLSBlockedAtTUN(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "*", "--write", "*", "--exec", "*", "-v", "--",
-		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 5 --resolve example.com:443:%s https://example.com/ 2>&1", ip))
+	cmd := exec.Command(curbBin, "--tun", "--domains", "*", "--write", "*", "--exec", "*", "-v", "--",
+		"sh", "-c", fmt.Sprintf("curl --noproxy '*' -s --connect-timeout 5 --resolve example.com:443:%s https://example.com/ 2>&1", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
 	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
@@ -1186,7 +1186,7 @@ func TestCurb_Net_TLSBlockedAtTUN(t *testing.T) {
 func TestCurb_Net_NoRawSocketEscape(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "*", "--write", "*", "--exec", "*", "--",
+	cmd := exec.Command(curbBin, "--tun", "--domains", "*", "--write", "*", "--exec", "*", "--",
 		"sh", "-c", "python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)' 2>&1; echo exit=$?")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -1221,7 +1221,7 @@ func resolveForTest(t *testing.T, host string) string {
 func TestCurb_DNS_AllowedDomainResolves(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "example.com", "--",
 		"getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1233,7 +1233,7 @@ func TestCurb_DNS_AllowedDomainResolves(t *testing.T) {
 func TestCurb_DNS_BlockedDomainFails(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "example.com", "--",
 		"getent", "hosts", "other.com")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected blocked domain DNS to fail: %s", string(out))
@@ -1243,7 +1243,7 @@ func TestCurb_DNS_BlockedDomainFails(t *testing.T) {
 func TestCurb_DNS_SubdomainViaWildcard(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "*.example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "*.example.com", "--",
 		"getent", "hosts", "www.example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1255,7 +1255,7 @@ func TestCurb_DNS_SubdomainViaWildcard(t *testing.T) {
 func TestCurb_DNS_BareBlocksSubdomain(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "example.com", "--",
 		"getent", "hosts", "www.example.com")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected subdomain to be blocked with bare domain pattern: %s", string(out))
@@ -1265,7 +1265,7 @@ func TestCurb_DNS_BareBlocksSubdomain(t *testing.T) {
 func TestCurb_DNS_WildcardAllows(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "*.example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "*.example.com", "--",
 		"getent", "hosts", "www.example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1277,7 +1277,7 @@ func TestCurb_DNS_WildcardAllows(t *testing.T) {
 func TestCurb_DNS_WildcardDoesNotMatchBare(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "*.example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "*.example.com", "--",
 		"getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected bare domain to be blocked with wildcard: %s", string(out))
@@ -1287,7 +1287,7 @@ func TestCurb_DNS_WildcardDoesNotMatchBare(t *testing.T) {
 func TestCurb_DNS_StarAllowsEverything(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "*", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "*", "--",
 		"getent", "hosts", "example.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1299,7 +1299,7 @@ func TestCurb_DNS_StarAllowsEverything(t *testing.T) {
 func TestCurb_DNS_BlockedLogMessage(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "-v", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "-v", "--domains", "example.com", "--",
 		"getent", "hosts", "blocked.test")
 	out, _ := cmd.CombinedOutput()
 	assert.Contains(t, string(out), "curb: dns_query blocked:", "expected blocked DNS log message")
@@ -1319,9 +1319,9 @@ func TestCurb_DNS_Bypass_DirectIP(t *testing.T) {
 	ip := resolveForTest(t, "example.com")
 
 	// Port 80 is blocked by default (no --allow-http), so direct HTTP gets RST.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "other-domain-not-example.test", "--",
-		"curl", "-sS", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
+		"curl", "--noproxy", "*", "-sS", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
 	assert.NotContains(t, filterCurbOutput(outStr), "Example Domain",
@@ -1342,9 +1342,9 @@ func TestCurb_TLS_Port443Blocked(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
-		"curl", "-s", "--connect-timeout", "5",
+		"curl", "--noproxy", "*", "-s", "--connect-timeout", "5",
 		"--resolve", fmt.Sprintf("example.com:443:%s", ip), "https://example.com/")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
@@ -1358,9 +1358,9 @@ func TestCurb_TLS_DirectIPBlocked(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "other.test", "--",
-		"curl", "-sk", "--connect-timeout", "5", fmt.Sprintf("https://%s/", ip))
+		"curl", "--noproxy", "*", "-sk", "--connect-timeout", "5", fmt.Sprintf("https://%s/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
 	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
@@ -1373,9 +1373,9 @@ func TestCurb_TLS_PlaintextOn443Blocked(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
-		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s:443/", ip))
+		"curl", "--noproxy", "*", "-s", "--connect-timeout", "5", fmt.Sprintf("http://%s:443/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
 	assert.Contains(t, outStr, "curb: tcp_connect blocked:",
@@ -1390,9 +1390,9 @@ func TestCurb_HTTP_AllowedHostSucceeds(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--allow-http", "--",
-		"sh", "-c", fmt.Sprintf("curl -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
+		"sh", "-c", fmt.Sprintf("curl --noproxy '*' -s --connect-timeout 10 http://%s/ -H 'Host: example.com' | head -c 200", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "expected HTTP to allowed host to succeed: %s", outStr)
@@ -1405,9 +1405,9 @@ func TestCurb_HTTP_BlockedHostGets403(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "other.test", "--allow-http", "--",
-		"sh", "-c", fmt.Sprintf("curl -sI --connect-timeout 5 http://%s/ -H 'Host: blocked.com' | head -1", ip))
+		"sh", "-c", fmt.Sprintf("curl --noproxy '*' -sI --connect-timeout 5 http://%s/ -H 'Host: blocked.com' | head -1", ip))
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	// curl gets a 403 response, which is not an error exit code.
@@ -1421,9 +1421,9 @@ func TestCurb_HTTP_BlockedByDefault(t *testing.T) {
 
 	ip := resolveForTest(t, "example.com")
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
-		"curl", "-sS", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
+		"curl", "--noproxy", "*", "-sS", "--connect-timeout", "5", fmt.Sprintf("http://%s/", ip), "-H", "Host: example.com")
 	out, _ := cmd.CombinedOutput()
 	outStr := string(out)
 	assert.NotContains(t, filterCurbOutput(outStr), "Example Domain",
@@ -1451,7 +1451,7 @@ print(data.decode('utf-8', errors='replace')[:200])
 s.close()
 "`, ip)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--allow-http", "--",
 		"sh", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1470,9 +1470,9 @@ func TestCurb_Net_NonStandardPortDropped(t *testing.T) {
 
 	// Try to connect on port 8080 (non-standard). The netstack sends RST,
 	// so connect() fails with "connection refused".
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
-		"curl", "-s", "--connect-timeout", "3", fmt.Sprintf("http://%s:8080/", ip))
+		"curl", "--noproxy", "*", "-s", "--connect-timeout", "3", fmt.Sprintf("http://%s:8080/", ip))
 	out, _ := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	assert.NotContains(t, outStr, "Example Domain",
@@ -1500,7 +1500,7 @@ except Exception as e:
     print('ERROR: ' + str(e))
 s.close()
 "`, ip)
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"sh", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1526,7 +1526,7 @@ except socket.timeout:
     print('TIMEOUT')
 s.close()
 "`
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"sh", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1540,9 +1540,9 @@ func TestCurb_Net_WildcardAllowsHTTP(t *testing.T) {
 	requireNetNS(t)
 	requireExternalHTTP(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "*", "--allow-http", "--",
-		"sh", "-c", "curl -sI --connect-timeout 10 http://example.com/ | head -1")
+		"sh", "-c", "curl --noproxy '*' -sI --connect-timeout 10 http://example.com/ | head -1")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "expected wildcard to allow HTTP: %s", outStr)
@@ -1558,7 +1558,7 @@ func TestCurb_DNS_Bypass_TCPPort53(t *testing.T) {
 	// Use dig with +tcp to force DNS over TCP.
 	// Allow only "only-this-domain.test", then query a real domain over TCP.
 	// If the TCP forwarder does not filter port 53, we get a real answer.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "only-this-domain.test", "--",
 		"dig", "+tcp", "+short", "+time=5", "+tries=1", "example.com", "@127.0.0.53")
 	out, err := cmd.CombinedOutput()
@@ -1582,7 +1582,7 @@ func TestCurb_DNS_Bypass_TCPPort53(t *testing.T) {
 func TestCurb_DNS_TCPAllowedDomainWorks(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"dig", "+tcp", "+short", "+time=5", "+tries=1", "example.com", "@127.0.0.53")
 	out, err := cmd.CombinedOutput()
@@ -1609,7 +1609,7 @@ func TestCurb_DNS_Bypass_MixedCaseQuery(t *testing.T) {
 
 	// Allow "example.com" (lowercase), query "EVIL.COM" in uppercase.
 	// The filter should still block it.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "EVIL.COM")
 	out, err := cmd.CombinedOutput()
 	outStr := string(out)
@@ -1646,7 +1646,7 @@ except socket.timeout:
 except Exception as e:
     print(f'ERROR {e}')
 `
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1708,7 +1708,7 @@ except socket.timeout:
 except Exception as e:
     print(f'ERROR {e}')
 `
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1731,7 +1731,7 @@ func TestCurb_DNS_Bypass_TrailingDot(t *testing.T) {
 	requireNetNS(t)
 
 	// Query "evil.com." (with trailing dot) when only "example.com" is allowed.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "evil.com.")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1778,7 +1778,7 @@ func TestCurb_DNS_Bypass_NullByteInDomain(t *testing.T) {
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o644))
 
 	// Bare domains are exact-only, so "evil\000.example.com" should NOT match "example.com".
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"python3", scriptPath)
 	out, _ := cmd.CombinedOutput()
@@ -1797,7 +1797,7 @@ func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
 
 	// PTR query for 8.8.8.8 → 8.8.8.8.in-addr.arpa.
 	// This should be blocked since "8.8.8.8.in-addr.arpa" is not in the allowlist.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "-x", "8.8.8.8")
 	out, err := cmd.CombinedOutput()
@@ -1818,7 +1818,7 @@ func TestCurb_DNS_Bypass_PTRQuery(t *testing.T) {
 func TestCurb_DNS_Bypass_ANYQuery(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*", "-v",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*", "-v",
 		"--domains", "example.com", "--",
 		"dig", "+notcp", "+time=3", "+tries=1", "evil.com", "ANY")
 	out, _ := cmd.CombinedOutput()
@@ -1855,7 +1855,7 @@ print('GARBAGE_SENT')
 
 	// Send garbage to port 53, then do a legitimate query to prove
 	// the filter is still functional.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"sh", "-c", fmt.Sprintf("python3 %s && getent hosts example.com", scriptPath))
 	out, err := cmd.CombinedOutput()
@@ -1910,7 +1910,7 @@ except socket.timeout:
 except Exception as e:
     print(f'ERROR {e}')
 `
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1953,7 +1953,7 @@ except socket.timeout:
 except Exception as e:
     print(f'ERROR {e}')
 `
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -1970,7 +1970,7 @@ except Exception as e:
 func TestCurb_DNS_Bypass_SubdomainOfBlockedViaAllowed(t *testing.T) {
 	requireNetNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "-v", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "-v", "--domains", "example.com", "--",
 		"dig", "+short", "+time=3", "+tries=1", "example.com.evil.com")
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
@@ -1994,7 +1994,7 @@ func TestCurb_DNS_Bypass_NonStandardPort(t *testing.T) {
 	// The DNS filter only intercepts UDP:53, so this would bypass it.
 	// However, without a server listening on 5353, this will simply fail.
 	// The test documents that non-53 DNS is out of scope for WP08.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"dig", "+short", "+time=2", "+tries=1", "evil.com", "@127.0.0.53", "-p", "5353")
 	out, _ := cmd.CombinedOutput()
@@ -2014,7 +2014,7 @@ func TestCurb_DNS_Bypass_AllowedDomainThenBlockedQuery(t *testing.T) {
 	requireNetNS(t)
 
 	// First resolve an allowed domain, then immediately try a blocked one.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--domains", "example.com", "--",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--domains", "example.com", "--",
 		"sh", "-c", "getent hosts example.com >/dev/null 2>&1 && getent hosts evil.com 2>&1")
 	out, err := cmd.CombinedOutput()
 
@@ -2064,7 +2064,7 @@ for _ in range(10):
 print(f'refused={refused_count}/10')
 sock.close()
 `
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--",
 		"python3", "-c", script)
 	out, _ := cmd.CombinedOutput()
@@ -2098,7 +2098,7 @@ func TestCurb_Net_LocalhostAllowed(t *testing.T) {
 		}
 	}()
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "*", "--allow-http", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://127.0.0.1:%d/", port))
 	out, err := cmd.CombinedOutput()
@@ -2129,7 +2129,7 @@ func TestCurb_Net_LocalhostBlocked(t *testing.T) {
 	}()
 
 	// Use a specific domain (not * or localhost) so localhost is not implied.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--allow-http", "--",
 		"curl", "-s", "--connect-timeout", "3", fmt.Sprintf("http://127.0.0.1:%d/", port))
 	out, _ := cmd.CombinedOutput()
@@ -2170,7 +2170,7 @@ print(data.decode())
 s.close()
 "`, port)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "localhost", "--",
 		"sh", "-c", script)
 	out, err := cmd.CombinedOutput()
@@ -2481,7 +2481,7 @@ func TestCurb_Net_IPsAllowsConnection(t *testing.T) {
 		}
 	}()
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--ips", "127.0.0.1", "--allow-http", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://127.0.0.1:%d/", port))
 	out, err := cmd.CombinedOutput()
@@ -2495,7 +2495,7 @@ func TestCurb_Net_IPsBlocksNonMatchingIP(t *testing.T) {
 	requireNetNS(t)
 
 	// Allow only 10.0.0.1, try to connect to 127.0.0.1.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--ips", "10.0.0.1", "--",
 		"sh", "-c", "curl -s --connect-timeout 3 http://127.0.0.1/ >/dev/null 2>&1")
 	err := cmd.Run()
@@ -2523,7 +2523,7 @@ func TestCurb_Net_IPsCIDR(t *testing.T) {
 		}
 	}()
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--ips", "127.0.0.0/8", "--allow-http", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://127.0.0.1:%d/", port))
 	out, err := cmd.CombinedOutput()
@@ -2554,7 +2554,7 @@ func TestCurb_Net_UnrestrictedNet(t *testing.T) {
 	}()
 
 	// No --domains or --ips needed; network access is unrestricted.
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--unrestricted-net", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://127.0.0.1:%d/", port))
 	out, err := cmd.CombinedOutput()
@@ -2601,7 +2601,7 @@ func TestCurb_Net_IPsWithDomains(t *testing.T) {
 		}
 	}()
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--write", "*", "--exec", "*",
+	cmd := exec.Command(curbBin, "--tun", "--write", "*", "--exec", "*",
 		"--domains", "example.com", "--ips", "127.0.0.1", "--allow-http", "--",
 		"curl", "-s", "--connect-timeout", "5", fmt.Sprintf("http://127.0.0.1:%d/", port))
 	out, err := cmd.CombinedOutput()
@@ -2614,7 +2614,7 @@ func TestCurb_Net_IPsWithDomains(t *testing.T) {
 func TestCurb_Net_ValidationRejectsIPInDomains(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "192.168.1.1", "--", "true")
+	cmd := exec.Command(curbBin, "--domains", "192.168.1.1", "--", "true")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected --domains with IP to fail: %s", string(out))
 	assert.Contains(t, string(out), "use --ips instead")
@@ -2624,7 +2624,7 @@ func TestCurb_Net_ValidationRejectsIPInDomains(t *testing.T) {
 func TestCurb_Net_ValidationRejectsURLInDomains(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--domains", "https://example.com", "--", "true")
+	cmd := exec.Command(curbBin, "--domains", "https://example.com", "--", "true")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected --domains with URL to fail: %s", string(out))
 	assert.Contains(t, string(out), "looks like a URL")
@@ -2634,7 +2634,7 @@ func TestCurb_Net_ValidationRejectsURLInDomains(t *testing.T) {
 func TestCurb_Net_UnrestrictedNetConflict(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--proxy", "off", "--unrestricted-net", "--domains", "example.com", "--", "true")
+	cmd := exec.Command(curbBin, "--unrestricted-net", "--domains", "example.com", "--", "true")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected conflict error: %s", string(out))
 	assert.Contains(t, string(out), "cannot be combined")
@@ -2757,7 +2757,7 @@ func main() {
 	buildOut, err := build.CombinedOutput()
 	require.NoError(t, err, "build helper: %s", string(buildOut))
 
-	// Run in default proxy mode (no --proxy off, no --unrestricted-net).
+	// Run in default proxy mode (no --tun, no --unrestricted-net).
 	cmd := exec.Command(curbBin,
 		"--domains", "localhost",
 		"--read", helperDir,

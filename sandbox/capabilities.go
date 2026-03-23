@@ -30,7 +30,7 @@ type Capabilities struct {
 
 // TUN returns the TUN probe result, running the probe on first call.
 // The probe spawns a child process in a user+net namespace (~13ms), so
-// it is deferred until actually needed (--tun always, --proxy off, or --dry-run).
+// it is deferred until actually needed (--tun or --dry-run).
 func (c *Capabilities) TUN() error {
 	c.tunOnce.Do(func() { c.tunErr = c.probeTUN() })
 	return c.tunErr
@@ -55,13 +55,3 @@ func netNSErrMessage() string {
 	return `Network namespaces are required for --domains but are not available.`
 }
 
-// tunDeviceErrMessage returns an error message when /dev/net/tun does not exist.
-func tunDeviceErrMessage() string {
-	return `/dev/net/tun is required for --domains but is not available.`
-}
-
-// tunIoctlErrMessage returns an error message when /dev/net/tun exists but
-// TUNSETIFF fails (e.g. AppArmor blocking CAP_NET_ADMIN in user namespaces).
-func tunIoctlErrMessage() string {
-	return `/dev/net/tun exists but TAP creation failed inside a user+network namespace.`
-}

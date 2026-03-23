@@ -36,7 +36,7 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*Sand
 		return nil, err
 	}
 	resolveNetwork(plan, cfg)
-	if err := resolveProxy(plan, cfg, caps); err != nil {
+	if err := resolveProxy(plan); err != nil {
 		return nil, err
 	}
 	if err := resolveEnv(plan, cfg); err != nil {

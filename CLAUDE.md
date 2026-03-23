@@ -32,7 +32,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 
 ## Key Design Decisions
 
-- MITM proxy (`--proxy on`, default) is the primary network filter for HTTP/HTTPS. It terminates TLS in the parent process, so domain filtering works regardless of Encrypted Client Hello (ECH). Programs respecting `HTTPS_PROXY` get filtered access; programs ignoring it get no network (empty net NS). TUN/TAP + netstack (`--tun always`) is an optional hardening layer that provides DNS and HTTP filtering; port 443 is blocked at the TUN layer (HTTPS must go through the proxy). With `--proxy off`, only DNS, HTTP, and IP-based filtering are available. This mirrors the FS model: mount NS is primary, Landlock hardens.
+- MITM proxy is the primary network filter for HTTP/HTTPS, always active when `--domains` or `--ips` are specified. It terminates TLS in the parent process, so domain filtering works regardless of Encrypted Client Hello (ECH). Programs respecting `HTTPS_PROXY` get filtered access; programs ignoring it get no network (empty net NS). TUN/TAP + netstack (`--tun`) is an optional hardening layer that provides DNS and HTTP filtering at the packet level; port 443 is blocked at the TUN layer (HTTPS must go through the proxy). If TUN is requested but unavailable, the proxy provides filtering alone (degraded warning). This mirrors the FS model: mount NS is primary, Landlock hardens.
 - An ephemeral ECDSA P-256 CA is generated per invocation. The combined CA bundle (system + ephemeral) is bind-mounted over the system CA path during pivot_root, and set via env vars (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, etc.).
 - In proxy-only mode, the child runs a TCP listener on loopback and relays accepted connection fds to the parent via SCM_RIGHTS over the existing socketpair. In proxy+TUN mode, the proxy is a real TCP listener in the parent, reachable via netstack's localhost forwarding.
 - Mount namespace (pivot_root) is the preferred FS enforcement: bind-mount allowed paths into a new root, pivot_root into it. Provides default-deny (ENOENT) and supports sub-path denials via overmount. Landlock layers on top when available for defense-in-depth. Landlock-only is a capable alternative (default-deny via EACCES) but cannot enforce sub-path denials (`!` exclusions under an allowed parent).
@@ -57,7 +57,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - Apple's Seatbelt (`sandbox-exec`) provides kernel-enforced FS and network restrictions via SBPL profiles. Marked "deprecated" since macOS 10.7 but still functional and used by Codex, Homebrew, and Apple's own tools.
 - No re-exec or namespaces. Seatbelt applies at spawn time: `sandbox-exec -p '<SBPL>' -- <command>`. The child and all descendants inherit the profile.
 - FS enforcement via SBPL `file-read*`/`file-write*` rules. Sub-path denials use `(deny ...)` which overrides `(allow ...)`. Move protection via `(deny file-write-unlink)` on ancestor directories.
-- Network: MITM proxy on loopback is the sole HTTP/HTTPS filter. `--proxy off` + `--domains` is an error (no TUN/netstack on macOS). `--ips` works directly via Seatbelt IP rules without proxy.
+- Network: MITM proxy on loopback is the sole HTTP/HTTPS filter (no TUN/netstack on macOS). `--ips` works directly via Seatbelt IP rules.
 - AF_UNIX socket blocking via `(deny network* (socket-domain AF_UNIX))` (Seatbelt, not seccomp).
 - Path canonicalization is critical: macOS has `/var` -> `/private/var`, `/etc` -> `/private/etc`, `/tmp` -> `/private/tmp`. All paths are resolved via `filepath.EvalSymlinks` before SBPL generation.
 - No PID isolation (macOS has no PID namespaces).
@@ -67,7 +67,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 
 - Integration tests in `sandbox/parent_linux_test.go` and `sandbox/proxy_test.go` build a `curb` binary and run it.
 - Tests that need namespaces call `requireUserNS(t)`, `requireNetNS(t)`, `requireProxyNS(t)`, `requirePivotRoot(t)`, etc. to skip gracefully.
-- Netstack-specific tests must use `--proxy off` to bypass the proxy (default is `--proxy on`).
+- Netstack-specific tests use `--tun` to enable TUN alongside the proxy. Tests that need to exercise the TUN path directly use `--noproxy '*'` with curl to bypass proxy env vars.
 - `_CURB_TEST_NO_LANDLOCK=1` disables Landlock to test the mount-NS-only path.
 - `_CURB_TEST_NO_MOUNT_NS=1` disables mount NS to test the Landlock-only path.
 - `_CURB_TEST_NO_SECCOMP=1` disables the seccomp AF_UNIX filter.

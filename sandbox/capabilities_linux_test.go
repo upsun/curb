@@ -150,7 +150,7 @@ func TestBuildPlan_FatalNetNS(t *testing.T) {
 	assert.Contains(t, err.Error(), "fatal")
 }
 
-func TestBuildPlan_FatalTUN(t *testing.T) {
+func TestBuildPlan_TUNUnavailable_Degrades(t *testing.T) {
 	caps := &Capabilities{
 		UserNS: nil,
 		NetNS:  nil,
@@ -158,13 +158,14 @@ func TestBuildPlan_FatalTUN(t *testing.T) {
 	caps.SetTUN(assert.AnError)
 	cfg := &config.Config{
 		AllowedDomains: []string{"example.com"},
-		ProxyMode:      "off", // Without proxy, TUN is required.
+		TUNEnabled:     true, // TUN requested but unavailable: proxy fallback.
 	}
 
 	plan, err := BuildPlan(cfg, caps)
-	assert.Error(t, err)
-	assert.Nil(t, plan)
-	assert.Contains(t, err.Error(), "/dev/net/tun")
+	require.NoError(t, err, "TUN unavailable should degrade, not fail (proxy provides fallback)")
+	defer plan.Cleanup()
+	assert.True(t, hasDegradedLayer(plan, "TUN/TAP hardening"))
+	assert.True(t, plan.ProxyEnabled, "proxy should still be active")
 }
 
 func TestBuildPlan_NetNotFatalWithoutAllow(t *testing.T) {

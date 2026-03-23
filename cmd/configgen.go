@@ -77,11 +77,8 @@ func printTemplate() {
 # Set HOME for the sandboxed process.
 # home: "~"
 
-# MITM proxy mode: on, off.
-# proxy: "on"
-
-# TUN/TAP netstack: auto, always.
-# tun: auto
+# TUN/TAP netstack for defense-in-depth.
+# tun: false
 
 # Allow plaintext HTTP when domain filtering is active.
 # allow-http: false

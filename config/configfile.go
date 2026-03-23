@@ -20,8 +20,7 @@ type ConfigFile struct {
 	Write            []string `yaml:"write"`
 	Exec             []string `yaml:"exec"`
 	Env              []string `yaml:"env"`
-	Proxy            *string  `yaml:"proxy"`
-	TUN              *string  `yaml:"tun"`
+	TUN              *bool    `yaml:"tun"`
 	AllowHTTP        *bool    `yaml:"allow-http"`
 	AllowUnixSockets *bool `yaml:"allow-unix-sockets"`
 	UnrestrictedNet  *bool `yaml:"unrestricted-net"`
@@ -112,11 +111,8 @@ func MergeConfigFile(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
 // Each field is applied only if the corresponding CLI flag was not
 // explicitly set. Used by both MergeConfigFile and MergeProfiles.
 func applyConfigScalars(cfg *Config, cf *ConfigFile, flags *pflag.FlagSet) {
-	if cf.Proxy != nil && !flags.Changed("proxy") {
-		cfg.ProxyMode = *cf.Proxy
-	}
 	if cf.TUN != nil && !flags.Changed("tun") {
-		cfg.TUNMode = *cf.TUN
+		cfg.TUNEnabled = *cf.TUN
 	}
 	if cf.AllowHTTP != nil && !flags.Changed("allow-http") {
 		cfg.AllowHTTP = *cf.AllowHTTP

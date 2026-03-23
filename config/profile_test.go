@@ -175,8 +175,7 @@ func TestMergeProfiles_ScalarsApplied(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "custom.yaml"), []byte(`
 domains:
   - example.com
-proxy: "off"
-tun: "always"
+tun: true
 `), 0o644))
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
@@ -188,49 +187,22 @@ tun: "always"
 	require.NoError(t, err)
 
 	assert.Contains(t, cfg.AllowedDomains, "example.com")
-	assert.Equal(t, "off", cfg.ProxyMode)
-	assert.Equal(t, "always", cfg.TUNMode)
+	assert.True(t, cfg.TUNEnabled)
 }
 
-func TestMergeProfiles_ScalarConflict(t *testing.T) {
+func TestMergeProfiles_BoolScalarAgreement(t *testing.T) {
 	dir := t.TempDir()
 	profileDir := filepath.Join(dir, "curb", "profiles")
 	require.NoError(t, os.MkdirAll(profileDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte(`
 domains:
   - a.com
-proxy: "off"
+tun: true
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte(`
 domains:
   - b.com
-proxy: "on"
-`), 0o644))
-	t.Setenv("XDG_CONFIG_HOME", dir)
-
-	cmd := newTestCmd(nil)
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "conflict")
-	assert.Contains(t, err.Error(), "proxy")
-}
-
-func TestMergeProfiles_ScalarAgreement(t *testing.T) {
-	dir := t.TempDir()
-	profileDir := filepath.Join(dir, "curb", "profiles")
-	require.NoError(t, os.MkdirAll(profileDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "a.yaml"), []byte(`
-domains:
-  - a.com
-proxy: "off"
-`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "b.yaml"), []byte(`
-domains:
-  - b.com
-proxy: "off"
+tun: true
 `), 0o644))
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
@@ -240,7 +212,7 @@ proxy: "off"
 
 	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
 	require.NoError(t, err)
-	assert.Equal(t, "off", cfg.ProxyMode)
+	assert.True(t, cfg.TUNEnabled)
 }
 
 func TestMergeProfiles_BoolNoConflict(t *testing.T) {
@@ -288,28 +260,28 @@ allow-http: false
 	assert.False(t, cfg.AllowHTTP)
 }
 
-func TestMergeProfiles_CLIWinsOverScalar(t *testing.T) {
+func TestMergeProfiles_ProfileScalarsApplied(t *testing.T) {
 	dir := t.TempDir()
 	profileDir := filepath.Join(dir, "curb", "profiles")
 	require.NoError(t, os.MkdirAll(profileDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "custom.yaml"), []byte(`
 domains:
   - a.com
-proxy: "off"
+tun: true
 allow-unix-sockets: true
 `), 0o644))
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cmd := newTestCmd([]string{"--proxy", "on"})
+	// CLI does not set --tun, so profile tun: true should apply.
+	// CLI does not set --allow-unix-sockets, so profile should apply.
+	cmd := newTestCmd(nil)
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
 	err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
 	require.NoError(t, err)
 
-	// CLI --proxy on should win over profile proxy: off.
-	assert.Equal(t, "on", cfg.ProxyMode)
-	// Boolean not set by CLI, so profile wins.
+	assert.True(t, cfg.TUNEnabled)
 	assert.True(t, cfg.AllowUnixSockets)
 }
 

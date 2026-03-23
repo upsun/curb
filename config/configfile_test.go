@@ -28,8 +28,7 @@ exec:
 env:
   - VIRTUAL_ENV
   - PIP_INDEX_URL
-proxy: "on"
-tun: auto
+tun: true
 allow-http: false
 unrestricted-net: false
 `), 0o644))
@@ -43,8 +42,7 @@ unrestricted-net: false
 	assert.Equal(t, []string{"."}, cf.Write)
 	assert.Equal(t, []string{"python3", "pip"}, cf.Exec)
 	assert.Equal(t, []string{"VIRTUAL_ENV", "PIP_INDEX_URL"}, cf.Env)
-	assert.Equal(t, new("on"), cf.Proxy)
-	assert.Equal(t, new("auto"), cf.TUN)
+	assert.Equal(t, new(true), cf.TUN)
 	assert.Equal(t, new(false), cf.AllowHTTP)
 	assert.Equal(t, new(false), cf.UnrestrictedNet)
 }
@@ -102,7 +100,6 @@ domains:
 	assert.Equal(t, []string{"example.com"}, cf.Domains)
 	assert.Nil(t, cf.IPs)
 	assert.Nil(t, cf.Read)
-	assert.Nil(t, cf.Proxy)
 }
 
 func TestLoadConfigFile_NotFound(t *testing.T) {
@@ -173,17 +170,17 @@ func TestMergeConfigFile_ListsPrepend(t *testing.T) {
 }
 
 func TestMergeConfigFile_ScalarsNotOverriddenByCLI(t *testing.T) {
-	cmd := newTestCmd([]string{"--proxy", "off"})
+	cmd := newTestCmd([]string{"--tun"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
-		Proxy: new("on"),
+		TUN: new(false),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
 	// CLI flags take precedence.
-	assert.Equal(t, "off", cfg.ProxyMode)
+	assert.True(t, cfg.TUNEnabled)
 }
 
 func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
@@ -192,14 +189,12 @@ func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
-		Proxy:     new("off"),
-		TUN:       new("always"),
+		TUN:       new(true),
 		AllowHTTP: new(true),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
-	assert.Equal(t, "off", cfg.ProxyMode)
-	assert.Equal(t, "always", cfg.TUNMode)
+	assert.True(t, cfg.TUNEnabled)
 	assert.True(t, cfg.AllowHTTP)
 }
 

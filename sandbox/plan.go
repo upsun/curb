@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -87,7 +86,6 @@ type SandboxPlan struct {
 	AllowUnixSockets bool
 	ProxyEnabled     bool
 	ProxyPort        int
-	TUNMode          string
 	CACertPath       string // Host path to combined CA bundle (in TempDir).
 	SystemCACertPath string // System CA file path to bind-mount over.
 	CA               *proxy.CA
@@ -214,21 +212,18 @@ func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabiliti
 	}
 
 	// Proxy and netstack mode selection.
-	plan.ProxyEnabled = hasFiltering && cfg.ProxyMode != "off"
-	needsNetstack := hasFiltering && !plan.ProxyEnabled
-	if cfg.TUNMode == "always" && hasFiltering && plan.ProxyEnabled && caps.TUN() == nil {
-		needsNetstack = true
-	}
-	if needsNetstack {
+	plan.ProxyEnabled = hasFiltering
+	if hasFiltering && cfg.TUNEnabled {
 		if tunErr := caps.TUN(); tunErr != nil {
-			msg := tunDeviceErrMessage()
-			if errors.Is(tunErr, errTUNIoctl) {
-				msg = tunIoctlErrMessage()
-			}
-			return fmt.Errorf("fatal: %w\n\n%s", tunErr, msg)
+			plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
+				Layer:  "TUN/TAP hardening",
+				Reason: tunErr.Error(),
+				Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
+			})
+		} else {
+			plan.NetEnabled = true
 		}
 	}
-	plan.NetEnabled = needsNetstack
 
 	// PID namespace.
 	if caps.PidNS == nil {
@@ -454,7 +449,6 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 	plan.UnrestrictedNet = cfg.UnrestrictedNet
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.AllowedIPs = cfg.AllowedIPs
-	plan.TUNMode = cfg.TUNMode
 	if !cfg.NoFSRestrict && plan.NetEnabled {
 		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
 		if dir := resolvConfDir(); dir != "" {
@@ -477,7 +471,7 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 
 // resolveProxy picks a proxy port, generates the ephemeral CA, and writes
 // the combined CA bundle.
-func resolveProxy(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
+func resolveProxy(plan *SandboxPlan) error {
 	if !plan.ProxyEnabled {
 		return nil
 	}
@@ -486,14 +480,6 @@ func resolveProxy(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) err
 		// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
 		plan.AllowLocalhost = true
 	}
-	if cfg.TUNMode == "always" && caps.TUN() != nil && !plan.NetEnabled && !plan.UseSeatbelt {
-		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-			Layer:  "TUN/TAP hardening",
-			Reason: caps.TUN().Error(),
-			Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
-		})
-	}
-
 	// CA generation.
 	ca, caErr := proxy.NewCA()
 	if caErr != nil {
@@ -684,15 +670,13 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		ln("    mode:       unrestricted (--unrestricted-net)")
 	} else {
 		if p.ProxyEnabled {
-			pr("    proxy:      on (127.0.0.1:%d)\n", p.ProxyPort)
-		} else {
-			ln("    proxy:      off")
+			pr("    proxy:      127.0.0.1:%d\n", p.ProxyPort)
 		}
-		tunStatus := "off"
 		if p.NetEnabled {
-			tunStatus = "on"
+			ln("    tun:        on")
+		} else {
+			ln("    tun:        off")
 		}
-		pr("    tun:        %s (%s)\n", p.TUNMode, tunStatus)
 		if p.CACertPath != "" {
 			pr("    ca cert:    %s\n", p.CACertPath)
 		}
@@ -702,7 +686,7 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		if len(p.AllowedIPs) > 0 {
 			pr("    IPs:        %s\n", strings.Join(p.AllowedIPs, ", "))
 		}
-		if !p.ProxyEnabled && !p.NetEnabled && len(p.AllowedDomains) == 0 && len(p.AllowedIPs) == 0 {
+		if !p.ProxyEnabled && len(p.AllowedDomains) == 0 && len(p.AllowedIPs) == 0 {
 			ln("    allowed:    none (no network interface)")
 		}
 		if p.AllowLocalhost {

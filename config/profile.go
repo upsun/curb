@@ -129,16 +129,10 @@ func loadProfileTree(name string, stack []string, loaded map[string]bool) ([]nam
 	return result, nil
 }
 
-// stringScalarOrigin tracks which profile first set a string scalar.
-type stringScalarOrigin struct {
-	profile string
-	value   string
-}
-
 // MergeProfiles loads and merges named profiles into cfg, including any
 // profiles they compose via the "profiles" field. List fields are appended.
-// Boolean scalars are OR'd (only true is meaningful). String scalars conflict
-// if two profiles set different values. CLI flags always take precedence.
+// Boolean scalars are OR'd (only true is meaningful). CLI flags always take
+// precedence.
 func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 	loaded := make(map[string]bool)
 	var ordered []namedProfile
@@ -150,37 +144,14 @@ func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 		ordered = append(ordered, tree...)
 	}
 
-	// Merge lists and collect scalars with conflict detection.
-	// String scalars from different profiles must agree; booleans are OR'd.
-	stringScalars := make(map[string]stringScalarOrigin)
+	// Merge lists and collect boolean scalars (OR'd).
 	merged := new(ConfigFile)
 
 	for _, np := range ordered {
 		mergeConfigLists(cfg, np.cf)
 
-		for _, sc := range []struct {
-			field string
-			src   *string
-			dst   **string
-		}{
-			{"proxy", np.cf.Proxy, &merged.Proxy},
-			{"tun", np.cf.TUN, &merged.TUN},
-		} {
-			if sc.src == nil {
-				continue
-			}
-			if prev, ok := stringScalars[sc.field]; ok {
-				if prev.value != *sc.src {
-					return fmt.Errorf("--profiles: profiles %q and %q conflict on %q: %q vs %q",
-						prev.profile, np.name, sc.field, prev.value, *sc.src)
-				}
-			} else {
-				stringScalars[sc.field] = stringScalarOrigin{profile: np.name, value: *sc.src}
-				*sc.dst = sc.src
-			}
-		}
-
 		// Booleans: only true is meaningful (false is the default).
+		orBool(&merged.TUN, np.cf.TUN)
 		orBool(&merged.AllowHTTP, np.cf.AllowHTTP)
 		orBool(&merged.AllowUnixSockets, np.cf.AllowUnixSockets)
 		orBool(&merged.UnrestrictedNet, np.cf.UnrestrictedNet)

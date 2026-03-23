@@ -263,8 +263,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 	f.StringSlice("ips", nil, "allowed IP addresses or CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16, ::1)")
 	f.Bool("unrestricted-net", false, "allow unrestricted network access (no filtering)")
-	f.String("proxy", "on", "MITM proxy for HTTP/HTTPS filtering: on, off")
-	f.String("tun", "auto", "TUN/TAP netstack layer: auto, always")
+	f.Bool("tun", false, "enable TUN/TAP netstack for defense-in-depth")
 
 	// Filesystem (supports glob patterns and ! exclusions).
 	f.StringSlice("read", nil, "readable paths (! prefix denies/hides, '!*' clears all)")
