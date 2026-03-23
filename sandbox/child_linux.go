@@ -13,7 +13,6 @@ import (
 
 	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/policy"
-	"golang.org/x/sys/unix"
 )
 
 // ChildInit is the entry point for the re-exec'd child process inside new namespaces.
@@ -36,20 +35,11 @@ func childInit() error {
 	}
 	_ = configFile.Close()
 
-	// Proxy-only mode: the child runs the accept loop and relays fds to the parent.
+	// Proxy mode: the child runs the accept loop and relays fds to the parent.
 	// This must happen before FS enforcement (needs lo interface up).
-	if cfg.ProxyEnabled && !cfg.NetEnabled {
+	if cfg.ProxyEnabled {
 		// Close sockFile after proxyRelayInit returns (it stays open for fd-passing).
 		return proxyRelayInit(sockFile, &cfg)
-	}
-
-	// Network setup: create TAP and send fd to parent before Landlock
-	// (Landlock would block /dev/net/tun access).
-	if cfg.NetEnabled {
-		if err := setupChildNetwork(sockFile, cfg.Quiet); err != nil {
-			_ = sockFile.Close()
-			return fmt.Errorf("network setup: %w", err)
-		}
 	}
 	_ = sockFile.Close()
 
@@ -206,35 +196,6 @@ func childWarn(quiet bool, format string, args ...any) {
 // prepareMountNS makes mount propagation slave so overmounts don't propagate to host.
 func prepareMountNS() error {
 	return syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_SLAVE, "")
-}
-
-// setupChildNetwork creates a TAP device, configures interfaces, sends the TAP
-// fd to the parent, and waits for a ready signal before continuing.
-func setupChildNetwork(sockFile *os.File, quiet bool) error {
-	tapFD, err := createTAP()
-	if err != nil {
-		return err
-	}
-	ifindex, err := configureInterfaces()
-	if err != nil {
-		_ = unix.Close(tapFD)
-		return err
-	}
-	if err := routeLoopback(ifindex); err != nil {
-		childWarn(quiet, "DNS and localhost services may not work (loopback routing failed).")
-	}
-	if err := SendFD(sockFile, tapFD, FDTagHTTP); err != nil {
-		_ = unix.Close(tapFD)
-		return fmt.Errorf("sending TAP fd: %w", err)
-	}
-	_ = unix.Close(tapFD)
-
-	// Wait for parent to signal that the netstack is ready.
-	readyBuf := make([]byte, 1)
-	if _, err := sockFile.Read(readyBuf); err != nil {
-		return fmt.Errorf("waiting for netstack ready: %w", err)
-	}
-	return nil
 }
 
 // findExecutable resolves a command name to an absolute path using the PATH from env.

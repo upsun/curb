@@ -28,7 +28,6 @@ func setupProxy(t *testing.T) (*Handler, *CA, *httptest.Server) {
 			IPCheck:     func(a netip.Addr) bool { return a == netip.MustParseAddr("93.184.215.14") },
 		},
 		CertCache: NewCertCache(ca),
-		AllowHTTP: true,
 	}
 	proxyServer := httptest.NewServer(h)
 	t.Cleanup(proxyServer.Close)
@@ -183,7 +182,6 @@ func TestHandler_HTTP_Allowed(t *testing.T) {
 			IPCheck:     func(a netip.Addr) bool { return true },
 		},
 		CertCache: NewCertCache(ca),
-		AllowHTTP: true,
 	}
 	proxyServer := httptest.NewServer(h)
 	defer proxyServer.Close()
@@ -197,30 +195,6 @@ func TestHandler_HTTP_Allowed(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, "http ok", string(body))
-}
-
-func TestHandler_HTTP_Disabled(t *testing.T) {
-	ca, err := NewCA()
-	require.NoError(t, err)
-
-	h := &Handler{
-		FilterBase: FilterBase{
-			DomainCheck: func(d string) bool { return true },
-		},
-		CertCache: NewCertCache(ca),
-		AllowHTTP: false,
-	}
-	proxyServer := httptest.NewServer(h)
-	defer proxyServer.Close()
-
-	proxyURL, _ := url.Parse(proxyServer.URL)
-	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
-	client := &http.Client{Transport: transport}
-
-	resp, err := client.Get("http://example.com/")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestConnListener(t *testing.T) {

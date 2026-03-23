@@ -12,8 +12,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/upsun/curb/netstack"
-	"github.com/upsun/curb/policy"
 	"github.com/upsun/curb/proxy"
 )
 
@@ -75,10 +73,9 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	if plan.UsePivotRoot {
 		cloneFlags |= syscall.CLONE_NEWNS
 	}
-	// PID namespace: skip for proxy-only mode where the child's initLoop
+	// PID namespace: skip when proxy is enabled because the child's initLoop
 	// handles fork+exec (PID 1 must be the Go runtime for the accept loop).
-	proxyOnly := plan.ProxyEnabled && !plan.NetEnabled
-	usePidNS := plan.PidNS && !proxyOnly
+	usePidNS := plan.PidNS && !plan.ProxyEnabled
 	if usePidNS {
 		cloneFlags |= syscall.CLONE_NEWPID
 	}
@@ -130,70 +127,28 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	if plan.ProxyEnabled {
 		handler := buildProxyHandler(plan)
 
-		if !plan.NetEnabled {
-			// Proxy-only: ConnListeners fed by recvFDLoop.
-			httpAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
-			httpCL := proxy.NewConnListener(httpAddr)
-			res.push(func() { _ = httpCL.Close() })
-			proxySrv = startProxyServer(httpCL, handler)
+		// ConnListeners fed by recvFDLoop (child relays accepted fds to parent).
+		httpAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
+		httpCL := proxy.NewConnListener(httpAddr)
+		res.push(func() { _ = httpCL.Close() })
+		proxySrv = startProxyServer(httpCL, handler)
 
-			// SOCKS5 proxy: separate ConnListener dispatched by tag.
-			var socksCL *proxy.ConnListener
-			if plan.SOCKSPort > 0 {
-				socksAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.SOCKSPort}
-				socksCL = proxy.NewConnListener(socksAddr)
-				res.push(func() { _ = socksCL.Close() })
-				socksSrv := buildSOCKS5Server(plan)
-				go func() { _ = socksSrv.Serve(socksCL) }()
-			}
-
-			go recvFDLoop(sockParent, httpCL, socksCL)
-		} else {
-			// Proxy+TUN: real TCP listeners reachable via netstack localhost forwarding.
-			ln, lnErr := listenProxyPort(plan.ProxyPort)
-			if lnErr != nil {
-				abort()
-				return -1, fmt.Errorf("proxy listener: %w", lnErr)
-			}
-			res.push(func() { _ = ln.Close() })
-			proxySrv = startProxyServer(ln, handler)
-
-			if plan.SOCKSPort > 0 {
-				socksLn, socksErr := listenProxyPort(plan.SOCKSPort)
-				if socksErr != nil {
-					abort()
-					return -1, fmt.Errorf("socks5 listener: %w", socksErr)
-				}
-				res.push(func() { _ = socksLn.Close() })
-				socksSrv := buildSOCKS5Server(plan)
-				go func() { _ = socksSrv.Serve(socksLn) }()
-			}
+		// SOCKS5 proxy: separate ConnListener dispatched by tag.
+		var socksCL *proxy.ConnListener
+		if plan.SOCKSPort > 0 {
+			socksAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.SOCKSPort}
+			socksCL = proxy.NewConnListener(socksAddr)
+			res.push(func() { _ = socksCL.Close() })
+			socksSrv := buildSOCKS5Server(plan)
+			go func() { _ = socksSrv.Serve(socksCL) }()
 		}
+
+		go recvFDLoop(sockParent, httpCL, socksCL)
 		res.push(func() { _ = proxySrv.Close() })
 	}
 
-	// If network (TUN) is enabled, receive TAP fd, start netstack, signal child.
-	if plan.NetEnabled {
-		tapFD, _, recvErr := RecvFD(sockParent)
-		if recvErr != nil {
-			abort()
-			return -1, fmt.Errorf("receiving TAP fd: %w", recvErr)
-		}
-		filter := buildNetstackFilter(plan)
-		ns, recvErr := netstack.NewStack(tapFD, filter)
-		if recvErr != nil {
-			abort()
-			return -1, fmt.Errorf("creating netstack: %w", recvErr)
-		}
-		res.push(func() { ns.Close() })
-		if _, recvErr = sockParent.Write([]byte{0}); recvErr != nil {
-			abort()
-			return -1, fmt.Errorf("sending ready signal: %w", recvErr)
-		}
-	}
-
 	// Close socketpair parent end when not needed for proxy fd-passing.
-	if !plan.ProxyEnabled || plan.NetEnabled {
+	if !plan.ProxyEnabled {
 		_ = sockParent.Close()
 	}
 
@@ -247,36 +202,6 @@ func recvFDLoop(sock *os.File, httpCL, socksCL *proxy.ConnListener) {
 			_ = conn.Close()
 		}
 	}
-}
-
-// buildNetstackFilter constructs the netstack filter configuration from the plan.
-func buildNetstackFilter(plan *SandboxPlan) *netstack.FilterConfig {
-	if len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0 {
-		filter := &netstack.FilterConfig{
-			AllowHTTP:      plan.AllowHTTP,
-			AllowLocalhost: plan.AllowLocalhost,
-			Logger:         plan.Logger,
-		}
-		if len(plan.AllowedDomains) > 0 {
-			matcher := policy.NewDomainMatcher(plan.AllowedDomains)
-			filter.Check = matcher.Match
-		} else {
-			// IPs-only: deny all domain queries so DNS returns REFUSED.
-			filter.Check = func(string) bool { return false }
-		}
-		if len(plan.AllowedIPs) > 0 {
-			ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
-			filter.CheckIP = ipMatcher.Match
-		}
-		return filter
-	}
-	if plan.AllowLocalhost {
-		return &netstack.FilterConfig{
-			AllowLocalhost: true,
-			Logger:         plan.Logger,
-		}
-	}
-	return nil
 }
 
 // startLandlockOnly applies FS enforcement and exec's the target command

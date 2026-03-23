@@ -26,7 +26,7 @@ const (
 type Logger struct {
 	json    *slog.Logger // JSON logger for --log-file (nil if unset).
 	verbose bool         // --verbose: human-readable to stderr.
-	debug   bool         // --debug: detailed netstack/relay logging to stderr.
+	debug   bool         // --debug: detailed proxy/relay logging to stderr.
 	quiet   bool         // --quiet: suppress warnings.
 	color   bool         // Whether stderr supports color.
 	w       io.Writer    // Output writer (defaults to os.Stderr).
@@ -36,7 +36,7 @@ type Logger struct {
 
 // New creates a Logger. If logFile is non-empty, JSON events are written to
 // that file. If verbose is true, human-readable lines are written to stderr.
-// If debug is true, detailed netstack/relay logging is enabled (implies verbose).
+// If debug is true, detailed proxy/relay logging is enabled (implies verbose).
 // If quiet is true, warnings are suppressed.
 func New(logFile string, verbose, debug, quiet bool) (*Logger, error) {
 	l := &Logger{

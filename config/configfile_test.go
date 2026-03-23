@@ -28,8 +28,6 @@ exec:
 env:
   - VIRTUAL_ENV
   - PIP_INDEX_URL
-tun: true
-allow-http: false
 unrestricted-net: false
 `), 0o644))
 
@@ -42,8 +40,6 @@ unrestricted-net: false
 	assert.Equal(t, []string{"."}, cf.Write)
 	assert.Equal(t, []string{"python3", "pip"}, cf.Exec)
 	assert.Equal(t, []string{"VIRTUAL_ENV", "PIP_INDEX_URL"}, cf.Env)
-	assert.Equal(t, new(true), cf.TUN)
-	assert.Equal(t, new(false), cf.AllowHTTP)
 	assert.Equal(t, new(false), cf.UnrestrictedNet)
 }
 
@@ -170,17 +166,17 @@ func TestMergeConfigFile_ListsPrepend(t *testing.T) {
 }
 
 func TestMergeConfigFile_ScalarsNotOverriddenByCLI(t *testing.T) {
-	cmd := newTestCmd([]string{"--tun"})
+	cmd := newTestCmd([]string{"--allow-unix-sockets"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
-		TUN: new(false),
+		AllowUnixSockets: new(false),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
 	// CLI flags take precedence.
-	assert.True(t, cfg.TUNEnabled)
+	assert.True(t, cfg.AllowUnixSockets)
 }
 
 func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
@@ -189,13 +185,11 @@ func TestMergeConfigFile_ScalarsAppliedWhenNoFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
-		TUN:       new(true),
-		AllowHTTP: new(true),
+		AllowUnixSockets: new(true),
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
-	assert.True(t, cfg.TUNEnabled)
-	assert.True(t, cfg.AllowHTTP)
+	assert.True(t, cfg.AllowUnixSockets)
 }
 
 func TestMergeConfigFile_CLIExclusionRemovesConfigFileEntry(t *testing.T) {

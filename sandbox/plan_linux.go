@@ -5,7 +5,7 @@ package sandbox
 import "github.com/upsun/curb/config"
 
 // linuxPlanBuilder implements PlanBuilder using Linux namespaces, pivot_root,
-// Landlock, seccomp, and the MITM proxy / netstack for network filtering.
+// Landlock, seccomp, and the MITM proxy for network filtering.
 type linuxPlanBuilder struct{}
 
 func newPlanBuilder() PlanBuilder { return linuxPlanBuilder{} }

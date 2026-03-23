@@ -5,7 +5,6 @@ import (
 	"io"
 	"maps"
 	"math/rand/v2"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,12 +80,10 @@ type SandboxPlan struct {
 	UseSeatbelt      bool
 	PidNS            bool
 	NoUserNS         bool
-	NetEnabled       bool
 	UnrestrictedNet  bool
 	AllowedDomains   []string
 	AllowedIPs       []string
 	AllowLocalhost   bool
-	AllowHTTP        bool
 	AllowUnixSockets bool
 	ProxyEnabled     bool
 	ProxyPort        int
@@ -137,7 +134,6 @@ type ChildConfig struct {
 	UseLandlock       bool     `json:"use_landlock,omitempty"`
 	NoFSRestrict      bool     `json:"no_fs_restrict,omitempty"`
 	PidNS             bool     `json:"pid_ns,omitempty"`
-	NetEnabled        bool     `json:"net_enabled"`
 	ProxyEnabled      bool     `json:"proxy_enabled,omitempty"`
 	ProxyPort         int      `json:"proxy_port,omitempty"`
 	SOCKSPort         int      `json:"socks_port,omitempty"`
@@ -212,7 +208,7 @@ func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabiliti
 			Reason: caps.UserNS.Error(),
 			Impact: "No mount/network/PID namespaces: FS enforcement via Landlock only, network unrestricted.",
 		})
-		// Skip net/mount/PID/TUN capability checks (all require user NS).
+		// Skip net/mount/PID capability checks (all require user NS).
 		return nil
 	}
 	if hasFiltering {
@@ -221,19 +217,7 @@ func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabiliti
 		}
 	}
 
-	// Proxy and netstack mode selection.
 	plan.ProxyEnabled = hasFiltering
-	if hasFiltering && cfg.TUNEnabled {
-		if tunErr := caps.TUN(); tunErr != nil {
-			plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{
-				Layer:  "TUN/TAP hardening",
-				Reason: tunErr.Error(),
-				Impact: "TUN unavailable: proxy provides domain filtering but without netstack defense-in-depth.",
-			})
-		} else {
-			plan.NetEnabled = true
-		}
-	}
 
 	// PID namespace.
 	if caps.PidNS == nil {
@@ -459,12 +443,6 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 	plan.UnrestrictedNet = cfg.UnrestrictedNet
 	plan.AllowedDomains = cfg.AllowedDomains
 	plan.AllowedIPs = cfg.AllowedIPs
-	if !cfg.NoFSRestrict && plan.NetEnabled {
-		// Ensure /etc/resolv.conf's real path is readable for DNS resolution.
-		if dir := resolvConfDir(); dir != "" {
-			plan.ROPaths = append(plan.ROPaths, dir)
-		}
-	}
 	// Wildcard or "localhost" in allowed domains implies localhost access.
 	plan.AllowLocalhost = slices.Contains(cfg.AllowedDomains, "*") ||
 		slices.Contains(cfg.AllowedDomains, "localhost")
@@ -475,7 +453,6 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 			plan.AllowLocalhost = true
 		}
 	}
-	plan.AllowHTTP = cfg.AllowHTTP
 	plan.AllowUnixSockets = cfg.AllowUnixSockets
 }
 
@@ -488,10 +465,6 @@ func resolveProxy(plan *SandboxPlan) error {
 	plan.ProxyPort = pickProxyPort()
 	// Adjacent port in the isolated net NS — no collision possible.
 	plan.SOCKSPort = plan.ProxyPort + 1
-	if plan.NetEnabled {
-		// Proxy + TUN: force AllowLocalhost so the proxy is reachable via netstack.
-		plan.AllowLocalhost = true
-	}
 	// CA generation.
 	ca, caErr := proxy.NewCA()
 	if caErr != nil {
@@ -574,7 +547,6 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		UseLandlock:       p.UseLandlock,
 		NoFSRestrict:      p.NoFSRestrict,
 		PidNS:             p.PidNS,
-		NetEnabled:        p.NetEnabled,
 		ProxyEnabled:      p.ProxyEnabled,
 		ProxyPort:         p.ProxyPort,
 		SOCKSPort:         p.SOCKSPort,
@@ -664,7 +636,6 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		printCap(w, "mount namespaces", p.Caps.MountNS, "")
 		printCap(w, "PID namespaces", p.Caps.PidNS, "")
 		printCap(w, "network namespaces", p.Caps.NetNS, "")
-		printCap(w, "/dev/net/tun", p.Caps.TUN(), "")
 		if p.Caps.LandlockABI > 0 {
 			printCap(w, "landlock", nil, fmt.Sprintf("ABI v%d", p.Caps.LandlockABI))
 		} else {
@@ -713,11 +684,6 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 			}
 			pr("\n")
 		}
-		if p.NetEnabled {
-			ln("    tun:        on")
-		} else {
-			ln("    tun:        off")
-		}
 		if p.CACertPath != "" {
 			pr("    ca cert:    %s\n", p.CACertPath)
 		}
@@ -732,14 +698,6 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		}
 		if p.AllowLocalhost {
 			ln("    localhost:  forwarded to host")
-		}
-		if p.NetEnabled && len(p.AllowedDomains) > 0 {
-			ln("    tls (443):  blocked (use proxy)")
-			if p.AllowHTTP {
-				ln("    http (80):  Host filtered")
-			} else {
-				ln("    http (80):  blocked (use --allow-http to enable)")
-			}
 		}
 		ln("    blocked:    everything else")
 	}
@@ -1161,20 +1119,6 @@ func resolveSymlinks(paths []string) []string {
 	return result
 }
 
-// resolvConfDir returns the parent directory of /etc/resolv.conf's real path,
-// or "" if it's already under /etc or can't be resolved.
-func resolvConfDir() string {
-	real, err := filepath.EvalSymlinks("/etc/resolv.conf")
-	if err != nil {
-		return ""
-	}
-	dir := filepath.Dir(real)
-	if strings.HasPrefix(dir, "/etc") {
-		return "" // Already covered by default RO paths.
-	}
-	return dir
-}
-
 // buildDegradedPlan creates a plan for platforms where only environment
 // sanitization is available. Used by degradedPlanBuilder and tests.
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
@@ -1223,12 +1167,6 @@ func pickProxyPort() int {
 	// (nothing else is listening). The port is fixed at plan time so it can
 	// be passed to the child via ChildConfig.
 	return 49152 + rand.IntN(16384)
-}
-
-// listenProxyPort creates a TCP listener on the proxy port.
-// Used by the parent in proxy+TUN mode.
-func listenProxyPort(port int) (net.Listener, error) {
-	return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 }
 
 func printCap(w io.Writer, name string, err error, info string) {

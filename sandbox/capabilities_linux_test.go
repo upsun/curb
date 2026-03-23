@@ -32,7 +32,6 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 		Seccomp:     true,
 		KernelInfo:  "6.8.0-test",
 	}
-	caps.SetTUN(nil)
 	cfg := &config.Config{
 		ROPaths:   []string{"/extra"},
 		ExecAllow: []string{"/usr/bin/rg"},
@@ -49,7 +48,7 @@ func TestBuildPlan_FullCapabilities(t *testing.T) {
 	assert.Contains(t, plan.ROPaths, "/extra")
 	assert.Contains(t, plan.ExecPaths, "/usr/bin/rg")
 	assert.NotEmpty(t, plan.TempDir)
-	assert.False(t, plan.NetEnabled, "no --allow means no network")
+	assert.False(t, plan.ProxyEnabled, "no --domains/--ips means no proxy")
 }
 
 func TestBuildPlan_NoLandlock_MountNSAvailable(t *testing.T) {
@@ -150,37 +149,18 @@ func TestBuildPlan_FatalNetNS(t *testing.T) {
 	assert.Contains(t, err.Error(), "fatal")
 }
 
-func TestBuildPlan_TUNUnavailable_Degrades(t *testing.T) {
-	caps := &Capabilities{
-		UserNS: nil,
-		NetNS:  nil,
-	}
-	caps.SetTUN(assert.AnError)
-	cfg := &config.Config{
-		AllowedDomains: []string{"example.com"},
-		TUNEnabled:     true, // TUN requested but unavailable: proxy fallback.
-	}
-
-	plan, err := BuildPlan(cfg, caps)
-	require.NoError(t, err, "TUN unavailable should degrade, not fail (proxy provides fallback)")
-	defer plan.Cleanup()
-	assert.True(t, hasDegradedLayer(plan, "TUN/TAP hardening"))
-	assert.True(t, plan.ProxyEnabled, "proxy should still be active")
-}
-
 func TestBuildPlan_NetNotFatalWithoutAllow(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,
 		NetNS:       assert.AnError,
 		LandlockABI: 4,
 	}
-	caps.SetTUN(assert.AnError)
 	cfg := &config.Config{}
 
 	plan, err := BuildPlan(cfg, caps)
-	require.NoError(t, err, "net errors are not fatal without --allow")
+	require.NoError(t, err, "net errors are not fatal without --domains/--ips")
 	defer plan.Cleanup()
-	assert.False(t, plan.NetEnabled)
+	assert.False(t, plan.ProxyEnabled)
 }
 
 func TestBuildPlan_EnvPolicy(t *testing.T) {
@@ -212,7 +192,6 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 		Seccomp:     true,
 		KernelInfo:  "6.8.0-test",
 	}
-	caps.SetTUN(nil)
 	cfg := &config.Config{
 		AllowedDomains: []string{"example.com"},
 	}

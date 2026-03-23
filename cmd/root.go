@@ -19,7 +19,7 @@ func NewRootCmd() *cobra.Command {
 		Short: "Sandbox a process with filesystem, network, and environment restrictions",
 		Long: `curb runs a command inside an unprivileged sandbox with:
   - Filesystem restrictions (Landlock + mount namespace)
-  - Network filtering by domain (--domains) or IP (--ips) via userspace TCP/IP
+  - Network filtering by domain (--domains) or IP (--ips) via MITM proxy
   - Unrestricted network pass-through (--unrestricted-net) with FS sandbox only
   - Executable control (Landlock EXECUTE)
   - Environment sanitization (deny-by-default)
@@ -118,7 +118,7 @@ Use -- before the command when it has its own flags.`,
 			}
 			if plan.UnrestrictedNet {
 				logger.Info("net: unrestricted (--unrestricted-net).")
-			} else if (plan.NetEnabled || plan.ProxyEnabled) && (len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0) {
+			} else if plan.ProxyEnabled && (len(plan.AllowedDomains) > 0 || len(plan.AllowedIPs) > 0) {
 				var parts []string
 				if len(plan.AllowedDomains) > 0 {
 					parts = append(parts, "domains: "+strings.Join(plan.AllowedDomains, ", "))
@@ -127,7 +127,7 @@ Use -- before the command when it has its own flags.`,
 					parts = append(parts, "IPs: "+strings.Join(plan.AllowedIPs, ", "))
 				}
 				logger.Info("net: allowed %s.", strings.Join(parts, "; "))
-			} else if plan.NetEnabled || plan.ProxyEnabled {
+			} else if plan.ProxyEnabled {
 				logger.Info("net: localhost only.")
 			} else {
 				logger.Info("net: disabled (no --domains or --ips).")
@@ -264,7 +264,6 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
 	f.StringSlice("ips", nil, "allowed IP addresses or CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16, ::1)")
 	f.Bool("unrestricted-net", false, "allow unrestricted network access (no filtering)")
-	f.Bool("tun", false, "enable TUN/TAP netstack for defense-in-depth")
 
 	// Filesystem (supports glob patterns and ! exclusions).
 	f.StringSlice("read", nil, "readable paths (! prefix denies/hides, '!*' clears all)")
@@ -277,13 +276,12 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("env", nil, "env vars to pass/set (! prefix removes defaults, '*' for all)")
 
 	// Network options.
-	f.Bool("allow-http", false, "allow plaintext HTTP when domain filtering is active")
 	f.Bool("allow-unix-sockets", false, "allow AF_UNIX socket creation (needed for Docker, databases via socket)")
 
 	// Logging.
 	f.String("log-file", "", "write structured JSON logs to file (use with --domains '*' to discover needed domains, then: curb config-gen --from-log FILE)")
 	f.BoolP("verbose", "v", false, "verbose output")
-	f.Bool("debug", false, "detailed netstack/relay debug logging (implies -v)")
+	f.Bool("debug", false, "detailed proxy/relay debug logging (implies -v)")
 	f.BoolP("quiet", "q", false, "suppress warnings")
 
 	// Other.

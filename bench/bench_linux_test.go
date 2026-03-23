@@ -31,11 +31,6 @@ func TestMain(m *testing.M) {
 		sandbox.ChildInit()
 		os.Exit(sandbox.ExitSetupFailure)
 	}
-	if os.Getenv(sandbox.TUNProbeEnvKey) != "" {
-		sandbox.RunTUNProbe()
-		return
-	}
-
 	testCaps = sandbox.ProbeAll()
 
 	// Build curb binary.
@@ -81,14 +76,6 @@ func requireProxyNS(b *testing.B) {
 	requireUserNS(b)
 	if testCaps.NetNS != nil {
 		b.Skipf("network namespaces unavailable: %v", testCaps.NetNS)
-	}
-}
-
-func requireNetNS(b *testing.B) {
-	b.Helper()
-	requireProxyNS(b)
-	if testCaps.TUN() != nil {
-		b.Skipf("TUN/TAP unavailable: %v", testCaps.TUN())
 	}
 }
 
@@ -316,31 +303,9 @@ func BenchmarkHTTPSingle(b *testing.B) {
 		for b.Loop() {
 			cmd := exec.Command(curbBin,
 				"--domains", "localhost",
-				"--allow-http",
 				"--write", "*",
 				"--exec", "*",
 				"--", curlBin, "-so", "/dev/null", url,
-			)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				b.Fatalf("curb: %v\n%s", err, out)
-			}
-			rss.observe(cmd)
-		}
-		rss.report(b)
-	})
-
-	b.Run("curb-tun", func(b *testing.B) {
-		requireNetNS(b)
-		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
-		var rss rssTracker
-		for b.Loop() {
-			cmd := exec.Command(curbBin,
-				"--tun",
-				"--domains", "localhost",
-				"--allow-http",
-				"--write", "*",
-				"--exec", "*",
-				"--", curlBin, "--noproxy", "*", "-so", "/dev/null", url,
 			)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				b.Fatalf("curb: %v\n%s", err, out)
@@ -378,29 +343,6 @@ func BenchmarkHTTPBatch(b *testing.B) {
 		for b.Loop() {
 			cmd := exec.Command(curbBin,
 				"--domains", "localhost",
-				"--allow-http",
-				"--write", "*",
-				"--exec", "*",
-				"--", "sh", "-c", shCmd,
-			)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				b.Fatalf("curb: %v\n%s", err, out)
-			}
-			rss.observe(cmd)
-		}
-		rss.report(b)
-	})
-
-	b.Run("curb-tun", func(b *testing.B) {
-		requireNetNS(b)
-		url := fmt.Sprintf("http://127.0.0.1:%d/", port)
-		shCmd := curlLoop(httpBatchSize, fmt.Sprintf("--noproxy '*' -so /dev/null %s", url))
-		var rss rssTracker
-		for b.Loop() {
-			cmd := exec.Command(curbBin,
-				"--tun",
-				"--domains", "localhost",
-				"--allow-http",
 				"--write", "*",
 				"--exec", "*",
 				"--", "sh", "-c", shCmd,

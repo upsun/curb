@@ -79,7 +79,7 @@ profile curb %s{,-test} flags=(attach_disconnected) {
   umount,
   pivot_root,
 
-  # Network interface configuration and TAP device (--domains).
+  # Network interface configuration (loopback setup for --domains).
   capability net_admin,
   network,
 
@@ -92,7 +92,6 @@ profile curb %s{,-test} flags=(attach_disconnected) {
   # curb needs broad host file access for sandbox setup (bind mounts).
   # The sandboxed child is restricted by the namespace, not AppArmor.
   /** rwlkmix,
-  /dev/net/tun rw,
   /proc/** rw,
   /sys/** r,
 

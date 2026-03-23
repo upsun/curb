@@ -275,7 +275,7 @@ func TestBuildPlan_AllowLocalhost(t *testing.T) {
 	cfg := &config.Config{AllowedDomains: []string{"localhost"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
 	assert.True(t, plan.AllowLocalhost)
@@ -285,7 +285,7 @@ func TestBuildPlan_WildcardDomainAllowsLocalhost(t *testing.T) {
 	cfg := &config.Config{AllowedDomains: []string{"*"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
 	assert.True(t, plan.AllowLocalhost)
@@ -348,24 +348,24 @@ func TestBuildPlan_NoFSRestrict(t *testing.T) {
 // --- BuildPlan IPs + UnrestrictedNet ---
 
 func TestBuildPlan_IPsEnableNet(t *testing.T) {
-	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}, TUNEnabled: true}
+	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
-	assert.True(t, plan.NetEnabled)
+	assert.True(t, plan.ProxyEnabled)
 	assert.Equal(t, []string{"10.0.0.1"}, plan.AllowedIPs)
 }
 
 func TestBuildPlan_IPsAndDomainsEnableNet(t *testing.T) {
-	cfg := &config.Config{AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}, TUNEnabled: true}
+	cfg := &config.Config{AllowedDomains: []string{"example.com"}, AllowedIPs: []string{"10.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
-	assert.True(t, plan.NetEnabled)
+	assert.True(t, plan.ProxyEnabled)
 }
 
 func TestBuildPlan_UnrestrictedNet(t *testing.T) {
@@ -374,14 +374,14 @@ func TestBuildPlan_UnrestrictedNet(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 	assert.True(t, plan.UnrestrictedNet)
-	assert.False(t, plan.NetEnabled)
+	assert.False(t, plan.ProxyEnabled)
 }
 
 func TestBuildPlan_IPsLoopbackImpliesAllowLocalhost(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"127.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
 	assert.True(t, plan.AllowLocalhost)
@@ -391,7 +391,7 @@ func TestBuildPlan_IPsNoLoopback(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
 	assert.False(t, plan.AllowLocalhost)
@@ -401,7 +401,7 @@ func TestBuildPlan_ChildConfig_AllowedIPs(t *testing.T) {
 	cfg := &config.Config{AllowedIPs: []string{"10.0.0.1"}}
 	plan, err := BuildPlan(cfg, minCaps())
 	if err != nil {
-		t.Skip("network namespaces or TUN not available:", err)
+		t.Skip("network namespaces not available:", err)
 	}
 	defer plan.Cleanup()
 	cc := plan.childConfig()

@@ -17,20 +17,6 @@ echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.con
 sudo sysctl --system
 ```
 
-## /dev/net/tun not available
-
-`/dev/net/tun` is required for `--tun`. Without `--tun`, the proxy provides domain filtering without needing `/dev/net/tun`.
-
-To create the device node (requires root):
-
-```
-sudo mkdir -p /dev/net
-sudo mknod /dev/net/tun c 10 200
-sudo chmod 0666 /dev/net/tun
-```
-
-In containers, `/dev/net/tun` must be provided by the container runtime (e.g. `--device /dev/net/tun` in Docker/Podman). It is not in the [OCI default device list](https://github.com/opencontainers/runtime-spec/blob/main/config-linux.md).
-
 ## Running in Docker
 
 Docker's default seccomp profile blocks `CLONE_NEWUSER`, so curb can only use Landlock-only mode (FS sandboxing, no network filtering). Pass `--unrestricted-net` to acknowledge unrestricted network:
@@ -44,8 +30,6 @@ To enable full sandboxing (network filtering, mount NS, PID isolation), add:
 ```
 docker run --security-opt seccomp=unconfined --security-opt apparmor=unconfined ...
 ```
-
-For TUN mode (`--tun`), also pass `--device /dev/net/tun`.
 
 Docker containers share the host kernel, so Landlock support depends on the host (kernel 5.13+).
 
@@ -77,7 +61,7 @@ Edit `/etc/apparmor.d/unprivileged_userns` to comment out `audit deny capability
 # Mount operations (pivot_root enforcement).
 capability sys_admin,
 
-# TAP device for network filtering (--domains).
+# Network interface configuration (loopback setup for --domains).
 capability net_admin,
 
 # devpts nodes appear as disconnected paths in user namespaces.

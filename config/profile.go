@@ -151,8 +151,6 @@ func MergeProfiles(cfg *Config, names []string, flags *pflag.FlagSet) error {
 		mergeConfigLists(cfg, np.cf)
 
 		// Booleans: only true is meaningful (false is the default).
-		orBool(&merged.TUN, np.cf.TUN)
-		orBool(&merged.AllowHTTP, np.cf.AllowHTTP)
 		orBool(&merged.AllowUnixSockets, np.cf.AllowUnixSockets)
 		orBool(&merged.UnrestrictedNet, np.cf.UnrestrictedNet)
 	}

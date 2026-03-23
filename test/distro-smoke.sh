@@ -6,7 +6,6 @@
 # Usage:
 #   ./test/distro-smoke.sh                        # all distros (Landlock-only under Docker defaults)
 #   ./test/distro-smoke.sh alpine fedora           # specific distros
-#   CURB_TEST_TUN=1 ./test/distro-smoke.sh         # include TUN tests
 #   CURB_TEST_NO_SECCOMP=1 ./test/distro-smoke.sh  # relax seccomp (enables user NS)
 #   CURB_TEST_NO_APPARMOR=1 ./test/distro-smoke.sh # relax apparmor
 set -euo pipefail
@@ -43,10 +42,6 @@ echo "Building curb..."
 
 # Docker run flags.
 DOCKER_FLAGS=(--rm -v "$PROJECT_DIR/curb:/curb:ro")
-
-if [ "${CURB_TEST_TUN:-}" = "1" ]; then
-	DOCKER_FLAGS+=(--device /dev/net/tun)
-fi
 
 # Support both old CURB_TEST_RELAXED and new granular flags.
 if [ "${CURB_TEST_RELAXED:-}" = "1" ]; then

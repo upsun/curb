@@ -77,12 +77,6 @@ func printTemplate() {
 # Set HOME for the sandboxed process.
 # home: "~"
 
-# TUN/TAP netstack for defense-in-depth.
-# tun: false
-
-# Allow plaintext HTTP when domain filtering is active.
-# allow-http: false
-
 # Skip network namespace entirely.
 # unrestricted-net: false
 `)

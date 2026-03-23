@@ -18,7 +18,6 @@ func TestGenerateProfile_DefaultPath(t *testing.T) {
 	assert.Contains(t, profile, "capability net_admin,")
 	assert.Contains(t, profile, "capability mac_admin,")
 	assert.Contains(t, profile, "/** rwlkmix,")
-	assert.Contains(t, profile, "/dev/net/tun rw,")
 	assert.Contains(t, profile, "abi <abi/4.0>,")
 }
 

@@ -20,7 +20,6 @@ const (
 type Handler struct {
 	FilterBase
 	CertCache *CertCache
-	AllowHTTP bool
 }
 
 // ServeHTTP implements http.Handler.
@@ -100,12 +99,6 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 
 // handleHTTP forwards plain HTTP requests.
 func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	if !h.AllowHTTP {
-		http.Error(w, "curb: plain HTTP not allowed (use --allow-http)", http.StatusForbidden)
-		h.logEvent("proxy_http", r.Host, "blocked", "http-disabled")
-		return
-	}
-
 	host, port, err := splitHostPort(r.Host, "80")
 	if err != nil {
 		http.Error(w, "curb: bad host", http.StatusBadRequest)

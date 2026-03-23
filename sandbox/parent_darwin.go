@@ -4,11 +4,17 @@ package sandbox
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 )
+
+// listenProxyPort creates a TCP listener on the proxy port.
+func listenProxyPort(port int) (net.Listener, error) {
+	return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+}
 
 // StartSandbox on macOS generates an SBPL profile and spawns the child
 // process under sandbox-exec with Seatbelt enforcement.

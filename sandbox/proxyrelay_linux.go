@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// proxyRelayInit runs in the child process for proxy-only mode (no TUN/TAP).
+// proxyRelayInit runs in the child process for proxy mode.
 // It brings up loopback, starts TCP listeners for the HTTP and SOCKS5 proxies,
 // and relays accepted connection fds to the parent via the socketpair. The
 // target command is fork+exec'd (the Go runtime must stay alive for the accept

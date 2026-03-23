@@ -22,10 +22,8 @@ type Config struct {
 	EnvPassthroughAll bool
 	AllowedIPs        []string
 	UnrestrictedNet   bool
-	TUNEnabled        bool
 	NoFSRestrict      bool
 	NoExecRestrict    bool
-	AllowHTTP         bool
 	AllowUnixSockets  bool
 	LogFile           string
 	Verbose           bool
@@ -78,18 +76,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 			return nil, err
 		}
 	}
-	tunEnabled, err := flags.GetBool("tun")
-	if err != nil {
-		return nil, err
-	}
 	if unrestrictedNet && (len(allow) > 0 || len(ips) > 0) {
 		return nil, fmt.Errorf("--unrestricted-net cannot be combined with --domains or --ips")
 	}
 
-	allowHTTP, err := flags.GetBool("allow-http")
-	if err != nil {
-		return nil, err
-	}
 	allowUnixSockets, err := flags.GetBool("allow-unix-sockets")
 	if err != nil {
 		return nil, err
@@ -121,13 +111,11 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		AllowedDomains:   allow,
 		AllowedIPs:       ips,
 		UnrestrictedNet:  unrestrictedNet,
-		TUNEnabled:       tunEnabled,
 		ROPaths:          ro,
 		RWPaths:          rw,
 		ExecAllow:        execAllow,
 		EnvPassthrough:   passNames,
 		EnvSet:           setPairs,
-		AllowHTTP:        allowHTTP,
 		AllowUnixSockets: allowUnixSockets,
 		LogFile:          logFile,
 		Verbose:          verbose,
@@ -215,13 +203,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	mergeBoolEnv(flags, &cfg.Debug, "debug", "CURB_DEBUG")
 	mergeBoolEnv(flags, &cfg.Quiet, "quiet", "CURB_QUIET")
 
-	mergeBoolEnv(flags, &cfg.TUNEnabled, "tun", "CURB_TUN")
-
-	if !flags.Changed("allow-http") {
-		if envBool("CURB_ALLOW_HTTP") {
-			cfg.AllowHTTP = true
-		}
-	}
 	mergeBoolEnv(flags, &cfg.AllowUnixSockets, "allow-unix-sockets", "CURB_ALLOW_UNIX_SOCKETS")
 }
 

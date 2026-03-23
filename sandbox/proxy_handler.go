@@ -24,7 +24,6 @@ func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
 	return &proxy.Handler{
 		FilterBase: buildFilterBase(plan),
 		CertCache:  proxy.NewCertCache(plan.CA),
-		AllowHTTP:  plan.AllowHTTP,
 	}
 }
 

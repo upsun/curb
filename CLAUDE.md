@@ -8,8 +8,6 @@ go test ./...      # all tests; sandbox/ tests need Linux with user namespaces
 go test ./sandbox/ -run TestCurb_FS_ -v  # run a subset
 ```
 
-gvisor dependency must use the `go` branch (not `master`). The `master` branch has `.tmpl.s` files that break `go build`.
-
 ## Architecture
 
 - `config/` — Config struct (FromFlags, MergeEnv), defaults (platform-split: `defaults_linux.go`, `defaults_darwin.go`), exclusion helpers, config file loading, profiles
@@ -22,25 +20,24 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - `sandbox/child_linux.go` — ChildInit, enforcement dispatch via FSEnforcer (landlockEnforcer, fsEnforcers)
 - `sandbox/mountfs_linux.go` — enforceMountNS (pivot_root allowlist), buildMountPlan, pivotRootEnforcer
 - `sandbox/seatbelt_darwin.go` — generateSBPL (SBPL profile generation from SandboxPlan)
-- `sandbox/capabilities_linux.go` — ProbeAll (user/net/mount NS with mount ops test, TUN, Landlock ABI)
+- `sandbox/capabilities_linux.go` — ProbeAll (user/net/mount NS with mount ops test, Landlock ABI)
 - `sandbox/capabilities_darwin.go` — ProbeAll (Seatbelt probe, macOS version)
-- `sandbox/proxy_handler.go` — buildProxyHandler (shared by Linux and macOS parents)
-- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (works regardless of ECH): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing. CA bundle paths platform-split (`cabundle_linux.go`, `cabundle_darwin.go`).
-- `netstack/` — gvisor userspace TCP/IP (Linux only): DNS filtering, HTTP Host filtering, localhost forwarding. Port 443 is blocked (use proxy for HTTPS).
+- `sandbox/proxy_handler.go` — buildProxyHandler, buildSOCKS5Server (shared by Linux and macOS parents)
+- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (works regardless of ECH): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing. SOCKS5 proxy for non-HTTP TCP. CA bundle paths platform-split (`cabundle_linux.go`, `cabundle_darwin.go`).
 - `policy/` — DomainMatcher, IPMatcher, ValidateDomains/ValidateIPs, LandlockPaths, BuildLandlockRules
 - `cmd/root.go` — CLI flag registration
 
 ## Key Design Decisions
 
-- MITM proxy is the primary network filter for HTTP/HTTPS, always active when `--domains` or `--ips` are specified. It terminates TLS in the parent process, so domain filtering works regardless of Encrypted Client Hello (ECH). Programs respecting `HTTPS_PROXY` get filtered access; programs ignoring it get no network (empty net NS). TUN/TAP + netstack (`--tun`) is an optional hardening layer that provides DNS and HTTP filtering at the packet level; port 443 is blocked at the TUN layer (HTTPS must go through the proxy). If TUN is requested but unavailable, the proxy provides filtering alone (degraded warning). This mirrors the FS model: mount NS is primary, Landlock hardens.
+- MITM proxy is the sole network filter for HTTP/HTTPS, always active when `--domains` or `--ips` are specified. It terminates TLS in the parent process, so domain filtering works regardless of Encrypted Client Hello (ECH). Plain HTTP is also filtered via Host header inspection. Programs respecting proxy env vars get filtered access; programs ignoring them get no network (empty net NS). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via ProxyCommand).
 - An ephemeral ECDSA P-256 CA is generated per invocation. The combined CA bundle (system + ephemeral) is bind-mounted over the system CA path during pivot_root, and set via env vars (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, etc.).
-- In proxy-only mode, the child runs a TCP listener on loopback and relays accepted connection fds to the parent via SCM_RIGHTS over the existing socketpair. In proxy+TUN mode, the proxy is a real TCP listener in the parent, reachable via netstack's localhost forwarding.
+- The child runs TCP listeners on loopback and relays accepted connection fds to the parent via SCM_RIGHTS over a socketpair. FDs are tagged to dispatch to the correct proxy (HTTP or SOCKS5).
 - Mount namespace (pivot_root) is the preferred FS enforcement: bind-mount allowed paths into a new root, pivot_root into it. Provides default-deny (ENOENT) and supports sub-path denials via overmount. Landlock layers on top when available for defense-in-depth. Landlock-only is a capable alternative (default-deny via EACCES) but cannot enforce sub-path denials (`!` exclusions under an allowed parent).
 - Landlock requires different access rights for files vs directories. `DefaultROFiles` and `DefaultROPaths` are separate. `splitDirsFiles()` in plan.go classifies user-added paths via `os.Stat()`.
 - `/etc` is not a blanket default. Only specific files/dirs are exposed (ssl, ca-certificates, ld.so, resolv.conf, hosts, passwd, etc.). Use `--read /etc` to restore full access.
 - `/proc` is safe as default RO: user namespace blocks ptrace-guarded access across namespace boundaries.
 - `--domains localhost` enables localhost forwarding (internally sets `AllowLocalhost` on the plan).
-- `--ips` allows connections to specific IP addresses or CIDR ranges. Works alongside or independently of `--domains`. IP-matched connections bypass port restrictions and domain filtering (forwarded directly on any port). In IPs-only mode (no `--domains`), a deny-all DNS filter returns REFUSED immediately.
+- `--ips` allows connections to specific IP addresses or CIDR ranges. Works alongside or independently of `--domains`. IP-matched connections bypass domain filtering (forwarded directly on any port via SOCKS5 or CONNECT). In IPs-only mode (no `--domains`), DNS queries are not intercepted.
 - `--unrestricted-net` skips network namespace creation entirely, allowing unrestricted network access while keeping FS sandboxing. Cannot be combined with `--domains` or `--ips`.
 - `--domains` validates input: rejects URLs (suggests bare domain), IP addresses (suggests `--ips`), invalid characters, and malformed wildcards. `--ips` validates that values parse as IP addresses or CIDR prefixes.
 - `!` prefix in list flags removes from defaults AND actively denies via overmount when the path is under an allowed parent. `--read '!/path'` hides (tmpfs/dev-null), `--write '!/path'` makes read-only, `--exec '!/path'` makes noexec. `!*` clears all defaults (not deny-all). `\!` escapes literal `!`. Sub-path denials require mount NS; Landlock-only mode warns.
@@ -57,7 +54,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 - Apple's Seatbelt (`sandbox-exec`) provides kernel-enforced FS and network restrictions via SBPL profiles. Marked "deprecated" since macOS 10.7 but still functional and used by Codex, Homebrew, and Apple's own tools.
 - No re-exec or namespaces. Seatbelt applies at spawn time: `sandbox-exec -p '<SBPL>' -- <command>`. The child and all descendants inherit the profile.
 - FS enforcement via SBPL `file-read*`/`file-write*` rules. Sub-path denials use `(deny ...)` which overrides `(allow ...)`. Move protection via `(deny file-write-unlink)` on ancestor directories.
-- Network: MITM proxy on loopback is the sole HTTP/HTTPS filter (no TUN/netstack on macOS). `--ips` works directly via Seatbelt IP rules.
+- Network: MITM proxy on loopback is the sole HTTP/HTTPS filter. `--ips` works directly via Seatbelt IP rules.
 - AF_UNIX socket blocking via `(deny network* (socket-domain AF_UNIX))` (Seatbelt, not seccomp).
 - Path canonicalization is critical: macOS has `/var` -> `/private/var`, `/etc` -> `/private/etc`, `/tmp` -> `/private/tmp`. All paths are resolved via `filepath.EvalSymlinks` before SBPL generation.
 - No PID isolation (macOS has no PID namespaces).
@@ -66,8 +63,7 @@ gvisor dependency must use the `go` branch (not `master`). The `master` branch h
 ## Testing
 
 - Integration tests in `sandbox/parent_linux_test.go` and `sandbox/proxy_test.go` build a `curb` binary and run it.
-- Tests that need namespaces call `requireUserNS(t)`, `requireNetNS(t)`, `requireProxyNS(t)`, `requirePivotRoot(t)`, etc. to skip gracefully.
-- Netstack-specific tests use `--tun` to enable TUN alongside the proxy. Tests that need to exercise the TUN path directly use `--noproxy '*'` with curl to bypass proxy env vars.
+- Tests that need namespaces call `requireUserNS(t)`, `requireProxyNS(t)`, `requirePivotRoot(t)`, etc. to skip gracefully.
 - `_CURB_TEST_NO_LANDLOCK=1` disables Landlock to test the mount-NS-only path.
 - `_CURB_TEST_NO_MOUNT_NS=1` disables mount NS to test the Landlock-only path.
 - `_CURB_TEST_NO_SECCOMP=1` disables the seccomp AF_UNIX filter.

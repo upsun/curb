@@ -110,7 +110,6 @@ func BenchmarkHTTPSingle(b *testing.B) {
 	for b.Loop() {
 		cmd := exec.Command(curbBin,
 			"--domains", "localhost",
-			"--allow-http",
 			"--write", "*",
 			"--exec", "*",
 			"--", "sh", "-c", shCmd,
@@ -137,7 +136,6 @@ func BenchmarkHTTPBatch(b *testing.B) {
 	for b.Loop() {
 		cmd := exec.Command(curbBin,
 			"--domains", "localhost",
-			"--allow-http",
 			"--write", "*",
 			"--exec", "*",
 			"--", "sh", "-c", shCmd,

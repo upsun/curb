@@ -53,12 +53,9 @@ network.
 **curb** runs a MITM proxy that terminates TLS in the parent process,
 making domain filtering immune to Encrypted Client Hello (ECH). Connection
 file descriptors are passed from child to parent via SCM_RIGHTS over a
-socketpair (no socat). Programs that ignore proxy env vars get no network
-(empty namespace, loopback only). With `--tun`, curb additionally
-creates a TAP device backed by a userspace TCP/IP stack (gvisor netstack),
-providing DNS and HTTP domain filtering for all programs regardless of
-proxy support. Port 443 is blocked at the TUN layer; HTTPS must go through
-the proxy.
+socketpair (no socat). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via
+ProxyCommand). Programs that ignore proxy env vars get no network (empty
+namespace, loopback only).
 
 curb supports IP address and CIDR range filtering via `--ips` (e.g.
 `--ips 10.0.0.0/8`). srt filters by domain only. curb also supports
@@ -120,8 +117,8 @@ order: profiles (lowest) -> config file -> CLI flags -> env vars (highest).
 | ripgrep | (kernel syscalls) |
 | Pre-built seccomp binary | (kernel syscalls) |
 
-curb has no external runtime dependencies on Linux. Network filtering uses
-gvisor's netstack, compiled in. The seccomp filter is built in Go.
+curb has no external runtime dependencies on Linux. The seccomp filter is
+built in Go.
 
 ## Performance
 
@@ -131,11 +128,11 @@ Benchmarks run via `make bench` (see `bench/bench_linux_test.go`).
 
 End-to-end time including sandbox setup, command execution, and teardown.
 
-| Benchmark | curb (proxy) | curb (TUN) | srt (node) | srt (bun) |
-|---|---|---|---|---|
-| Boot (`true`) | ~13 ms | - | ~201 ms | ~104 ms |
-| HTTP single request | ~18 ms | ~66 ms | ~221 ms | ~117 ms |
-| HTTP batch (10 requests) | ~60 ms | ~112 ms | ~276 ms | ~181 ms |
+| Benchmark | curb | srt (node) | srt (bun) |
+|---|---|---|---|
+| Boot (`true`) | ~13 ms | ~201 ms | ~104 ms |
+| HTTP single request | ~18 ms | ~221 ms | ~117 ms |
+| HTTP batch (10 requests) | ~60 ms | ~276 ms | ~181 ms |
 
 The boot benchmark runs `/usr/bin/true` inside the sandbox, isolating
 setup/teardown overhead. curb's single-process architecture (re-exec via
@@ -145,22 +142,21 @@ against a local HTTP server with domain filtering enabled. srt is
 benchmarked under both Node.js and Bun to separate JS runtime overhead
 from sandboxing overhead.
 
-Subtracting boot time gives per-request overhead: curb proxy ~5 ms, curb
-TUN ~10 ms, srt (node) ~8 ms, srt (bun) ~8 ms. Boot is the dominant
-difference for short-lived commands. Bun halves srt's boot time but
-per-request overhead is similar. For long-running processes, performance
-converges.
+Subtracting boot time gives per-request overhead: curb ~5 ms, srt ~8 ms.
+Boot is the dominant difference for short-lived commands. Bun halves srt's
+boot time but per-request overhead is similar. For long-running processes,
+performance converges.
 
 ### Memory
 
 Peak resident set size (RSS) of the sandbox process tree, reported by
 `wait4()` rusage (includes the orchestrator and all reaped children).
 
-| Benchmark | curb (proxy) | curb (TUN) | srt (node) | srt (bun) |
-|---|---|---|---|---|
-| Boot (`true`) | ~15 MB | - | ~95 MB | ~97 MB |
-| HTTP single request | ~16 MB | ~16 MB | ~94 MB | ~101 MB |
-| HTTP batch (10 requests) | ~16 MB | ~17 MB | ~94 MB | ~101 MB |
+| Benchmark | curb | srt (node) | srt (bun) |
+|---|---|---|---|
+| Boot (`true`) | ~15 MB | ~95 MB | ~97 MB |
+| HTTP single request | ~16 MB | ~94 MB | ~101 MB |
+| HTTP batch (10 requests) | ~16 MB | ~94 MB | ~101 MB |
 
 curb is a single Go binary; srt starts a JS runtime, bubblewrap, socat,
 and a seccomp helper, so its baseline RSS reflects the combined footprint
@@ -172,9 +168,8 @@ of those processes.
   srt uses a denylist (everything readable, specific files hidden). curb
   additionally controls which binaries can execute.
 - **Network**: both use HTTP proxies for domain filtering. curb's MITM proxy
-  terminates TLS, so filtering works regardless of ECH. srt adds SOCKS5 for non-HTTP TCP. curb
-  can add transparent packet-level filtering (`--tun`). curb supports
-  IP/CIDR filtering; srt does not.
+  terminates TLS, so filtering works regardless of ECH. Both support SOCKS5
+  for non-HTTP TCP. curb supports IP/CIDR filtering; srt does not.
 - **Seccomp**: both block AF_UNIX sockets via seccomp BPF. curb's filter is
   always-on with an opt-out (`--allow-unix-sockets`).
 - **Environment**: srt inherits the full host environment; curb is

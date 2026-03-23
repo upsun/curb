@@ -31,8 +31,6 @@ exec:
 env:
   - HOME
   - VIRTUAL_ENV
-tun: false
-allow-http: false
 unrestricted-net: false
 ```
 
@@ -44,7 +42,7 @@ Unknown keys are rejected. All fields are optional.
 
 ### Scalar fields
 
-`tun`, `allow-http`, `allow-unix-sockets`, `unrestricted-net` — applied only when the corresponding CLI flag was not explicitly set.
+`allow-unix-sockets`, `unrestricted-net` — applied only when the corresponding CLI flag was not explicitly set.
 
 ## Profiles
 

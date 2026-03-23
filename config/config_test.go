@@ -23,14 +23,12 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("env", nil, "")
 	f.StringSlice("ips", nil, "")
 	f.Bool("unrestricted-net", false, "")
-	f.Bool("allow-http", false, "")
 	f.Bool("allow-unix-sockets", false, "")
 	f.String("log-file", "", "")
 	f.BoolP("verbose", "v", false, "")
 	f.Bool("debug", false, "")
 	f.BoolP("quiet", "q", false, "")
 	f.Bool("dry-run", false, "")
-	f.Bool("tun", false, "")
 	f.StringSliceP("config-file", "c", nil, "")
 
 	cmd.SetArgs(args)
@@ -48,7 +46,6 @@ func TestFromFlags_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.RWPaths)
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
-	assert.False(t, cfg.AllowHTTP, "AllowHTTP defaults to false")
 	assert.Empty(t, cfg.LogFile)
 	assert.False(t, cfg.Verbose)
 	assert.False(t, cfg.DryRun)
@@ -62,7 +59,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 		"--exec", "rg",
 		"--env", "GOPATH",
 		"--env", "FOO=bar",
-		"--allow-http",
 		"--log-file", "/tmp/curb.log",
 		"-v",
 		"--dry-run",
@@ -79,7 +75,6 @@ func TestFromFlags_AllFlags(t *testing.T) {
 	assert.False(t, cfg.EnvPassthroughAll)
 	assert.False(t, cfg.NoFSRestrict)
 	assert.False(t, cfg.NoExecRestrict)
-	assert.True(t, cfg.AllowHTTP, "--allow-http sets AllowHTTP")
 	assert.Equal(t, "/tmp/curb.log", cfg.LogFile)
 	assert.True(t, cfg.Verbose)
 	assert.True(t, cfg.DryRun)
@@ -158,17 +153,6 @@ func TestMergeEnv_EnvOnlyBool(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.True(t, cfg.Verbose)
-}
-
-func TestMergeEnv_AllowHTTPFromEnv(t *testing.T) {
-	cmd := newTestCmd(nil)
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	t.Setenv("CURB_ALLOW_HTTP", "true")
-	MergeEnv(cfg, cmd)
-
-	assert.True(t, cfg.AllowHTTP)
 }
 
 func TestMergeEnv_EnvVarClassification(t *testing.T) {
@@ -272,17 +256,6 @@ func TestMergeEnv_LogFileFromEnv(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, "/env/log", cfg.LogFile)
-}
-
-func TestMergeEnv_AllowHTTP(t *testing.T) {
-	cmd := newTestCmd(nil)
-	cfg, err := FromFlags(cmd)
-	require.NoError(t, err)
-
-	t.Setenv("CURB_ALLOW_HTTP", "true")
-	MergeEnv(cfg, cmd)
-
-	assert.True(t, cfg.AllowHTTP)
 }
 
 func TestFromFlags_IPsAndUnrestrictedNet(t *testing.T) {

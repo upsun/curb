@@ -11,20 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TUNProbeEnvKey is the environment variable that triggers the TUN probe child.
-const TUNProbeEnvKey = "_CURB_TUN_PROBE"
-
 // MountProbeEnvKey is the environment variable that triggers the mount probe child.
 const MountProbeEnvKey = "_CURB_MOUNT_PROBE"
-
-// RunTUNProbe is a no-op on macOS.
-func RunTUNProbe() {}
-
-// probeTUN is unused on macOS (SetTUN is called instead) but satisfies the
-// method reference in Capabilities.TUN().
-func (c *Capabilities) probeTUN() error {
-	return fmt.Errorf("not supported on %s", runtime.GOOS)
-}
 
 // RunMountProbe is a no-op on macOS.
 func RunMountProbe() {}
@@ -40,7 +28,6 @@ func ProbeAll() *Capabilities {
 		NetNS:   unavailable,
 		PidNS:   unavailable,
 	}
-	caps.SetTUN(unavailable)
 	caps.Seatbelt = probeSeatbelt()
 	caps.OSVersion = probeOSVersion()
 	return caps

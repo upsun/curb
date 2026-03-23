@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 )
 
@@ -40,10 +39,6 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities) (*San
 	warnTildeToTmpDir(cfg, sandboxHome, tmpDir)
 
 	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
-	if cfg.TUNEnabled {
-		clog.Warnf("--tun ignored on macOS (no TUN device support)")
-	}
-
 	plan.ProxyEnabled = hasFiltering
 
 	// Seatbelt enforcement.

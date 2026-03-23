@@ -21,12 +21,6 @@ func main() {
 		return
 	}
 
-	// TUN probe child: test TUNSETIFF inside a user+net namespace.
-	if os.Getenv(sandbox.TUNProbeEnvKey) != "" {
-		sandbox.RunTUNProbe()
-		return
-	}
-
 	if err := cmd.NewRootCmd().Execute(); err != nil {
 		clog.Errorf("%v", err)
 		os.Exit(1)
