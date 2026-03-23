@@ -1,25 +1,21 @@
 package proxy
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
-const (
-	dialTimeout = 10 * time.Second
-)
 
-// Handler is an HTTP MITM proxy handler that filters CONNECT (HTTPS) and
-// plain HTTP requests by domain and IP allowlists.
+// Handler is an HTTP proxy handler that filters CONNECT (HTTPS) and plain
+// HTTP requests by domain and IP allowlists. HTTPS uses passthrough
+// tunneling: the proxy checks the CONNECT hostname, then relays the
+// encrypted stream without terminating TLS.
 type Handler struct {
 	FilterBase
-	CertCache *CertCache
 }
 
 // ServeHTTP implements http.Handler.
@@ -31,7 +27,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handleHTTP(w, r)
 }
 
-// handleCONNECT handles HTTPS CONNECT tunneling with TLS MITM.
+// handleCONNECT handles HTTPS CONNECT tunneling with passthrough relay.
+// The domain is checked against the allowlist before tunneling. The proxy
+// does not terminate TLS — the encrypted stream is relayed as-is.
 func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	host, port, err := splitHostPort(r.Host, "443")
 	if err != nil {
@@ -60,41 +58,22 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = clientConn.Close() }()
 
-	// Send 200 to the client.
+	target := net.JoinHostPort(host, port)
+	remote, err := h.getDialer().Dial("tcp", target)
+	if err != nil {
+		h.logEvent("proxy_connect", r.Host, "error", "dial: "+err.Error())
+		_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		return
+	}
+	defer func() { _ = remote.Close() }()
+
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
 	}
 
-	// TLS handshake with client using generated cert.
-	cert, err := h.CertCache.certFor(host)
-	if err != nil {
-		h.logEvent("proxy_connect", r.Host, "error", "cert: "+err.Error())
-		return
-	}
-	tlsClient := tls.Server(clientConn, &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{*cert},
-	})
-	if err := tlsClient.Handshake(); err != nil {
-		h.logEvent("proxy_connect", r.Host, "error", "client handshake: "+err.Error())
-		return
-	}
-	defer func() { _ = tlsClient.Close() }()
-
-	// Connect to real destination.
-	target := net.JoinHostPort(host, port)
-	tlsRemote, err := tls.DialWithDialer(h.getDialer(), "tcp", target, &tls.Config{
-		ServerName: host,
-	})
-	if err != nil {
-		h.logEvent("proxy_connect", r.Host, "error", "dial: "+err.Error())
-		return
-	}
-	defer func() { _ = tlsRemote.Close() }()
-
 	h.logEvent("proxy_connect", r.Host, "allowed", "")
 
-	relay(tlsClient, tlsRemote)
+	relay(clientConn, remote)
 }
 
 // handleHTTP forwards plain HTTP requests.

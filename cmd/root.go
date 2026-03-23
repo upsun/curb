@@ -19,7 +19,7 @@ func NewRootCmd() *cobra.Command {
 		Short: "Sandbox a process with filesystem, network, and environment restrictions",
 		Long: `curb runs a command inside an unprivileged sandbox with:
   - Filesystem restrictions (Landlock + mount namespace)
-  - Network filtering by domain (--domains) or IP (--ips) via MITM proxy
+  - Network filtering by domain (--domains) or IP (--ips) via proxy
   - Unrestricted network pass-through (--unrestricted-net) with FS sandbox only
   - Executable control (Landlock EXECUTE)
   - Environment sanitization (deny-by-default)

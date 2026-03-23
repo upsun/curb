@@ -111,7 +111,6 @@ func TestCurb_Proxy_DryRun(t *testing.T) {
 
 	assert.Contains(t, outStr, "proxy:      127.0.0.1:")
 	assert.Contains(t, outStr, "socks5 127.0.0.1:")
-	assert.Contains(t, outStr, "ca cert:")
 	assert.Contains(t, outStr, "example.com")
 }
 

@@ -15,7 +15,6 @@ import (
 	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 	"github.com/upsun/curb/policy"
-	"github.com/upsun/curb/proxy"
 )
 
 const (
@@ -88,11 +87,8 @@ type SandboxPlan struct {
 	ProxyEnabled     bool
 	ProxyPort        int
 	SOCKSPort        int
-	CACertPath       string // Host path to combined CA bundle (in TempDir).
-	SystemCACertPath string // System CA file path to bind-mount over.
-	SSHConfigPath    string // Host path to generated SSH config (in TempDir).
-	SSHConfigDst     string // Target path to bind-mount over (~/.ssh/config).
-	CA               *proxy.CA
+	SSHConfigPath string // Host path to generated SSH config (in TempDir).
+	SSHConfigDst  string // Target path to bind-mount over (~/.ssh/config).
 	UserPaths        []string // Paths explicitly requested by the user (--read/--write/--exec adds).
 	EnvSet         map[string]string
 	EnvPassthrough []string
@@ -137,8 +133,6 @@ type ChildConfig struct {
 	ProxyEnabled      bool     `json:"proxy_enabled,omitempty"`
 	ProxyPort         int      `json:"proxy_port,omitempty"`
 	SOCKSPort         int      `json:"socks_port,omitempty"`
-	CACertFile        string   `json:"ca_cert_file,omitempty"`
-	CACertMountDst    string   `json:"ca_cert_mount_dst,omitempty"`
 	SSHConfigFile     string   `json:"ssh_config_file,omitempty"`
 	SSHConfigMountDst string   `json:"ssh_config_mount_dst,omitempty"`
 	AllowedDomains    []string `json:"allowed_domains,omitempty"`
@@ -458,8 +452,8 @@ func resolveNetwork(plan *SandboxPlan, cfg *config.Config) {
 	plan.AllowUnixSockets = cfg.AllowUnixSockets
 }
 
-// resolveProxy picks a proxy port, generates the ephemeral CA, and writes
-// the combined CA bundle.
+// resolveProxy picks proxy ports and ensures the curb binary is accessible
+// for the SOCKS5 ProxyCommand helper.
 func resolveProxy(plan *SandboxPlan) error {
 	if !plan.ProxyEnabled {
 		return nil
@@ -467,18 +461,6 @@ func resolveProxy(plan *SandboxPlan) error {
 	plan.ProxyPort = pickProxyPort()
 	// Adjacent port in the isolated net NS — no collision possible.
 	plan.SOCKSPort = plan.ProxyPort + 1
-	// CA generation.
-	ca, caErr := proxy.NewCA()
-	if caErr != nil {
-		return fmt.Errorf("generating ephemeral CA: %w", caErr)
-	}
-	plan.CA = ca
-	bundlePath, systemPath, caErr := proxy.WriteCombinedBundle(plan.TempDir, ca)
-	if caErr != nil {
-		return fmt.Errorf("writing CA bundle: %w", caErr)
-	}
-	plan.CACertPath = bundlePath
-	plan.SystemCACertPath = systemPath
 
 	// Ensure curb's own binary is accessible inside the sandbox for the
 	// _socks-connect ProxyCommand helper.
@@ -552,8 +534,6 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		ProxyEnabled:      p.ProxyEnabled,
 		ProxyPort:         p.ProxyPort,
 		SOCKSPort:         p.SOCKSPort,
-		CACertFile:        p.CACertPath,
-		CACertMountDst:    p.SystemCACertPath,
 		SSHConfigFile:     p.SSHConfigPath,
 		SSHConfigMountDst: p.SSHConfigDst,
 		AllowedDomains:    p.AllowedDomains,
@@ -686,9 +666,6 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 			}
 			pr("\n")
 		}
-		if p.CACertPath != "" {
-			pr("    ca cert:    %s\n", p.CACertPath)
-		}
 		if len(p.AllowedDomains) > 0 {
 			pr("    domains:    %s\n", strings.Join(p.AllowedDomains, ", "))
 		}
@@ -814,15 +791,8 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 		plan.EnvSet["HTTP_PROXY"] = proxyURL
 		plan.EnvSet["https_proxy"] = proxyURL
 		plan.EnvSet["http_proxy"] = proxyURL
-		if plan.CACertPath != "" {
-			plan.EnvSet["SSL_CERT_FILE"] = plan.CACertPath
-			plan.EnvSet["CURL_CA_BUNDLE"] = plan.CACertPath
-			plan.EnvSet["REQUESTS_CA_BUNDLE"] = plan.CACertPath
-			plan.EnvSet["NODE_EXTRA_CA_CERTS"] = plan.CACertPath
-			plan.EnvSet["SSL_CERT_DIR"] = "" // Clear to prevent stale dir overriding the bundle file.
-		}
 		// SOCKS5 proxy env vars. Most HTTP clients prefer HTTP_PROXY/HTTPS_PROXY
-		// over ALL_PROXY, so HTTP/HTTPS still goes through the MITM proxy.
+		// over ALL_PROXY, so HTTP/HTTPS still goes through the HTTP proxy.
 		// ALL_PROXY covers non-HTTP tools (curl --socks5, cargo, etc.).
 		if plan.SOCKSPort > 0 {
 			socksAddr := fmt.Sprintf("127.0.0.1:%d", plan.SOCKSPort)

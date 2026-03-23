@@ -39,23 +39,22 @@ reduce this burden for common toolchains.
 
 ## Network
 
-Both tools use HTTP proxies for domain filtering by default. The sandboxed
-process gets an isolated network namespace (no external interfaces); proxy
-environment variables route traffic through a filtering proxy in the parent.
-
-**srt** runs an HTTP proxy and a SOCKS5 proxy, bridged into the sandbox via
-Unix sockets and socat. The HTTP proxy handles HTTP/HTTPS (via CONNECT); the
+Both tools run an HTTP proxy and a SOCKS5 proxy for domain filtering. The
+sandboxed process gets an isolated network namespace (no external
+interfaces); proxy environment variables route traffic through the filtering
+proxies in the parent. The HTTP proxy handles HTTP/HTTPS (via CONNECT); the
 SOCKS5 proxy handles other TCP (SSH, git protocol, database connections).
-Domain filtering uses an allowlist/denylist checked against the CONNECT
-hostname or SOCKS5 destination. Programs that ignore proxy env vars get no
-network.
+Both filter based on the CONNECT hostname or SOCKS5 destination, not on TLS
+SNI, so neither is affected by Encrypted Client Hello (ECH). Programs that
+ignore proxy env vars get no network.
 
-**curb** runs a MITM proxy that terminates TLS in the parent process,
-making domain filtering immune to Encrypted Client Hello (ECH). Connection
-file descriptors are passed from child to parent via SCM_RIGHTS over a
-socketpair (no socat). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via
-ProxyCommand). Programs that ignore proxy env vars get no network (empty
-namespace, loopback only).
+Both use CONNECT passthrough for HTTPS: the proxy tunnels the encrypted
+stream without terminating TLS.
+
+**srt** bridges the proxies into the sandbox via Unix sockets and socat.
+
+**curb** passes connection file descriptors from child to parent via
+SCM_RIGHTS over a socketpair (no socat).
 
 curb supports IP address and CIDR range filtering via `--ips` (e.g.
 `--ips 10.0.0.0/8`). srt filters by domain only. curb also supports
@@ -167,9 +166,9 @@ of those processes.
 - **Filesystem**: curb uses an allowlist (nothing accessible by default);
   srt uses a denylist (everything readable, specific files hidden). curb
   additionally controls which binaries can execute.
-- **Network**: both use HTTP proxies for domain filtering. curb's MITM proxy
-  terminates TLS, so filtering works regardless of ECH. Both support SOCKS5
-  for non-HTTP TCP. curb supports IP/CIDR filtering; srt does not.
+- **Network**: both use HTTP and SOCKS5 proxies for domain filtering (based
+  on CONNECT hostname, not TLS SNI, so unaffected by ECH). Both use CONNECT
+  passthrough for HTTPS. curb supports IP/CIDR filtering; srt does not.
 - **Seccomp**: both block AF_UNIX sockets via seccomp BPF. curb's filter is
   always-on with an opt-out (`--allow-unix-sockets`).
 - **Environment**: srt inherits the full host environment; curb is

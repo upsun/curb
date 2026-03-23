@@ -258,21 +258,6 @@ func enforceMountNS(cfg *ChildConfig) error {
 		return err
 	}
 
-	// Bind-mount combined CA bundle over the system CA path so the proxy's
-	// ephemeral CA is trusted by all programs in the sandbox.
-	if cfg.CACertFile != "" && cfg.CACertMountDst != "" {
-		dst := filepath.Join(newRoot, cfg.CACertMountDst)
-		if _, err := os.Stat(dst); err == nil {
-			if err := syscall.Mount(cfg.CACertFile, dst, "", syscall.MS_BIND, ""); err != nil {
-				return fmt.Errorf("bind-mounting CA bundle: %w", err)
-			}
-			flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
-			if err := syscall.Mount("", dst, "", flags, ""); err != nil {
-				return fmt.Errorf("remounting CA bundle read-only: %w", err)
-			}
-		}
-	}
-
 	// Bind-mount generated SSH config over ~/.ssh/config so SSH uses the
 	// SOCKS5 ProxyCommand for all connections.
 	if cfg.SSHConfigFile != "" && cfg.SSHConfigMountDst != "" {

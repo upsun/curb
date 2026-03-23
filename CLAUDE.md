@@ -16,21 +16,20 @@ go test ./sandbox/ -run TestCurb_FS_ -v  # run a subset
 - `sandbox/plan_darwin.go` — darwinPlanBuilder (Seatbelt enforcement, path canonicalization)
 - `sandbox/plan_other.go` — degradedPlanBuilder (env-only fallback)
 - `sandbox/parent_linux.go` — StartSandbox (re-exec into child namespace, signal forwarding)
-- `sandbox/parent_darwin.go` — StartSandbox (sandbox-exec spawn, MITM proxy, signal forwarding)
+- `sandbox/parent_darwin.go` — StartSandbox (sandbox-exec spawn, proxy, signal forwarding)
 - `sandbox/child_linux.go` — ChildInit, enforcement dispatch via FSEnforcer (landlockEnforcer, fsEnforcers)
 - `sandbox/mountfs_linux.go` — enforceMountNS (pivot_root allowlist), buildMountPlan, pivotRootEnforcer
 - `sandbox/seatbelt_darwin.go` — generateSBPL (SBPL profile generation from SandboxPlan)
 - `sandbox/capabilities_linux.go` — ProbeAll (user/net/mount NS with mount ops test, Landlock ABI)
 - `sandbox/capabilities_darwin.go` — ProbeAll (Seatbelt probe, macOS version)
 - `sandbox/proxy_handler.go` — buildProxyHandler, buildSOCKS5Server (shared by Linux and macOS parents)
-- `proxy/` — MITM proxy for HTTP/HTTPS domain filtering (works regardless of ECH): ephemeral CA, cert cache, CONNECT handler, connListener for fd-passing. SOCKS5 proxy for non-HTTP TCP. CA bundle paths platform-split (`cabundle_linux.go`, `cabundle_darwin.go`).
+- `proxy/` — HTTP proxy for domain filtering (CONNECT passthrough for HTTPS, Host header for plain HTTP), SOCKS5 proxy for non-HTTP TCP, connListener for fd-passing.
 - `policy/` — DomainMatcher, IPMatcher, ValidateDomains/ValidateIPs, LandlockPaths, BuildLandlockRules
 - `cmd/root.go` — CLI flag registration
 
 ## Key Design Decisions
 
-- MITM proxy is the sole network filter for HTTP/HTTPS, always active when `--domains` or `--ips` are specified. It terminates TLS in the parent process, so domain filtering works regardless of Encrypted Client Hello (ECH). Plain HTTP is also filtered via Host header inspection. Programs respecting proxy env vars get filtered access; programs ignoring them get no network (empty net NS). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via ProxyCommand).
-- An ephemeral ECDSA P-256 CA is generated per invocation. The combined CA bundle (system + ephemeral) is bind-mounted over the system CA path during pivot_root, and set via env vars (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, etc.).
+- HTTP proxy is the sole network filter for HTTP/HTTPS, always active when `--domains` or `--ips` are specified. HTTPS uses CONNECT passthrough: the proxy checks the hostname from the CONNECT request, then tunnels the encrypted stream without terminating TLS. Plain HTTP is filtered via Host header inspection. Programs respecting proxy env vars get filtered access; programs ignoring them get no network (empty net NS). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via ProxyCommand). Both proxy approaches filter on the CONNECT hostname or SOCKS5 destination, not on TLS SNI, so neither is affected by Encrypted Client Hello (ECH).
 - The child runs TCP listeners on loopback and relays accepted connection fds to the parent via SCM_RIGHTS over a socketpair. FDs are tagged to dispatch to the correct proxy (HTTP or SOCKS5).
 - Mount namespace (pivot_root) is the preferred FS enforcement: bind-mount allowed paths into a new root, pivot_root into it. Provides default-deny (ENOENT) and supports sub-path denials via overmount. Landlock layers on top when available for defense-in-depth. Landlock-only is a capable alternative (default-deny via EACCES) but cannot enforce sub-path denials (`!` exclusions under an allowed parent).
 - Landlock requires different access rights for files vs directories. `DefaultROFiles` and `DefaultROPaths` are separate. `splitDirsFiles()` in plan.go classifies user-added paths via `os.Stat()`.
@@ -54,7 +53,7 @@ go test ./sandbox/ -run TestCurb_FS_ -v  # run a subset
 - Apple's Seatbelt (`sandbox-exec`) provides kernel-enforced FS and network restrictions via SBPL profiles. Marked "deprecated" since macOS 10.7 but still functional and used by Codex, Homebrew, and Apple's own tools.
 - No re-exec or namespaces. Seatbelt applies at spawn time: `sandbox-exec -p '<SBPL>' -- <command>`. The child and all descendants inherit the profile.
 - FS enforcement via SBPL `file-read*`/`file-write*` rules. Sub-path denials use `(deny ...)` which overrides `(allow ...)`. Move protection via `(deny file-write-unlink)` on ancestor directories.
-- Network: MITM proxy on loopback is the sole HTTP/HTTPS filter. `--ips` works directly via Seatbelt IP rules.
+- Network: HTTP/SOCKS5 proxy on loopback is the sole HTTP/HTTPS filter. `--ips` works directly via Seatbelt IP rules.
 - AF_UNIX socket blocking via `(deny network* (socket-domain AF_UNIX))` (Seatbelt, not seccomp).
 - Path canonicalization is critical: macOS has `/var` -> `/private/var`, `/etc` -> `/private/etc`, `/tmp` -> `/private/tmp`. All paths are resolved via `filepath.EvalSymlinks` before SBPL generation.
 - No PID isolation (macOS has no PID namespaces).

@@ -219,10 +219,10 @@ Sub-path denials (`!` under an allowed parent) require mount namespace support. 
 
 | Platform | Sandbox level | Notes |
 |----------|--------------|-------|
-| Linux (kernel 5.13+, mount ops) | Full | pivot_root + Landlock + MITM proxy |
-| Linux (kernel 5.13+, no mount ops) | Strong | Landlock + MITM proxy; blocked paths return EACCES not ENOENT |
-| Linux (kernel 3.8-5.12, mount ops) | Strong | pivot_root + MITM proxy (no Landlock hardening) |
-| macOS | Strong | Seatbelt (sandbox-exec) + MITM proxy |
+| Linux (kernel 5.13+, mount ops) | Full | pivot_root + Landlock + proxy |
+| Linux (kernel 5.13+, no mount ops) | Strong | Landlock + proxy; blocked paths return EACCES not ENOENT |
+| Linux (kernel 3.8-5.12, mount ops) | Strong | pivot_root + proxy (no Landlock hardening) |
+| macOS | Strong | Seatbelt (sandbox-exec) + proxy |
 | Windows | Env only | Environment sanitization only |
 
 ### macOS notes
@@ -240,14 +240,14 @@ macOS uses Apple's Seatbelt (`sandbox-exec`) for kernel-enforced filesystem and 
 1. **Environment sanitization** — deny-by-default env with only safe variables passed through.
 2. **User namespace** — the child runs as uid 0 in an isolated namespace (no host privileges).
 3. **Mount namespace + pivot_root** — a new root is built from bind-mounted allowed paths. Unmounted paths don't exist. `MS_RDONLY` and `MS_NOEXEC` enforce write and exec restrictions. Landlock layers on top for defense in depth.
-4. **Network namespace + MITM proxy** — the child gets isolated loopback only. An ephemeral CA and MITM proxy in the parent filter HTTP/HTTPS by domain, regardless of Encrypted Client Hello (ECH). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via ProxyCommand). Programs ignoring proxy settings get no network.
+4. **Network namespace + proxy** — the child gets isolated loopback only. An HTTP proxy in the parent filters by domain (checked at the CONNECT hostname, not TLS SNI). A SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via ProxyCommand). Programs ignoring proxy settings get no network.
 
 ### macOS
 
 1. **Environment sanitization** — same deny-by-default approach.
 2. **Seatbelt profile** — an SBPL (Seatbelt Profile Language) profile is generated from the sandbox plan with `(deny default)` and explicit allow rules for permitted paths, executables, and network endpoints.
 3. **sandbox-exec** — the child is spawned under `/usr/bin/sandbox-exec -p '<profile>'`. The Seatbelt profile is inherited by all child processes.
-4. **MITM proxy** — same ephemeral CA and proxy as Linux, running on localhost. The Seatbelt profile allows only the proxy port for outbound connections.
+4. **Proxy** — same HTTP and SOCKS5 proxies as Linux, running on localhost. The Seatbelt profile allows only the proxy port for outbound connections.
 
 ## Troubleshooting
 

@@ -178,7 +178,7 @@ test_distro() {
 			echo 'RESULT:SKIP:proxy curl allowed domain (no user namespaces)'
 			echo 'RESULT:SKIP:proxy blocks unlisted domain (no user namespaces)'
 		elif curl -sf https://httpbin.org/get >/dev/null 2>&1; then
-			# Test 7: proxy + CA bundle (curl to allowed domain).
+			# Test 7: proxy (curl to allowed domain).
 			out=\$(/curb --domains httpbin.org --write '*' --exec '*' -- curl -sf https://httpbin.org/get 2>&1)
 			if [ \$? -eq 0 ] && echo \"\$out\" | grep -q '\"Host\"'; then
 				report 0 'proxy curl allowed domain'

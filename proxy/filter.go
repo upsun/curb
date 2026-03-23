@@ -3,12 +3,13 @@ package proxy
 import (
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/upsun/curb/clog"
 )
 
 // FilterBase holds shared filtering, dialing, and logging fields used by
-// both the HTTP MITM proxy (Handler) and the SOCKS5 proxy (SOCKS5Server).
+// both the HTTP proxy (Handler) and the SOCKS5 proxy (SOCKS5Server).
 type FilterBase struct {
 	DomainCheck func(string) bool
 	IPCheck     func(netip.Addr) bool
@@ -29,6 +30,8 @@ func (f *FilterBase) CheckTarget(host string) bool {
 	}
 	return false
 }
+
+const dialTimeout = 10 * time.Second
 
 func (f *FilterBase) getDialer() *net.Dialer {
 	if f.Dialer != nil {

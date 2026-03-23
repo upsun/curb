@@ -19,11 +19,10 @@ func buildFilterBase(plan *SandboxPlan) proxy.FilterBase {
 	return fb
 }
 
-// buildProxyHandler creates the MITM proxy handler from the sandbox plan.
+// buildProxyHandler creates the HTTP proxy handler from the sandbox plan.
 func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
 	return &proxy.Handler{
 		FilterBase: buildFilterBase(plan),
-		CertCache:  proxy.NewCertCache(plan.CA),
 	}
 }
 
