@@ -11,7 +11,7 @@ curb runs commands inside a locked-down sandbox with default-deny filesystem, ne
 - **Domain-level network filtering** — a proxy filters HTTP/HTTPS by domain, avoiding issues with Encrypted Client Hello (ECH).
 - **Built-in profiles** — one flag (`-p node`, `-p go`, `-p python`, ...) adds the right domains, paths, and env vars for common toolchains.
 - **Defense in depth** — mount namespaces + Landlock LSM for filesystem, proxy + optional userspace TCP/IP stack for network.
-- **Fast** — the process starts in ~40 milliseconds.
+- **Fast** — the process starts in ~12 milliseconds.
 
 ## When not to use curb
 
