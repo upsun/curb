@@ -112,8 +112,13 @@ func TestFindConfigFile_InCWD(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
+	// os.Getwd() resolves symlinks (e.g. /var -> /private/var on macOS),
+	// so canonicalize the expected path to match.
+	canonical, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+
 	found := FindConfigFile()
-	assert.Equal(t, path, found)
+	assert.Equal(t, canonical, found)
 }
 
 func TestFindConfigFile_InParent(t *testing.T) {
@@ -127,8 +132,11 @@ func TestFindConfigFile_InParent(t *testing.T) {
 	require.NoError(t, os.Chdir(child))
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
+	canonical, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+
 	found := FindConfigFile()
-	assert.Equal(t, path, found)
+	assert.Equal(t, canonical, found)
 }
 
 func TestFindConfigFile_NotFound(t *testing.T) {
