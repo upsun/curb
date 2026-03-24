@@ -10,6 +10,8 @@ import (
 var SafePassthroughVars = []string{
 	"PATH",
 	"TERM",
+	"TERMINFO",
+	"TERMINFO_DIRS",
 	"COLORTERM",
 	"NO_COLOR",
 	"LANG",
