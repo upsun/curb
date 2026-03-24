@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/upsun/curb/clog"
@@ -82,7 +83,45 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 	plan.DenyWritePaths = canonicalizePaths(plan.DenyWritePaths)
 	plan.DenyExecPaths = canonicalizePaths(plan.DenyExecPaths)
 
+	// Allow the terminfo entry for $TERM so pagers (less, more) and
+	// curses-based tools can detect terminal capabilities. Terminal
+	// emulators like Ghostty, Kitty, and Alacritty ship their terminfo
+	// under /Applications/<name>.app/ which is outside the default paths.
+	addTerminfo(plan)
+
 	return plan, nil
+}
+
+// addTerminfo allows reading terminfo directories so pagers (less, more) can
+// detect terminal capabilities. Checks $TERMINFO and $TERMINFO_DIRS; the
+// system default (/usr/share/terminfo under /usr) is already accessible.
+func addTerminfo(plan *SandboxPlan) {
+	var dirs []string
+	if ti := os.Getenv("TERMINFO"); ti != "" {
+		dirs = append(dirs, ti)
+	}
+	if tiDirs := os.Getenv("TERMINFO_DIRS"); tiDirs != "" {
+		dirs = append(dirs, filepath.SplitList(tiDirs)...)
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		root := canonicalize(d)
+		if !isCoveredBySubpath(root, plan.ROPaths) {
+			plan.ROPaths = append(plan.ROPaths, root)
+		}
+	}
+}
+
+// isCoveredBySubpath reports whether path is equal to or under any entry in paths.
+func isCoveredBySubpath(path string, paths []string) bool {
+	for _, p := range paths {
+		if rel, err := filepath.Rel(p, path); err == nil && filepath.IsLocal(rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // canonicalizePaths resolves symlinks in each path and deduplicates.
