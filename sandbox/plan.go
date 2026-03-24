@@ -432,7 +432,7 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	// Ensure directories containing exec paths are readable so the
 	// child can stat() them for path resolution after Landlock.
 	if !cfg.NoFSRestrict {
-		plan.ROPaths = appendExecDirs(plan.ROPaths, plan.ExecPaths)
+		plan.ROPaths = appendExecDirs(plan.ROPaths, plan.ExecPaths, plan.TempDir)
 	}
 	return nil
 }
@@ -1044,12 +1044,17 @@ func excludeArgs(items []string) []string {
 
 // appendExecDirs adds parent directories of exec paths to roPaths, skipping
 // directories that are already covered by an existing RO path prefix.
-func appendExecDirs(roPaths, execPaths []string) []string {
+// excludePath is skipped entirely: its parent (e.g. the $TMPDIR base on macOS)
+// may contain sensitive user data, and the path itself is already in RWPaths.
+func appendExecDirs(roPaths, execPaths []string, excludePath string) []string {
 	seen := make(map[string]bool, len(roPaths))
 	for _, p := range roPaths {
 		seen[p] = true
 	}
 	for _, p := range execPaths {
+		if p == excludePath {
+			continue
+		}
 		dir := filepath.Dir(p)
 		if dir == "/" || seen[dir] {
 			continue
