@@ -369,6 +369,25 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	removals.noExecRestrict = cfg.NoExecRestrict
 	if cfg.NoExecRestrict {
 		plan.NoExecRestrict = true
+		// Ensure the command binary's directory is mounted even though
+		// exec resolution is skipped. Use ROPaths (not ExecPaths) so
+		// Landlock does not restrict EXECUTE.
+		if len(cfg.Command) > 0 {
+			cmd0 := cfg.Command[0]
+			var resolved string
+			if filepath.IsAbs(cmd0) {
+				resolved = cmd0
+			} else if abs, lookErr := exec.LookPath(cmd0); lookErr == nil {
+				resolved = abs
+			}
+			if resolved != "" {
+				for _, p := range resolveSymlinks([]string{resolved}) {
+					if dir := filepath.Dir(p); dir != "" && dir != "." {
+						plan.ROPaths = appendUniq(plan.ROPaths, dir)
+					}
+				}
+			}
+		}
 		return nil
 	}
 	var execAdds []string
@@ -408,6 +427,9 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 			logger.Debug("exec: %s not found in PATH, skipping", name)
 		}
 	}
+
+	// Ensure the command binary itself is in ExecPaths so it can be
+	// executed (and its directory is mounted in the mount namespace).
 	if len(cfg.Command) > 0 {
 		cmd0 := cfg.Command[0]
 		if filepath.IsAbs(cmd0) {
@@ -462,7 +484,14 @@ func resolveProxy(plan *SandboxPlan) error {
 		if self, err := os.Executable(); err == nil {
 			if dir := filepath.Dir(self); dir != "" && dir != "." {
 				plan.ROPaths = appendUniq(plan.ROPaths, dir)
-				plan.ExecPaths = appendUniq(plan.ExecPaths, self)
+				if plan.NoExecRestrict {
+					// With --exec '*', keep ExecPaths empty so Landlock
+					// does not restrict EXECUTE. The binary is already
+					// accessible via its parent directory in ROPaths.
+					plan.ROFiles = appendUniq(plan.ROFiles, self)
+				} else {
+					plan.ExecPaths = appendUniq(plan.ExecPaths, self)
+				}
 			}
 		}
 	}

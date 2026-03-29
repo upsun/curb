@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/upsun/curb/clog"
+	"golang.org/x/sys/unix"
 )
 
 // mountEntry represents a single bind-mount in the new root.
@@ -222,7 +223,7 @@ func enforceMountNS(cfg *ChildConfig) error {
 		if m.readOnly {
 			flags |= syscall.MS_RDONLY
 		}
-		if m.noExec {
+		if m.noExec || sourceHasNoExec(m.src) {
 			flags |= syscall.MS_NOEXEC
 		}
 		if err := syscall.Mount("", dst, "", flags, ""); err != nil {
@@ -409,6 +410,17 @@ func synthesizePasswd(cfg *ChildConfig, newRoot string) error {
 		_ = os.Remove(tmp) // Bind mount holds the inode; remove the visible name.
 	}
 	return nil
+}
+
+// sourceHasNoExec reports whether path resides on a mount with MS_NOEXEC.
+// In user namespaces, bind-mount remounts cannot remove flags present on the
+// source mount, so MS_NOEXEC must be preserved to avoid EPERM.
+func sourceHasNoExec(path string) bool {
+	var st unix.Statfs_t
+	if err := unix.Statfs(path, &st); err != nil {
+		return false
+	}
+	return st.Flags&unix.ST_NOEXEC != 0
 }
 
 // overmountDeny self-bind-mounts each path and remounts with the given extra
