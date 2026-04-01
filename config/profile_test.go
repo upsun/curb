@@ -456,6 +456,7 @@ func TestListProfiles_IncludesBuiltins(t *testing.T) {
 	assert.Equal(t, ProfileBuiltin, names["docker"])
 	assert.Equal(t, ProfileBuiltin, names["claude-code"])
 	assert.Equal(t, ProfileBuiltin, names["ssh"])
+	assert.Equal(t, ProfileBuiltin, names["shell"])
 }
 
 func TestListProfiles_UserOverridesBuiltin(t *testing.T) {

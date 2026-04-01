@@ -11,6 +11,7 @@ read:
 write:
   - vendor
 exec:
+  - sh
   - php
   - composer
 env:

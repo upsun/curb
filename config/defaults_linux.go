@@ -55,14 +55,6 @@ var DefaultRWFiles = []string{
 }
 
 // SystemExecPaths are directories from which executables are allowed by default.
-// Includes lib directories because the kernel checks Landlock EXECUTE when
-// loading the ELF interpreter (dynamic linker) via open_exec().
-var SystemExecPaths = []string{
-	"/usr/bin",
-	"/bin",
-	"/usr/local/bin",
-	"/usr/sbin",
-	"/sbin",
-	"/lib",
-	"/lib64",
-}
+// Empty: only the invoked command, dynamic linker, and profile/flag additions
+// are executable. Use the "shell" profile or --exec to allow system binaries.
+var SystemExecPaths []string

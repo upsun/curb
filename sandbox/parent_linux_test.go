@@ -426,7 +426,7 @@ func TestCurb_EnvLeak_ProcEnviron(t *testing.T) {
 	// Pass a secret in the parent environment; the child should not be able
 	// to recover it by reading the parent's /proc/[pid]/environ.
 	ppid := os.Getpid()
-	cmd := exec.Command(curbBin, "--", "sh", "-c",
+	cmd := exec.Command(curbBin, "--exec", "cat", "--", "sh", "-c",
 		fmt.Sprintf("cat /proc/%d/environ 2>&1 || true", ppid))
 	cmd.Env = append(os.Environ(), "SECRET_LEAK_TEST=hunter2")
 	out, err := cmd.CombinedOutput()
@@ -442,7 +442,7 @@ func TestCurb_EnvLeak_ProcEnviron(t *testing.T) {
 func TestCurb_EnvLeak_ProcWalk(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "--", "sh", "-c",
+	cmd := exec.Command(curbBin, "--exec", "cat", "--", "sh", "-c",
 		`for f in /proc/[0-9]*/environ; do cat "$f" 2>/dev/null; done; true`)
 	cmd.Env = append(os.Environ(), "SECRET_WALK_TEST=s3cret")
 	out, err := cmd.CombinedOutput()
@@ -554,7 +554,7 @@ func TestCurb_FS_WriteTmpDirAllowed(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
 
-	cmd := exec.Command(curbBin, "--", "sh", "-c", "touch $TMPDIR/curb-test-write && rm $TMPDIR/curb-test-write")
+	cmd := exec.Command(curbBin, "--exec", "touch", "--exec", "rm", "--", "sh", "-c", "touch $TMPDIR/curb-test-write && rm $TMPDIR/curb-test-write")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected TMPDIR write to succeed: %s", string(out))
 }
@@ -794,6 +794,31 @@ func TestCurb_Exec_NoDefaultExec(t *testing.T) {
 	require.Error(t, err, "expected --exec '!*' to block ls: %s", string(out))
 }
 
+// TestCurb_Exec_NoDefaultExec_ShellWorks verifies that --exec '!*' still allows
+// the explicitly allowed shell to work (dynamic linker paths are auto-included).
+func TestCurb_Exec_NoDefaultExec_ShellWorks(t *testing.T) {
+	requireUserNS(t)
+	requireLandlock(t)
+
+	// Shell builtins should work even with --exec '!*' because the dynamic
+	// linker directories (/lib, /lib64) are always included.
+	cmd := exec.Command(curbBin, "--exec", "!*", "--exec", "/bin/sh", "--", "sh", "-c", "echo hello")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected shell builtin to work with --exec '!*': %s", string(out))
+	assert.Contains(t, string(out), "hello")
+}
+
+// TestCurb_Shell_SystemBinariesAvailable verifies that 'curb shell' auto-applies
+// the shell profile, making system binaries executable.
+func TestCurb_Shell_SystemBinariesAvailable(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "shell", "--", "sh", "-c", "ls /usr > /dev/null && echo ok")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected curb shell to allow system binaries: %s", string(out))
+	assert.Contains(t, string(out), "ok")
+}
+
 // TestCurb_EnvExcludeSingle verifies --env '!USER' removes USER from defaults.
 func TestCurb_EnvExcludeSingle(t *testing.T) {
 	requireUserNS(t)
@@ -899,25 +924,29 @@ func copyBinary(t *testing.T, src, dst string) {
 }
 
 // TestCurb_Exec_SystemBinarySucceeds verifies that system binaries execute under exec restriction.
-func TestCurb_Exec_SystemBinarySucceeds(t *testing.T) {
+// TestCurb_Exec_InvokedBinaryAutoAdded verifies that the command binary is
+// automatically added to exec paths (no --exec flag needed).
+func TestCurb_Exec_InvokedBinaryAutoAdded(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
 
 	cmd := exec.Command(curbBin, "--", "/usr/bin/ls", "/usr")
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected /usr/bin/ls to succeed: %s", string(out))
+	require.NoError(t, err, "expected invoked binary to be auto-allowed: %s", string(out))
 }
 
-// TestCurb_Exec_DynamicLinkingWorks verifies that dynamically linked binaries work.
-// The dynamic linker needs EXECUTE (loaded via open_exec), but shared libraries
-// only need READ (loaded via mmap).
+// TestCurb_Exec_DynamicLinkingWorks verifies that dynamically linked binaries
+// work without explicitly allowing linker directories. The dynamic linker needs
+// EXECUTE (loaded via open_exec), but shared libraries only need READ (mmap).
 func TestCurb_Exec_DynamicLinkingWorks(t *testing.T) {
 	requireUserNS(t)
 	requireLandlock(t)
 
+	// ls is dynamically linked; only the binary itself is auto-added to exec.
+	// The dynamic linker dirs (/lib, /lib64) are always included automatically.
 	cmd := exec.Command(curbBin, "--", "ls", "/usr")
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected dynamically linked ls to work: %s", string(out))
+	require.NoError(t, err, "expected dynamically linked binary to work: %s", string(out))
 }
 
 // TestCurb_Exec_NonSystemBinaryBlocked verifies that binaries outside exec paths are blocked.
@@ -1008,7 +1037,8 @@ func TestCurb_Exec_WritableDirNotExecutable(t *testing.T) {
 
 	// The sandbox's TMPDIR is writable. Verify that writing a binary there
 	// and trying to execute it is blocked by MS_NOEXEC.
-	cmd := exec.Command(curbBin, "--", "sh", "-c",
+	// Allow cp and chmod so the test exercises the noexec enforcement, not exec denial.
+	cmd := exec.Command(curbBin, "--exec", "cp", "--exec", "chmod", "--", "sh", "-c",
 		"cp /bin/true $TMPDIR/escape && chmod +x $TMPDIR/escape && $TMPDIR/escape")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected exec from writable TMPDIR to be blocked: %s", string(out))
@@ -1215,7 +1245,7 @@ func TestCurb_MountFS_WriteSysPathBlocked(t *testing.T) {
 func TestCurb_MountFS_WriteTmpDirAllowed(t *testing.T) {
 	requirePivotRoot(t)
 
-	cmd := exec.Command(curbBin, "--", "sh", "-c", "touch $TMPDIR/curb-test-write && rm $TMPDIR/curb-test-write")
+	cmd := exec.Command(curbBin, "--exec", "touch", "--exec", "rm", "--", "sh", "-c", "touch $TMPDIR/curb-test-write && rm $TMPDIR/curb-test-write")
 	cmd.Env = mountNSEnv()
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected TMPDIR write to succeed: %s", string(out))
@@ -1225,7 +1255,8 @@ func TestCurb_MountFS_WriteTmpDirAllowed(t *testing.T) {
 func TestCurb_MountFS_ExecTmpDirBlocked(t *testing.T) {
 	requirePivotRoot(t)
 
-	cmd := exec.Command(curbBin, "--", "sh", "-c",
+	// Allow cp and chmod so the test exercises the MS_NOEXEC enforcement, not exec denial.
+	cmd := exec.Command(curbBin, "--exec", "cp", "--exec", "chmod", "--", "sh", "-c",
 		"cp /bin/true $TMPDIR/escape && chmod +x $TMPDIR/escape && $TMPDIR/escape")
 	cmd.Env = mountNSEnv()
 	out, err := cmd.CombinedOutput()
@@ -1320,7 +1351,7 @@ func TestCurb_MountFS_DevNullWritable(t *testing.T) {
 func TestCurb_MountFS_DevUrandomReadable(t *testing.T) {
 	requirePivotRoot(t)
 
-	cmd := exec.Command(curbBin, "--", "sh", "-c", "head -c 1 /dev/urandom > /dev/null")
+	cmd := exec.Command(curbBin, "--exec", "head", "--", "sh", "-c", "head -c 1 /dev/urandom > /dev/null")
 	cmd.Env = mountNSEnv()
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected read from /dev/urandom to succeed: %s", string(out))

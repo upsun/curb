@@ -203,7 +203,13 @@ func TestBuildPlan_ExecRemoveAll(t *testing.T) {
 	plan, err := BuildPlan(cfg, minCaps(), nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
-	assert.Nil(t, plan.ExecPaths)
+	// User-facing exec paths are cleared, but dynamic linker directories
+	// are always included so dynamically-linked binaries still work.
+	for _, p := range plan.ExecPaths {
+		base := filepath.Base(p)
+		assert.True(t, base == "lib" || base == "lib64",
+			"unexpected exec path after !*: %s", p)
+	}
 }
 
 func TestBuildPlan_ExecAbsPath(t *testing.T) {

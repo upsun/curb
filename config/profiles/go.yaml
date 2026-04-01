@@ -15,6 +15,7 @@ write:
   - ~/.cache/go-build
   - ~/go/pkg
 exec:
+  - sh
   - go
   - ~/.cache/go-build
 env:

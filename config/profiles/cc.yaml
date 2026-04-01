@@ -1,6 +1,7 @@
 # C/C++ compiler toolchain (gcc, clang, linker, assembler).
 # Covers compiler internals that live outside standard PATH directories.
 exec:
+  - sh
   - gcc
   - g++
   - cc
