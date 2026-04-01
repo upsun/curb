@@ -1,0 +1,15 @@
+# Interactive shell with access to standard system binaries.
+# HOME is passed through so ~ resolves to the real home directory.
+# Use -p shell for interactive curb sessions or curb shell.
+read:
+  - "~" # Quoted: bare ~ is YAML null.
+exec:
+  - /usr/bin
+  - /bin
+  - /usr/local/bin
+  - /usr/sbin
+  - /sbin
+  - /usr/libexec
+  - /opt/homebrew/bin
+env:
+  - HOME

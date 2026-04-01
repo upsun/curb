@@ -8,6 +8,7 @@ read:
   - ~/.cargo
   - ~/.rustup
 exec:
+  - sh
   - cargo
   - rustc
   - rustup

@@ -2,12 +2,12 @@
 
 Sandbox any process. No root required.
 
-curb runs commands inside a locked-down sandbox with default-deny filesystem, network, environment, and executable restrictions — using only unprivileged OS features (Linux namespaces/Landlock, macOS Seatbelt). Give a program access to exactly the domains and paths it needs, and nothing else.
+curb runs commands inside a locked-down sandbox with restrictive filesystem, network, environment, and executable defaults — using only unprivileged OS features (Linux namespaces/Landlock, macOS Seatbelt). Give a program access to exactly the domains and paths it needs, and nothing else.
 
 ## Why curb?
 
 - **Single binary, no privileges** — no root, no Docker, no daemon.
-- **Default-deny everything** — filesystem, network, environment variables, and executables are all blocked unless explicitly allowed.
+- **Restrictive defaults** — network is fully blocked, environment variables are sanitized, filesystem access is limited to system paths and the current directory (read-only), and only the invoked command is executable. Writable paths are not executable by default.
 - **Domain-level network filtering** — a proxy filters HTTP/HTTPS by domain, avoiding issues with Encrypted Client Hello (ECH).
 - **Built-in profiles** — one flag (`-p node`, `-p go`, `-p python`, ...) adds the right domains, paths, and env vars for common toolchains.
 - **Defense in depth** — mount namespaces + Landlock LSM for filesystem, proxy + optional userspace TCP/IP stack for network.
@@ -24,10 +24,10 @@ Clone the repository, then install with `go install`
 
 ## Quick start
 
-Run a shell inside the sandbox:
+Run an interactive shell inside the sandbox (with system binaries available):
 
 ```
-curb
+curb shell
 ```
 
 Run a command with default restrictions (read-only filesystem, no network, sanitized env):
@@ -175,7 +175,7 @@ Defaults: system paths (`/usr`, `/lib`, `/proc`), select `/etc` files (DNS, TLS 
 |------|---------|-------------|
 | `--exec` | `CURB_EXEC` | Allowed executables. `!` prefix removes defaults, `*` allows all. |
 
-Default: system binaries in `/usr/bin`, `/bin`, etc. Writable directories are not executable.
+Default: only the invoked command and dynamic linker. Use `curb shell` for interactive sessions, profiles for toolchains, or `--exec` for individual binaries.
 
 ### Environment
 

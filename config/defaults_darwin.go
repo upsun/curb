@@ -37,12 +37,6 @@ var DefaultRWFiles = []string{
 }
 
 // SystemExecPaths are directories from which executables are allowed by default on macOS.
-var SystemExecPaths = []string{
-	"/usr/bin",
-	"/bin",
-	"/usr/local/bin",
-	"/usr/sbin",
-	"/sbin",
-	"/usr/libexec",
-	"/opt/homebrew/bin",
-}
+// Empty: only the invoked command and profile/flag additions are executable.
+// Use the "shell" profile or --exec to allow system binaries.
+var SystemExecPaths []string

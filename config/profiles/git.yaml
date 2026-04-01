@@ -6,6 +6,7 @@ read:
   - ~/.gitconfig
   - ~/.config/git
 exec:
+  - sh
   - git
   - gpg
 env:

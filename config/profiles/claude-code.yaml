@@ -24,6 +24,7 @@ write:
   # Inside a user namespace UID is always 0.
   - /tmp/claude-0
 exec:
+  - sh
   - claude
   - node
   - npm

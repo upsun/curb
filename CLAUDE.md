@@ -41,6 +41,7 @@ go test ./sandbox/ -run TestCurb_FS_ -v  # run a subset
 - `--domains` validates input: rejects URLs (suggests bare domain), IP addresses (suggests `--ips`), invalid characters, and malformed wildcards. `--ips` validates that values parse as IP addresses or CIDR prefixes.
 - `!` prefix in list flags removes from defaults AND actively denies via overmount when the path is under an allowed parent. `--read '!/path'` hides (tmpfs/dev-null), `--write '!/path'` makes read-only, `--exec '!/path'` makes noexec. `!*` clears all defaults (not deny-all). `\!` escapes literal `!`. Sub-path denials require mount NS; Landlock-only mode warns.
 - HOME defaults to a private tmpDir. `--env HOME` passes through the host HOME; `--env HOME=/path` sets it explicitly. `~` in config/profile paths resolves to the sandbox HOME (not the host home). Built-in profiles include `HOME` in their env passthrough so `~` paths resolve correctly. See `docs/configuration.md` for full details.
+- Exec is default-deny: `SystemExecPaths` is empty. Only the invoked command binary (auto-added), dynamic linker directories (`/lib`, `/lib64` on Linux, always included via `linkerExecPaths()` in `plan.go`), and profile/flag additions are executable. The `shell` profile restores system binary directories for interactive use. `curb shell` auto-applies it.
 
 ### Process lifecycle
 

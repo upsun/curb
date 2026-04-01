@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -401,6 +402,12 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	} else {
 		plan.ExecPaths = config.ApplyExclusions(config.SystemExecPaths, excludeArgs(removals.execRemoves))
 	}
+	// Always include dynamic linker directories so dynamically-linked
+	// binaries work even with --exec '!*'. The kernel checks Landlock
+	// EXECUTE when loading the ELF interpreter via open_exec().
+	// Added after exclusion processing intentionally: --exec '!/lib'
+	// cannot remove them, since doing so would break all dynamic linking.
+	plan.ExecPaths = append(plan.ExecPaths, linkerExecPaths()...)
 	for _, name := range execAdds {
 		if strings.ContainsRune(name, filepath.Separator) {
 			// Path (absolute or relative): expand globs, resolve to absolute.
@@ -455,6 +462,17 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	// child can stat() them for path resolution after Landlock.
 	if !cfg.NoFSRestrict {
 		plan.ROPaths = appendExecDirs(plan.ROPaths, plan.ExecPaths, plan.TempDir)
+	}
+	return nil
+}
+
+// linkerExecPaths returns directories needed for the dynamic linker. On Linux,
+// the kernel checks Landlock EXECUTE when loading the ELF interpreter via
+// open_exec(). On other platforms, the dynamic linker is handled by the OS
+// (macOS system.sb handles dyld).
+func linkerExecPaths() []string {
+	if runtime.GOOS == "linux" {
+		return []string{"/lib", "/lib64"}
 	}
 	return nil
 }
