@@ -73,13 +73,9 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	if plan.UsePivotRoot {
 		cloneFlags |= syscall.CLONE_NEWNS
 	}
-	// PID namespace: skip when proxy is enabled because the child's initLoop
-	// handles fork+exec (PID 1 must be the Go runtime for the accept loop).
-	usePidNS := plan.PidNS && !plan.ProxyEnabled
-	if usePidNS {
+	if plan.PidNS {
 		cloneFlags |= syscall.CLONE_NEWPID
 	}
-	plan.PidNS = usePidNS
 	cmd := exec.Command(self)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: cloneFlags,

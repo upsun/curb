@@ -257,3 +257,24 @@ func TestCurb_Proxy_HostLoopbackAlone(t *testing.T) {
 	require.NoError(t, err, "dry-run failed: %s", outStr)
 	assert.Contains(t, outStr, "proxy:      127.0.0.1:")
 }
+
+// TestCurb_Proxy_PidNS_FreshProc verifies that PID namespace isolation works
+// when the proxy is active (--domains). With both PID NS and mount NS, /proc
+// should show only the namespace's own PIDs, not the host process table.
+func TestCurb_Proxy_PidNS_FreshProc(t *testing.T) {
+	requireProxyNS(t)
+	requirePidNS(t)
+	requireMountOps(t)
+
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--domains", "example.com",
+		"--", "sh", "-c", "ls /proc | grep -c '^[0-9]'")
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	skipIfSetupFailed(t, err, string(out))
+	require.NoError(t, err, "unexpected failure: %s", outStr)
+	var count int
+	_, scanErr := fmt.Sscanf(outStr, "%d", &count)
+	require.NoError(t, scanErr, "unexpected output: %s", outStr)
+	assert.Less(t, count, 10, "expected few PIDs in fresh /proc with proxy+PID NS, got %d", count)
+}
