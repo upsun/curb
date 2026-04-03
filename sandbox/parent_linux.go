@@ -206,10 +206,10 @@ func recvFDLoop(sock *os.File, httpCL, socksCL *proxy.ConnListener) {
 // so enforceFS naturally applies only Landlock.
 func startLandlockOnly(plan *SandboxPlan) (int, error) {
 	cfg := plan.childConfig()
-	if err := enforceFS(&cfg); err != nil {
+	if err := enforceFS(&cfg, plan.Logger); err != nil {
 		return -1, err
 	}
-	if err := enforceSeccomp(cfg.AllowUnixSockets); err != nil {
+	if err := enforceSeccomp(cfg.AllowUnixSockets, plan.Logger); err != nil {
 		return -1, err
 	}
 	exe, err := findExecutable(cfg.Command[0], cfg.Env)

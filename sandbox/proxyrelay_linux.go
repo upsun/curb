@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"sync"
+
+	"github.com/upsun/curb/clog"
 )
 
 // proxyRelayInit runs in the child process for proxy mode.
@@ -14,7 +16,7 @@ import (
 // and relays accepted connection fds to the parent via the socketpair. The
 // target command is fork+exec'd (the Go runtime must stay alive for the accept
 // loops).
-func proxyRelayInit(sockFile *os.File, cfg *ChildConfig) error {
+func proxyRelayInit(sockFile *os.File, cfg *ChildConfig, log *clog.Logger) error {
 	if err := bringUpLoopback(); err != nil {
 		return err
 	}
@@ -42,7 +44,7 @@ func proxyRelayInit(sockFile *os.File, cfg *ChildConfig) error {
 		listeners = append(listeners, socksLn)
 	}
 
-	if err := enforceFS(cfg); err != nil {
+	if err := enforceFS(cfg, log); err != nil {
 		closeAll()
 		return err
 	}
@@ -50,7 +52,7 @@ func proxyRelayInit(sockFile *os.File, cfg *ChildConfig) error {
 	// Seccomp: block AF_UNIX socket creation. Applied after FS enforcement
 	// but before fork+exec so the user command inherits the filter.
 	// The accept loops use TCP (AF_INET) and existing fds, so are unaffected.
-	if err := enforceSeccomp(cfg.AllowUnixSockets); err != nil {
+	if err := enforceSeccomp(cfg.AllowUnixSockets, log); err != nil {
 		closeAll()
 		return err
 	}
