@@ -149,10 +149,13 @@ func isSubsumed(dirs map[string]mountEntry, child mountEntry) bool {
 	}
 }
 
-type pivotRootEnforcer struct{ cfg *ChildConfig }
+type pivotRootEnforcer struct {
+	cfg *ChildConfig
+	log *clog.Logger
+}
 
 func (e *pivotRootEnforcer) Enforce() error {
-	if err := enforceMountNS(e.cfg); err != nil {
+	if err := enforceMountNS(e.cfg, e.log); err != nil {
 		return fmt.Errorf("mount namespace enforcement: %w", err)
 	}
 	return nil
@@ -160,7 +163,7 @@ func (e *pivotRootEnforcer) Enforce() error {
 
 // enforceMountNS restricts filesystem access by building a new root from
 // allowed paths using bind mounts and pivot_root.
-func enforceMountNS(cfg *ChildConfig) error {
+func enforceMountNS(cfg *ChildConfig, log *clog.Logger) error {
 	if err := prepareMountNS(); err != nil {
 		return fmt.Errorf("setting slave propagation: %w", err)
 	}
@@ -206,7 +209,7 @@ func enforceMountNS(cfg *ChildConfig) error {
 			// incompatible mount properties (e.g. kernel pseudo-filesystems
 			// mounted underneath by EDR tools).
 			if m.userRequested {
-				clog.Warnf("skipping %s: bind mount failed (%v); path will not be available in the sandbox", m.src, err)
+				log.Warn("skipping %s: bind mount failed (%v); path will not be available in the sandbox", m.src, err)
 			}
 			_ = os.Remove(dst)
 			continue
@@ -265,7 +268,7 @@ func enforceMountNS(cfg *ChildConfig) error {
 		dst := filepath.Join(newRoot, cfg.SSHConfigMountDst)
 		if _, err := os.Stat(dst); err == nil {
 			if err := syscall.Mount(cfg.SSHConfigFile, dst, "", syscall.MS_BIND, ""); err != nil {
-				childWarn(cfg.Quiet, "SSH config bind-mount failed (ssh may not use SOCKS5 proxy): %v", err)
+				log.Warn("SSH config bind-mount failed (ssh may not use SOCKS5 proxy): %v", err)
 			} else {
 				flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
 				_ = syscall.Mount("", dst, "", flags, "")
@@ -273,22 +276,27 @@ func enforceMountNS(cfg *ChildConfig) error {
 		}
 	}
 
-	// Mount /proc. In a PID namespace, mount a fresh procfs (shows only
-	// the namespace's processes). Without a PID namespace, bind-mount the
-	// host /proc (mounting a fresh procfs requires owning the PID namespace).
+	// Mount /proc. In a PID namespace, prefer a fresh procfs (shows only
+	// the namespace's processes). If that fails (e.g. seccomp blocks it),
+	// fall back to bind-mounting the host /proc (PIDs won't be namespace-
+	// scoped, but /proc/self/* will work). Without a PID namespace, bind-
+	// mount the host /proc directly.
 	procDst := filepath.Join(newRoot, "proc")
 	if err := os.MkdirAll(procDst, 0o755); err != nil {
 		return fmt.Errorf("creating /proc: %w", err)
 	}
+	procMounted := false
 	if cfg.PidNS {
 		if err := syscall.Mount("proc", procDst, "proc",
 			syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
-			clog.Warnf("/proc mount failed: %v (os.Executable and /proc/* will be unavailable)", err)
-			_ = os.Remove(procDst)
+			log.Debug("/proc mount failed, falling back to bind-mount: %v", err)
+		} else {
+			procMounted = true
 		}
-	} else {
+	}
+	if !procMounted {
 		if err := syscall.Mount("/proc", procDst, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
-			clog.Warnf("/proc bind-mount failed: %v (os.Executable and /proc/* will be unavailable)", err)
+			log.Debug("/proc bind-mount failed: %v", err)
 			_ = os.Remove(procDst)
 		} else {
 			// Remount top-level read-only. Submounts (e.g. /proc/sys) inherited

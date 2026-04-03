@@ -72,14 +72,14 @@ var seccompFilter = [10]unix.SockFilter{
 // The filter is applied after all other sandbox setup (namespaces, mount NS,
 // Landlock) but before exec. It is always-on as defense-in-depth, even when
 // network namespace isolation already prevents abstract socket escape.
-func enforceSeccomp(allowUnixSockets bool) error {
+func enforceSeccomp(allowUnixSockets bool, log *clog.Logger) error {
 	if allowUnixSockets {
 		return nil
 	}
 	// This reads from the OS process env (inherited by the re-exec'd child),
 	// not the filtered config env (which strips _CURB_ vars).
 	if os.Getenv(TestNoSeccompEnvKey) == "1" {
-		clog.Warnf("seccomp: disabled by %s", TestNoSeccompEnvKey)
+		log.Warn("seccomp: disabled by %s", TestNoSeccompEnvKey)
 		return nil
 	}
 

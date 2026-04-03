@@ -144,6 +144,8 @@ type ChildConfig struct {
 	UserPaths         []string `json:"user_paths,omitempty"`
 	AllowUnixSockets  bool     `json:"allow_unix_sockets,omitempty"`
 	Quiet             bool     `json:"quiet,omitempty"`
+	Verbose           bool     `json:"verbose,omitempty"`
+	Debug             bool     `json:"debug,omitempty"`
 	TempDir           string   `json:"temp_dir"`
 }
 
@@ -582,6 +584,8 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		AllowUnixSockets:  p.AllowUnixSockets,
 		UserPaths:         p.UserPaths,
 		Quiet:             p.Quiet,
+		Verbose:           p.Logger.IsVerbose(),
+		Debug:             p.Logger.IsDebug(),
 		TempDir:           p.TempDir,
 	}
 }

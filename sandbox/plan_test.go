@@ -687,26 +687,26 @@ func TestApplyEnvPolicy_EnvSet(t *testing.T) {
 
 func TestFSEnforcers_NoFSRestrict(t *testing.T) {
 	cfg := &ChildConfig{NoFSRestrict: true, UsePivotRoot: true, UseLandlock: true}
-	assert.Nil(t, fsEnforcers(cfg))
+	assert.Nil(t, fsEnforcers(cfg, nil))
 }
 
 func TestFSEnforcers_PivotRootOnly(t *testing.T) {
 	cfg := &ChildConfig{UsePivotRoot: true}
-	enforcers := fsEnforcers(cfg)
+	enforcers := fsEnforcers(cfg, nil)
 	require.Len(t, enforcers, 1)
 	assert.IsType(t, &pivotRootEnforcer{}, enforcers[0])
 }
 
 func TestFSEnforcers_LandlockOnly(t *testing.T) {
 	cfg := &ChildConfig{UseLandlock: true}
-	enforcers := fsEnforcers(cfg)
+	enforcers := fsEnforcers(cfg, nil)
 	require.Len(t, enforcers, 1)
 	assert.IsType(t, &landlockEnforcer{}, enforcers[0])
 }
 
 func TestFSEnforcers_Both(t *testing.T) {
 	cfg := &ChildConfig{UsePivotRoot: true, UseLandlock: true}
-	enforcers := fsEnforcers(cfg)
+	enforcers := fsEnforcers(cfg, nil)
 	require.Len(t, enforcers, 2)
 	assert.IsType(t, &pivotRootEnforcer{}, enforcers[0], "pivot_root first")
 	assert.IsType(t, &landlockEnforcer{}, enforcers[1], "landlock second")
@@ -714,7 +714,7 @@ func TestFSEnforcers_Both(t *testing.T) {
 
 func TestFSEnforcers_Neither(t *testing.T) {
 	cfg := &ChildConfig{}
-	assert.Nil(t, fsEnforcers(cfg))
+	assert.Nil(t, fsEnforcers(cfg, nil))
 }
 
 func TestApplyEnvPolicy_PassthroughAll(t *testing.T) {

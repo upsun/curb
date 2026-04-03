@@ -35,21 +35,26 @@ func childInit() error {
 	}
 	_ = configFile.Close()
 
+	log, err := clog.New("", cfg.Verbose, cfg.Debug, cfg.Quiet)
+	if err != nil {
+		return fmt.Errorf("creating logger: %w", err)
+	}
+
 	// Proxy mode: the child runs the accept loop and relays fds to the parent.
 	// This must happen before FS enforcement (needs lo interface up).
 	if cfg.ProxyEnabled {
 		// Close sockFile after proxyRelayInit returns (it stays open for fd-passing).
-		return proxyRelayInit(sockFile, &cfg)
+		return proxyRelayInit(sockFile, &cfg, log)
 	}
 	_ = sockFile.Close()
 
 	// Filesystem enforcement: pivot_root first, then Landlock.
-	if err := enforceFS(&cfg); err != nil {
+	if err := enforceFS(&cfg, log); err != nil {
 		return err
 	}
 
 	// Seccomp: block AF_UNIX socket creation (abstract socket escape prevention).
-	if err := enforceSeccomp(cfg.AllowUnixSockets); err != nil {
+	if err := enforceSeccomp(cfg.AllowUnixSockets, log); err != nil {
 		return err
 	}
 
@@ -159,13 +164,13 @@ func (e *landlockEnforcer) Enforce() error {
 
 // fsEnforcers returns the ordered list of filesystem enforcers for the config.
 // pivot_root is applied first (if available), then Landlock for defense-in-depth.
-func fsEnforcers(cfg *ChildConfig) []FSEnforcer {
+func fsEnforcers(cfg *ChildConfig, log *clog.Logger) []FSEnforcer {
 	if cfg.NoFSRestrict {
 		return nil
 	}
 	var enforcers []FSEnforcer
 	if cfg.UsePivotRoot {
-		enforcers = append(enforcers, &pivotRootEnforcer{cfg: cfg})
+		enforcers = append(enforcers, &pivotRootEnforcer{cfg: cfg, log: log})
 	}
 	if cfg.UseLandlock {
 		enforcers = append(enforcers, &landlockEnforcer{paths: cfg.LandlockPaths()})
@@ -175,22 +180,13 @@ func fsEnforcers(cfg *ChildConfig) []FSEnforcer {
 
 // enforceFS applies filesystem enforcement (pivot_root + Landlock) from the
 // child config. Called from both childInit and proxyRelayInit.
-func enforceFS(cfg *ChildConfig) error {
-	for _, e := range fsEnforcers(cfg) {
+func enforceFS(cfg *ChildConfig, log *clog.Logger) error {
+	for _, e := range fsEnforcers(cfg, log) {
 		if err := e.Enforce(); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// childWarn prints a warning to stderr from the child process.
-// Suppressed if quiet is true.
-func childWarn(quiet bool, format string, args ...any) {
-	if quiet {
-		return
-	}
-	clog.Warnf(format, args...)
 }
 
 // prepareMountNS makes mount propagation slave so overmounts don't propagate to host.

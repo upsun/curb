@@ -128,6 +128,11 @@ func (l *Logger) Event(event, domain, action, reason string) {
 	}
 }
 
+// IsVerbose reports whether verbose logging is enabled.
+func (l *Logger) IsVerbose() bool {
+	return l != nil && l.verbose
+}
+
 // IsDebug reports whether debug logging is enabled.
 func (l *Logger) IsDebug() bool {
 	return l != nil && l.debug
