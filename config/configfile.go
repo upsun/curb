@@ -13,6 +13,7 @@ import (
 // ConfigFile represents the sandbox-config subset of Config as loaded from a YAML file.
 // Pointer types for scalars distinguish "not set" from zero value.
 type ConfigFile struct {
+	Commands         []string `yaml:"commands"` // Basenames this profile matches (for --auto).
 	Profiles         []string `yaml:"profiles"`
 	Domains          []string `yaml:"domains"`
 	IPs              []string `yaml:"ips"`
@@ -23,6 +24,7 @@ type ConfigFile struct {
 	AllowUnixSockets *bool `yaml:"allow-unix-sockets"`
 	UnrestrictedNet  *bool `yaml:"unrestricted-net"`
 	HostLoopback     *bool `yaml:"host-loopback"`
+	Auto             *bool `yaml:"auto"`
 }
 
 // LoadConfigFile reads and decodes a YAML config file.

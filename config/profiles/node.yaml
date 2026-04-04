@@ -1,5 +1,6 @@
 # Node.js / npm / yarn / pnpm
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [node, npm, npx, pnpm, yarn, bun]
 domains:
   - registry.npmjs.org
   - "*.npmjs.org"

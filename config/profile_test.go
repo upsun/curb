@@ -497,6 +497,100 @@ func TestShowProfile_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+func TestMatchProfile_Builtins(t *testing.T) {
+	tests := []struct {
+		command     string
+		wantProfile string
+	}{
+		{"node", "node"},
+		{"npm", "node"},
+		{"npx", "node"},
+		{"pnpm", "node"},
+		{"yarn", "node"},
+		{"bun", "node"},
+		{"python", "python"},
+		{"python3", "python"},
+		{"pip", "python"},
+		{"pip3", "python"},
+		{"php", "php"},
+		{"composer", "php"},
+		{"go", "go"},
+		{"cargo", "rust"},
+		{"rustc", "rust"},
+		{"rustup", "rust"},
+		{"git", "git"},
+		{"gh", "github"},
+		{"docker", "docker"},
+		{"docker-compose", "docker"},
+		{"claude", "claude-code"},
+		{"ssh", "ssh"},
+		{"scp", "ssh"},
+		{"sftp", "ssh"},
+		{"gcc", "cc"},
+		{"clang", "cc"},
+		{"bash", "shell"},
+		{"zsh", "shell"},
+		{"sh", "shell"},
+		{"fish", "shell"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			name, ok, errs := MatchProfile(tt.command)
+			assert.Empty(t, errs)
+			assert.True(t, ok)
+			assert.Equal(t, tt.wantProfile, name)
+		})
+	}
+}
+
+func TestMatchProfile_FullPath(t *testing.T) {
+	name, ok, _ := MatchProfile("/usr/bin/python3")
+	assert.True(t, ok)
+	assert.Equal(t, "python", name)
+}
+
+func TestMatchProfile_NoMatch(t *testing.T) {
+	_, ok, _ := MatchProfile("unknown-tool")
+	assert.False(t, ok)
+}
+
+func TestMatchProfile_EmptyCommand(t *testing.T) {
+	_, ok, _ := MatchProfile("")
+	assert.False(t, ok)
+}
+
+func TestMatchProfile_UserProfile(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "mytool.yaml"), []byte("commands: [mytool]\ndomains:\n  - mytool.dev\n"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	name, ok, _ := MatchProfile("mytool")
+	assert.True(t, ok)
+	assert.Equal(t, "mytool", name)
+}
+
+func TestMatchProfile_BrokenProfile(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "broken.yaml"), []byte("{{invalid yaml"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, _, errs := MatchProfile("anything")
+	assert.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "broken")
+}
+
+func TestLoadProfile_CommandsField(t *testing.T) {
+	cf, err := LoadProfile("node")
+	require.NoError(t, err)
+	assert.Contains(t, cf.Commands, "node")
+	assert.Contains(t, cf.Commands, "npm")
+	assert.Contains(t, cf.Commands, "npx")
+}
+
 func TestShowProfile_UserOverridesBuiltin(t *testing.T) {
 	dir := t.TempDir()
 	profileDir := filepath.Join(dir, "curb", "profiles")

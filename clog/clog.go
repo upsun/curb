@@ -17,6 +17,8 @@ const (
 	ansiRed    = "\033[31m"
 	ansiYellow = "\033[33m"
 	ansiBlue   = "\033[34m"
+	ansiBold   = "\033[1m"
+	ansiCyan   = "\033[36m"
 	ansiDim    = "\033[2m"
 	ansiReset  = "\033[0m"
 )
@@ -80,6 +82,22 @@ func (l *Logger) Error(format string, args ...any) {
 		return
 	}
 	l.printLevel("error", ansiRed, fmt.Sprintf(format, args...))
+}
+
+// Hint prints a suggestion to stderr, suppressed if quiet.
+func (l *Logger) Hint(format string, args ...any) {
+	if l == nil || l.quiet {
+		return
+	}
+	l.printLevel("hint", ansiCyan, fmt.Sprintf(format, args...))
+}
+
+// Code formats s as an inline code span — bold when color is enabled, backtick-wrapped otherwise.
+func (l *Logger) Code(s string) string {
+	if l != nil && l.color {
+		return ansiBold + s + ansiReset
+	}
+	return "`" + s + "`"
 }
 
 // Info prints an informational message to stderr, suppressed if quiet or not verbose.

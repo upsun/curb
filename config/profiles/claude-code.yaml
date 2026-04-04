@@ -2,6 +2,12 @@
 # HOME is passed through so ~ paths below resolve to the real home directory.
 # Includes git config/env directly (not via profile composition, to avoid
 # inheriting SSH key access). Add -p ssh explicitly if needed.
+#
+# Claude Code's own bwrap sandbox cannot nest inside curb's namespace.
+# Set sandbox.enabled: false in Claude Code settings — curb provides enforcement.
+commands: [claude]
+# Node.js/Bun use AF_UNIX socketpairs internally for child_process.spawn() stdio.
+allow-unix-sockets: true
 domains:
   - api.anthropic.com
   - platform.claude.com
@@ -20,19 +26,16 @@ write:
   - !~/.claude/settings.json
   - !./.claude/agents
   - !./.claude/commands
-  # Workaround: Claude Code ignores $TMPDIR and hardcodes /tmp/claude-<UID>.
-  # Inside a user namespace UID is always 0.
-  - /tmp/claude-0
+  - !./.claude/settings.json
+  - !./.claude/settings.local.json
 exec:
-  - sh
-  - claude
-  - node
-  - npm
-  - npx
-  - git
-  - gpg
+  - /usr/bin
+  - /bin
+  - /usr/local/bin
+  - /opt/homebrew/bin
 env:
   - HOME
+  - CLAUDE_CODE_TMPDIR=$TMPDIR
   - ANTHROPIC_API_KEY
   - CLAUDE_CODE_MAX_TOKENS
   - GIT_AUTHOR_NAME

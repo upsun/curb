@@ -235,6 +235,29 @@ func ListProfiles() []ProfileInfo {
 	return profiles
 }
 
+// MatchProfile finds the first profile whose Commands list contains the
+// basename of command. Profiles are checked in alphabetical order (user
+// profiles shadow builtins of the same name via ListProfiles). Returns
+// the profile name and true, or "" and false if no profile matches.
+// Profiles that fail to load are collected in errs.
+func MatchProfile(command string) (name string, ok bool, errs []error) {
+	base := filepath.Base(command)
+	if base == "." || base == "/" {
+		return "", false, nil
+	}
+	for _, p := range ListProfiles() {
+		cf, err := LoadProfile(p.Name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("profile %q: %w", p.Name, err))
+			continue
+		}
+		if slices.Contains(cf.Commands, base) {
+			return p.Name, true, errs
+		}
+	}
+	return "", false, errs
+}
+
 // ShowProfile returns the raw YAML content of a profile by name.
 func ShowProfile(name string) ([]byte, ProfileSource, error) {
 	return findProfile(name)

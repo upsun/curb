@@ -27,7 +27,7 @@ Clone the repository, then install with `go install`
 Run an interactive shell inside the sandbox (with system binaries available):
 
 ```
-curb shell
+curb -a bash
 ```
 
 Run a command with default restrictions (read-only filesystem, no network, sanitized env):
@@ -105,6 +105,17 @@ curb -p node --write . --domains '*.npmjs.org,registry.internal.dev' -- npm inst
 
 Profiles can also be activated via config file (`.curb.yaml`) or environment variable (`CURB_PROFILES=node,git`).
 
+### Auto-profile matching
+
+Use `--auto` (or `-a`) to auto-select a profile based on the command name:
+
+```
+curb --auto npm install       # auto-selects the "node" profile
+curb -a cargo build           # auto-selects the "rust" profile
+```
+
+Also available via `CURB_AUTO=1` or `auto: true` in `.curb.yaml`. See [docs/configuration.md](docs/configuration.md#auto-profile-matching) for details.
+
 ## Examples
 
 Sandbox a build that needs network access and writes to the project directory:
@@ -175,7 +186,7 @@ Defaults: system paths (`/usr`, `/lib`, `/proc`), select `/etc` files (DNS, TLS 
 |------|---------|-------------|
 | `--exec` | `CURB_EXEC` | Allowed executables. `!` prefix removes defaults, `*` allows all. |
 
-Default: only the invoked command and dynamic linker. Use `curb shell` for interactive sessions, profiles for toolchains, or `--exec` for individual binaries.
+Default: only the invoked command and dynamic linker. Use `-a` to auto-apply the `shell` profile for interactive sessions, profiles for toolchains, or `--exec` for individual binaries.
 
 ### Environment
 

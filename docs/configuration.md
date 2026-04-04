@@ -110,6 +110,39 @@ curb profile list          # list available profiles
 curb profile show node     # show a profile's contents
 ```
 
+### Auto-profile matching
+
+Instead of specifying a profile manually, `--auto` (or `-a`) selects a profile based on the command name.
+
+```
+curb --auto npm install        # auto-selects the "node" profile
+curb -a cargo build            # auto-selects the "rust" profile
+curb -a /usr/bin/python3 app.py  # auto-selects the "python" profile
+```
+
+Enable via:
+
+| Method | Example |
+|--------|---------|
+| CLI flag | `--auto` / `-a` |
+| Env var | `CURB_AUTO=1` |
+| Config file | `auto: true` |
+
+How it works: curb takes the basename of the first command argument and searches all available profiles for a matching `commands:` field. The first profile whose `commands` list contains the basename is activated. If no profile matches, curb proceeds without one (no error).
+
+The auto-matched profile is prepended to the profile list with lowest precedence, so explicit `-p` profiles and config file profiles override it. If the auto-matched profile was already activated explicitly, it is not duplicated.
+
+User-defined profiles can participate by adding a `commands:` field:
+
+```yaml
+# ~/.config/curb/profiles/mydb.yaml
+commands: [psql, pg_dump, pg_restore]
+domains:
+  - db.example.com
+env:
+  - PGPASSWORD
+```
+
 ## Environment variables
 
 ### `--env` syntax

@@ -1,5 +1,6 @@
 # GitHub (includes Git).
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [gh]
 profiles:
   - git
 domains:

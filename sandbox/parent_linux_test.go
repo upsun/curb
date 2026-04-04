@@ -808,14 +808,14 @@ func TestCurb_Exec_NoDefaultExec_ShellWorks(t *testing.T) {
 	assert.Contains(t, string(out), "hello")
 }
 
-// TestCurb_Shell_SystemBinariesAvailable verifies that 'curb shell' auto-applies
+// TestCurb_AutoShellProfile verifies that 'curb -a bash' auto-applies
 // the shell profile, making system binaries executable.
-func TestCurb_Shell_SystemBinariesAvailable(t *testing.T) {
+func TestCurb_AutoShellProfile(t *testing.T) {
 	requireUserNS(t)
 
-	cmd := exec.Command(curbBin, "shell", "--", "sh", "-c", "ls /usr > /dev/null && echo ok")
+	cmd := exec.Command(curbBin, "-a", "--", "bash", "-c", "ls /usr > /dev/null && echo ok")
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "expected curb shell to allow system binaries: %s", string(out))
+	require.NoError(t, err, "expected curb -a bash to allow system binaries: %s", string(out))
 	assert.Contains(t, string(out), "ok")
 }
 

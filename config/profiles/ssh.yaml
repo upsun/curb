@@ -1,5 +1,6 @@
 # SSH client (enables unix sockets for agent forwarding).
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [ssh, scp, sftp]
 allow-unix-sockets: true
 read:
   - ~/.ssh

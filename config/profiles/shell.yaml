@@ -1,6 +1,7 @@
 # Interactive shell with access to standard system binaries.
 # HOME is passed through so ~ resolves to the real home directory.
-# Use -p shell for interactive curb sessions or curb shell.
+# Use -a for auto-apply (e.g. curb -a bash) or -p shell explicitly.
+commands: [bash, zsh, sh, fish, dash, ksh, tcsh, csh]
 read:
   - "~" # Quoted: bare ~ is YAML null.
 exec:

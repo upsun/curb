@@ -1,5 +1,6 @@
 # Git / GPG (includes SSH).
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [git]
 profiles:
   - ssh
 read:

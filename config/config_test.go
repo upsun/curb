@@ -30,6 +30,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.Bool("debug", false, "")
 	f.BoolP("quiet", "q", false, "")
 	f.Bool("dry-run", false, "")
+	f.BoolP("auto", "a", false, "")
 	f.StringSliceP("config-file", "c", nil, "")
 
 	cmd.SetArgs(args)

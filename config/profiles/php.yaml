@@ -1,5 +1,6 @@
 # PHP / Composer
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [php, composer]
 domains:
   - packagist.org
   - "*.packagist.org"
