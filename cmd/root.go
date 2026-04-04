@@ -45,7 +45,6 @@ Use -- before the command when it has its own flags.`,
 	registerFlags(cmd)
 	annotateFlags(cmd.Flags())
 	applyHelpTemplate(cmd)
-	cmd.AddCommand(NewConfigGenCmd())
 	cmd.AddCommand(NewProfileCmd())
 	cmd.AddCommand(NewApparmorCmd())
 	cmd.AddCommand(NewSocksConnectCmd())
