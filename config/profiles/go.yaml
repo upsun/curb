@@ -1,5 +1,6 @@
 # Go (includes C compiler for CGO).
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [go]
 profiles:
   - cc
 domains:

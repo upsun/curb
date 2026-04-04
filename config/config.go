@@ -31,6 +31,7 @@ type Config struct {
 	Debug             bool
 	Quiet             bool
 	DryRun            bool
+	Auto              bool
 	ConfigFilePaths []string
 	Command           []string
 }
@@ -112,6 +113,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	auto, err := flags.GetBool("auto")
+	if err != nil {
+		return nil, err
+	}
 	// Separate --allow-env values into passthrough names and explicit name=value pairs.
 	passNames, setPairs := classifyEnvArgs(env)
 
@@ -131,6 +136,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		Debug:            debug,
 		Quiet:            quiet,
 		DryRun:           dryRun,
+		Auto:             auto,
 		Command: cmd.Flags().Args(),
 	}
 
@@ -214,6 +220,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 
 	mergeBoolEnv(flags, &cfg.AllowUnixSockets, "allow-unix-sockets", "CURB_ALLOW_UNIX_SOCKETS")
 	mergeBoolEnv(flags, &cfg.HostLoopback, "host-loopback", "CURB_HOST_LOOPBACK")
+	mergeBoolEnv(flags, &cfg.Auto, "auto", "CURB_AUTO")
 }
 
 // classifyEnvArgs separates env args into passthrough names and explicit name=value pairs.
@@ -255,13 +262,14 @@ func SplitComma(s string) []string {
 
 func mergeBoolEnv(flags *pflag.FlagSet, target *bool, flagName, envKey string) {
 	if !flags.Changed(flagName) {
-		if envBool(envKey) {
+		if EnvBool(envKey) {
 			*target = true
 		}
 	}
 }
 
-func envBool(key string) bool {
+// EnvBool reports whether an environment variable is set to a truthy value ("1" or "true").
+func EnvBool(key string) bool {
 	val := os.Getenv(key)
 	return val == "1" || strings.EqualFold(val, "true")
 }

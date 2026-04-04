@@ -1,5 +1,6 @@
 # Rust / Cargo
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [cargo, rustc, rustup]
 domains:
   - crates.io
   - "*.crates.io"

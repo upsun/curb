@@ -1,5 +1,6 @@
 # Python / pip
 # HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [python, python3, pip, pip3]
 domains:
   - pypi.org
   - "*.pythonhosted.org"

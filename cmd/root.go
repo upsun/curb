@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/trace"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,7 +42,6 @@ Use -- before the command when it has its own flags.`,
 	cmd.AddCommand(NewProfileCmd())
 	cmd.AddCommand(NewApparmorCmd())
 	cmd.AddCommand(NewSocksConnectCmd())
-	cmd.AddCommand(NewShellCmd())
 	return cmd
 }
 
@@ -72,6 +72,38 @@ func runSandbox(cmd *cobra.Command, args []string, extraProfiles []string) error
 	// Collect activated profiles from config files, --profile flag, and CURB_PROFILES.
 	profileNames := collectProfiles(cmd, cfs)
 	profileNames = append(extraProfiles, profileNames...)
+
+	// Determine whether auto-profile matching is enabled.
+	// Check all three sources early (MergeEnv runs later).
+	autoEnabled := cfg.Auto
+	if !autoEnabled {
+		autoEnabled = config.EnvBool("CURB_AUTO")
+	}
+	if !autoEnabled {
+		for _, cf := range cfs {
+			if cf.Auto != nil && *cf.Auto {
+				autoEnabled = true
+				break
+			}
+		}
+	}
+
+	// Auto-profile: match command name to a profile's commands list.
+	var autoProfile, autoHint string
+	var matchErrs []error
+	if len(args) > 0 {
+		matched, ok, errs := config.MatchProfile(args[0])
+		matchErrs = errs
+		if ok && autoEnabled {
+			autoProfile = matched
+			if !slices.Contains(profileNames, matched) {
+				profileNames = append([]string{matched}, profileNames...)
+			}
+		} else if ok && !autoEnabled && !slices.Contains(profileNames, matched) {
+			autoHint = matched
+		}
+	}
+
 	if err := config.MergeProfiles(cfg, profileNames, cmd.Flags()); err != nil {
 		return err
 	}
@@ -92,6 +124,17 @@ func runSandbox(cmd *cobra.Command, args []string, extraProfiles []string) error
 
 	for _, p := range cfg.ConfigFilePaths {
 		logger.Info("config: loaded %s.", p)
+	}
+	for _, e := range matchErrs {
+		logger.Warn("auto: %v.", e)
+	}
+	if autoProfile != "" {
+		logger.Info("auto: matched profile %q for %q.", autoProfile, args[0])
+	} else if autoEnabled && len(args) > 0 {
+		logger.Info("auto: no profile matched for %q.", args[0])
+	}
+	if autoHint != "" {
+		logger.Hint("use %s to auto-apply the %s profile for %s.", logger.Code("-a"), logger.Code(autoHint), logger.Code(args[0]))
 	}
 	if len(profileNames) > 0 {
 		logger.Info("profiles: %s.", strings.Join(profileNames, ", "))
@@ -264,6 +307,7 @@ func registerFlags(cmd *cobra.Command) {
 
 	// Profiles.
 	f.StringSliceP("profiles", "p", nil, "activate named profiles (e.g. node,git)")
+	f.BoolP("auto", "a", false, "auto-select a profile matching the command name")
 
 	// Network filtering.
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")

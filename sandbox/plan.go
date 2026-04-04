@@ -820,6 +820,13 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	}
 	for _, pair := range cfg.EnvSet {
 		k, v, _ := strings.Cut(pair, "=")
+		// Expand $VAR references against the sandbox env built so far.
+		v = os.Expand(v, func(name string) string {
+			if val, ok := plan.EnvSet[name]; ok {
+				return val
+			}
+			return ""
+		})
 		plan.EnvSet[k] = v
 	}
 	if cfg.EnvPassthroughAll {
