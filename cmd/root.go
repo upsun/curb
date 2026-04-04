@@ -32,7 +32,7 @@ Use -- before the command when it has its own flags.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				// Show short description + usage (not the full --help details).
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), cmd.Short)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), boldFirst(cmd.Short))
 				_, _ = fmt.Fprintln(cmd.OutOrStdout())
 				return cmd.Usage()
 			}
