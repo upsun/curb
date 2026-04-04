@@ -17,19 +17,24 @@ import (
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "curb [flags] [--] [command [args...]]",
-		Short: "Sandbox a process with filesystem, network, and environment restrictions",
-		Long: `curb runs a command inside an unprivileged sandbox with:
-  - Filesystem restrictions (Landlock + mount namespace)
-  - Network filtering by domain (--domains) or IP (--ips) via proxy
-  - Unrestricted network pass-through (--unrestricted-net) with FS sandbox only
-  - Executable control (Landlock EXECUTE)
-  - Environment sanitization (deny-by-default)
+		Short: "curb puts a command in a sandbox, restricting its capabilities by default.",
+		Long: `curb puts a command in a sandbox, restricting its capabilities by default.
+
+` + longDescription + `
 
 Use -- before the command when it has its own flags.`,
+		Example: `  curb make test                                            # default sandbox
+  curb --domains example.com -- curl https://example.com    # allow specific domains
+  curb -p node -w . -- npm install                          # profile + writable cwd
+  curb -a cargo build                                       # auto-select profile
+  curb --dry-run -p node -- npm install                     # preview sandbox plan`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				// Show short description + usage (not the full --help details).
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), cmd.Short)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout())
+				return cmd.Usage()
 			}
 			return runSandbox(cmd, args, nil)
 		},
@@ -38,6 +43,8 @@ Use -- before the command when it has its own flags.`,
 	}
 
 	registerFlags(cmd)
+	annotateFlags(cmd.Flags())
+	applyHelpTemplate(cmd)
 	cmd.AddCommand(NewConfigGenCmd())
 	cmd.AddCommand(NewProfileCmd())
 	cmd.AddCommand(NewApparmorCmd())
@@ -309,33 +316,31 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSliceP("profiles", "p", nil, "activate named profiles (e.g. node,git)")
 	f.BoolP("auto", "a", false, "auto-select a profile matching the command name")
 
-	// Network filtering.
+	// Filesystem.
+	f.StringSliceP("read", "r", nil, "readable paths (default: system dirs + cwd)")
+	f.StringSliceP("write", "w", nil, "writable paths (default: none)")
+
+	// Network.
 	f.StringSlice("domains", nil, "allowed domain patterns (e.g. example.com, *.github.com)")
-	f.StringSlice("ips", nil, "allowed IP addresses or CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16, ::1)")
-	f.Bool("unrestricted-net", false, "allow unrestricted network access (no filtering)")
-	f.Bool("host-loopback", false, "forward localhost/127.0.0.1 traffic to the host loopback")
+	f.StringSlice("ips", nil, "allowed IP/CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16)")
+	f.Bool("unrestricted-net", false, "skip network restrictions entirely")
+	f.Bool("host-loopback", false, "forward localhost traffic to host loopback")
 
-	// Filesystem (supports glob patterns and ! exclusions).
-	f.StringSlice("read", nil, "readable paths (! prefix denies/hides, '!*' clears all)")
-	f.StringSlice("write", nil, "writable paths (! prefix makes read-only, '*' disables FS)")
-
-	// Executable control.
-	f.StringSlice("exec", nil, "allowed executables (! prefix removes defaults, '*' allows all)")
+	// Executables.
+	f.StringSlice("exec", nil, "allowed executables (default: invoked command only)")
 
 	// Environment.
-	f.StringSlice("env", nil, "env vars to pass/set (! prefix removes defaults, '*' for all)")
+	f.StringSlice("env", nil, "env vars to pass (NAME) or set (NAME=VALUE)")
 
 	// Network options.
-	f.Bool("allow-unix-sockets", false, "allow AF_UNIX socket creation (needed for Docker, databases via socket)")
+	f.Bool("allow-unix-sockets", false, "allow AF_UNIX sockets (Docker, DB sockets)")
 
-	// Logging.
-	f.String("log-file", "", "write structured JSON logs to file (use with --domains '*' to discover needed domains, then: curb config-gen --from-log FILE)")
+	// Output.
+	f.Bool("dry-run", false, "print sandbox plan without running")
 	f.BoolP("verbose", "v", false, "verbose output")
 	f.Bool("debug", false, "detailed proxy/relay debug logging (implies -v)")
 	f.BoolP("quiet", "q", false, "suppress warnings")
-
-	// Other.
-	f.Bool("dry-run", false, "print the sandbox plan without running the command")
+	f.String("log-file", "", "write JSON logs to file")
 
 	// Profiling (hidden).
 	f.String("trace", "", "write execution trace to file (view with: go tool trace FILE)")

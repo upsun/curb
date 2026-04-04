@@ -17,10 +17,11 @@ const (
 	ansiRed    = "\033[31m"
 	ansiYellow = "\033[33m"
 	ansiBlue   = "\033[34m"
-	ansiBold   = "\033[1m"
 	ansiCyan   = "\033[36m"
 	ansiDim    = "\033[2m"
-	ansiReset  = "\033[0m"
+
+	ANSIBold  = "\033[1m"
+	ANSIReset = "\033[0m"
 )
 
 // Logger writes structured events to a JSON log file and/or human-readable
@@ -62,7 +63,7 @@ func New(logFile string, verbose, debug, quiet bool) (*Logger, error) {
 // printLevel writes a prefixed message to stderr with optional color.
 func (l *Logger) printLevel(prefix, color, msg string) {
 	if l.color {
-		_, _ = fmt.Fprintf(l.w, "%scurb: %s:%s %s\n", color, prefix, ansiReset, msg)
+		_, _ = fmt.Fprintf(l.w, "%scurb: %s:%s %s\n", color, prefix, ANSIReset, msg)
 	} else {
 		_, _ = fmt.Fprintf(l.w, "curb: %s: %s\n", prefix, msg)
 	}
@@ -95,7 +96,7 @@ func (l *Logger) Hint(format string, args ...any) {
 // Code formats s as an inline code span — bold when color is enabled, backtick-wrapped otherwise.
 func (l *Logger) Code(s string) string {
 	if l != nil && l.color {
-		return ansiBold + s + ansiReset
+		return ANSIBold + s + ANSIReset
 	}
 	return "`" + s + "`"
 }
@@ -139,7 +140,7 @@ func (l *Logger) Event(event, domain, action, reason string) {
 			msg = fmt.Sprintf("%s %s: %s", event, action, domain)
 		}
 		if l.color {
-			_, _ = fmt.Fprintf(l.w, "%scurb:%s %s\n", ansiDim, ansiReset, msg)
+			_, _ = fmt.Fprintf(l.w, "%scurb:%s %s\n", ansiDim, ANSIReset, msg)
 		} else {
 			_, _ = fmt.Fprintf(l.w, "curb: %s\n", msg)
 		}
@@ -187,7 +188,11 @@ func Warnf(format string, args ...any) {
 	l.printLevel("warning", ansiYellow, fmt.Sprintf(format, args...))
 }
 
-// isColorStderr reports whether stderr supports color output.
+// IsColorFd reports whether the given file descriptor supports color output.
+func IsColorFd(fd int) bool {
+	return term.IsTerminal(fd) && os.Getenv("NO_COLOR") == ""
+}
+
 func isColorStderr() bool {
-	return term.IsTerminal(int(os.Stderr.Fd())) && os.Getenv("NO_COLOR") == ""
+	return IsColorFd(int(os.Stderr.Fd()))
 }
