@@ -38,7 +38,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.CheckTarget(host) {
-		http.Error(w, "curb: domain not allowed: "+host, http.StatusForbidden)
+		http.Error(w, "curb: domain not allowed: "+host+" (see $CURB_SKILL_DIR/SKILL.md)", http.StatusForbidden)
 		h.logEvent("proxy_connect", r.Host, "blocked", "domain")
 		return
 	}
@@ -85,7 +85,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.CheckTarget(host) {
-		http.Error(w, "curb: domain not allowed: "+host, http.StatusForbidden)
+		http.Error(w, "curb: domain not allowed: "+host+" (see $CURB_SKILL_DIR/SKILL.md)", http.StatusForbidden)
 		h.logEvent("proxy_http", r.Host, "blocked", "domain")
 		return
 	}

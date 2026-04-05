@@ -276,6 +276,26 @@ func enforceMountNS(cfg *ChildConfig, log *clog.Logger) error {
 		}
 	}
 
+	// Bind-mount skill directories so agents discover them under HOME
+	// even when HOME is not the TempDir. The mount point directories are
+	// created on the real filesystem by writeSkill (before the
+	// sandbox starts) and are visible here through HOME's bind-mount.
+	// These empty directories persist on the host after the sandbox exits.
+	for _, m := range cfg.SkillMounts {
+		src, dst := m[0], filepath.Join(newRoot, m[1])
+		if _, err := os.Stat(dst); err != nil {
+			continue
+		}
+		if err := syscall.Mount(src, dst, "", syscall.MS_BIND, ""); err != nil {
+			log.Warn("skill bind-mount failed: %v", err)
+		} else {
+			flags := uintptr(syscall.MS_REMOUNT | syscall.MS_BIND | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+			if err := syscall.Mount("", dst, "", flags, ""); err != nil {
+				log.Warn("skill bind-mount read-only remount failed: %v", err)
+			}
+		}
+	}
+
 	// Mount /proc. In a PID namespace, prefer a fresh procfs (shows only
 	// the namespace's processes). If that fails (e.g. seccomp blocks it),
 	// fall back to bind-mounting the host /proc (PIDs won't be namespace-

@@ -88,7 +88,9 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 	// emulators like Ghostty, Kitty, and Alacritty ship their terminfo
 	// under /Applications/<name>.app/ which is outside the default paths.
 	addTerminfo(plan)
-
+	if err := writeSkill(plan, plan.TempDir); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 
