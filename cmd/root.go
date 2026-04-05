@@ -42,6 +42,7 @@ Use -- before the command when it has its own flags.`,
 		SilenceErrors: true,
 	}
 
+	cmd.Version = versionInfo()
 	registerFlags(cmd)
 	annotateFlags(cmd.Flags())
 	applyHelpTemplate(cmd)
@@ -340,6 +341,9 @@ func registerFlags(cmd *cobra.Command) {
 	f.Bool("debug", false, "detailed proxy/relay debug logging (implies -v)")
 	f.BoolP("quiet", "q", false, "suppress warnings")
 	f.String("log-file", "", "write JSON logs to file")
+
+	// Version: register before cobra's InitDefaultVersionFlag so it reuses ours.
+	f.BoolP("version", "V", false, "show version")
 
 	// Profiling (hidden).
 	f.String("trace", "", "write execution trace to file (view with: go tool trace FILE)")

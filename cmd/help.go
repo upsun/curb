@@ -24,7 +24,7 @@ var flagGroups = []flagGroup{
 	{"Executables", []string{"exec"}},
 	{"Environment", []string{"env"}},
 	{"Profiles & Config", []string{"profiles", "auto", "config-file"}},
-	{"Output", []string{"dry-run", "verbose", "debug", "quiet", "log-file"}},
+	{"Output", []string{"dry-run", "verbose", "debug", "quiet", "log-file", "version"}},
 }
 
 // applyHelpTemplate sets custom usage and help templates on the root command.
@@ -38,6 +38,7 @@ func applyHelpTemplate(cmd *cobra.Command) {
 	})
 	cmd.SetUsageTemplate(usageTemplate)
 	cmd.SetHelpTemplate(helpTemplate)
+	cmd.SetVersionTemplate("{{.Version}}\n")
 }
 
 // boldFirst bolds the first word of a string when color is supported.
