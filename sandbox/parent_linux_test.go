@@ -389,7 +389,7 @@ func TestCurb_EnvOnlyExpectedVars(t *testing.T) {
 		"HOME": true, "TMPDIR": true, "PATH": true, "SHELL": true,
 		"TERM": true, "COLORTERM": true, "LANG": true, "LC_ALL": true,
 		"LC_CTYPE": true, "TZ": true, "USER": true, "LOGNAME": true,
-		"IS_SANDBOX": true, "PS1": true,
+		"IS_SANDBOX": true, "PS1": true, "CURB_SKILL_DIR": true,
 	}
 	for _, line := range lines {
 		name, _, ok := strings.Cut(line, "=")
@@ -864,6 +864,19 @@ func TestCurb_EnvIsSandbox(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "curb -- env failed: %s", string(out))
 	assert.Contains(t, string(out), "IS_SANDBOX=1")
+}
+
+// TestCurb_SkillFileReadable verifies the SKILL.md is readable inside the sandbox
+// and that CURB_SKILL_DIR points to a valid skill directory.
+func TestCurb_SkillFileReadable(t *testing.T) {
+	requireUserNS(t)
+
+	// Use sh -c to expand the env var; --exec cat so cat is allowed.
+	cmd := exec.Command(curbBin, "--exec", "cat", "--", "sh", "-c", "cat $CURB_SKILL_DIR/SKILL.md")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "curb -- cat $CURB_SKILL_DIR/SKILL.md failed: %s", string(out))
+	assert.Contains(t, string(out), "name: curb")
+	assert.Contains(t, string(out), "# Sandbox Constraints")
 }
 
 // TestCurb_EnvExcludeIsSandbox verifies --env '!IS_SANDBOX' removes IS_SANDBOX.

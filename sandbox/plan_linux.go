@@ -46,5 +46,8 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 		return nil, err
 	}
 	resolveDenials(plan, &removals)
+	if err := writeSkill(plan, plan.TempDir); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }

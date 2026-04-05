@@ -881,3 +881,139 @@ func TestResolveEnv_HomeExplicitSet(t *testing.T) {
 	}
 	assert.Equal(t, "/explicit", homeVal)
 }
+
+// --- formatSkill / writeSkill ---
+
+func TestFormatSkill_Full(t *testing.T) {
+	plan := &SandboxPlan{
+		ROPaths:        []string{"/usr", "/lib"},
+		RWPaths:        []string{"/tmp/curb-abc"},
+		ExecPaths:      []string{"/usr/bin/node"},
+		HiddenPaths:    []string{"/home/user/.ssh/keys"},
+		DenyWritePaths: []string{"/home/user/.gitconfig"},
+		DenyExecPaths:  []string{"/usr/local/bin/danger"},
+		AllowedDomains: []string{"github.com", "api.example.com"},
+		AllowedIPs:     []string{"10.0.0.1"},
+		ProxyEnabled:   true,
+		ProxyPort:      12345,
+		SOCKSPort:      12346,
+		EnvSet: map[string]string{
+			"TMPDIR":     "/tmp/curb-abc",
+			"IS_SANDBOX": "1",
+		},
+		EnvPassthrough: []string{"TERM", "LANG"},
+	}
+	out := formatSkill(plan)
+	assert.Contains(t, out, "name: curb")
+	assert.Contains(t, out, "description: ")
+	assert.Contains(t, out, "# Sandbox Constraints")
+	assert.Contains(t, out, "- Read-only paths:\n  - /usr\n  - /lib")
+	assert.Contains(t, out, "- Read-write paths:\n  - /tmp/curb-abc")
+	assert.Contains(t, out, "- Executable:\n  - /usr/bin/node")
+	assert.Contains(t, out, "- Hidden:\n  - /home/user/.ssh/keys")
+	assert.Contains(t, out, "- Deny write:\n  - /home/user/.gitconfig")
+	assert.Contains(t, out, "- Deny exec:\n  - /usr/local/bin/danger")
+	assert.Contains(t, out, "- Allowed domains: github.com, api.example.com")
+	assert.Contains(t, out, "- Allowed IPs: 10.0.0.1")
+	assert.Contains(t, out, "- Proxy: 127.0.0.1:12345")
+	assert.Contains(t, out, "- SOCKS5: 127.0.0.1:12346")
+	assert.Contains(t, out, "  - IS_SANDBOX=1")
+	assert.Contains(t, out, "  - TMPDIR=/tmp/curb-abc")
+	assert.Contains(t, out, "  - TERM\n  - LANG")
+}
+
+func TestFormatSkill_Minimal(t *testing.T) {
+	plan := &SandboxPlan{
+		EnvSet: map[string]string{"TMPDIR": "/tmp/curb-abc"},
+	}
+	out := formatSkill(plan)
+	assert.Contains(t, out, "## Filesystem")
+	assert.Contains(t, out, "- Allowed: none")
+	assert.NotContains(t, out, "- Read-only paths:")
+	assert.NotContains(t, out, "- Allowed domains:")
+}
+
+func TestFormatSkill_UnrestrictedNet(t *testing.T) {
+	plan := &SandboxPlan{
+		UnrestrictedNet: true,
+		EnvSet:          map[string]string{},
+	}
+	out := formatSkill(plan)
+	assert.Contains(t, out, "- Mode: unrestricted")
+	assert.NotContains(t, out, "- Allowed: none")
+}
+
+func TestFormatSkill_NoFSSection(t *testing.T) {
+	plan := &SandboxPlan{
+		NoFSRestrict:   true,
+		NoExecRestrict: true,
+		EnvSet:         map[string]string{},
+	}
+	out := formatSkill(plan)
+	assert.NotContains(t, out, "## Filesystem")
+}
+
+func TestFormatSkill_ExcludesSelfEnvVar(t *testing.T) {
+	plan := &SandboxPlan{
+		EnvSet: map[string]string{
+			"TMPDIR":              "/tmp/curb-abc",
+			SkillDirEnvKey: "/tmp/curb-abc/.agents/skills/curb",
+		},
+	}
+	out := formatSkill(plan)
+	assert.NotContains(t, out, SkillDirEnvKey)
+}
+
+func TestWriteSkill(t *testing.T) {
+	tmpDir := t.TempDir()
+	plan := &SandboxPlan{
+		ROPaths:     []string{"/usr"},
+		SandboxHome: tmpDir,
+		EnvSet:      map[string]string{"TMPDIR": tmpDir, "IS_SANDBOX": "1"},
+	}
+	require.NoError(t, writeSkill(plan, tmpDir))
+
+	// Primary SKILL.md exists.
+	primaryDir := filepath.Join(tmpDir, skillPrimaryDir)
+	content, err := os.ReadFile(filepath.Join(primaryDir, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "name: curb")
+	assert.Equal(t, primaryDir, plan.EnvSet[SkillDirEnvKey])
+
+	// Symlink at .claude/skills/curb -> .agents/skills/curb.
+	symlinkPath := filepath.Join(tmpDir, skillSymlinkDir)
+	target, err := os.Readlink(symlinkPath)
+	require.NoError(t, err)
+	assert.Equal(t, "../../.agents/skills/curb", target)
+
+	// SKILL.md is readable via the symlink.
+	viaSymlink, err := os.ReadFile(filepath.Join(symlinkPath, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, content, viaSymlink)
+
+	// No bind mounts needed when HOME == TempDir.
+	assert.Empty(t, plan.SkillMounts)
+}
+
+func TestWriteSkill_HomePassthrough(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := t.TempDir() // Separate writable dir simulating real HOME.
+	plan := &SandboxPlan{
+		ROPaths:     []string{"/usr"},
+		SandboxHome: homeDir,
+		EnvSet:      map[string]string{"TMPDIR": tmpDir, "IS_SANDBOX": "1", "HOME": homeDir},
+	}
+	require.NoError(t, writeSkill(plan, tmpDir))
+
+	// Mount point directory should be created on the "real" HOME.
+	_, err := os.Stat(filepath.Join(homeDir, skillPrimaryDir))
+	assert.NoError(t, err, "mount point directory should exist under HOME")
+
+	// Bind mount should be recorded.
+	require.Len(t, plan.SkillMounts, 1)
+	assert.Equal(t, filepath.Join(tmpDir, skillPrimaryDir), plan.SkillMounts[0][0])
+	assert.Equal(t, filepath.Join(homeDir, skillPrimaryDir), plan.SkillMounts[0][1])
+
+	// Env var should point to the HOME-relative path, not TempDir.
+	assert.Equal(t, filepath.Join(homeDir, skillPrimaryDir), plan.EnvSet[SkillDirEnvKey])
+}

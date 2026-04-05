@@ -91,11 +91,12 @@ type SandboxPlan struct {
 	ProxyEnabled     bool
 	ProxyPort        int
 	SOCKSPort        int
-	SSHConfigPath string // Host path to generated SSH config (in TempDir).
-	SSHConfigDst  string // Target path to bind-mount over (~/.ssh/config).
-	UserPaths        []string // Paths explicitly requested by the user (--read/--write/--exec adds).
-	EnvSet         map[string]string
-	EnvPassthrough []string
+	SSHConfigPath    string      // Host path to generated SSH config (in TempDir).
+	SSHConfigDst     string      // Target path to bind-mount over (~/.ssh/config).
+	SkillMounts      [][2]string // [src, dst] pairs for skill directory bind-mounts.
+	UserPaths        []string    // Paths explicitly requested by the user (--read/--write/--exec adds).
+	EnvSet           map[string]string
+	EnvPassthrough   []string
 	DegradedLayers   []DegradedLayer
 	TempDir          string
 	SandboxHome      string // Resolved HOME for the sandbox (used for tilde expansion and env fallback).
@@ -120,33 +121,34 @@ func (p *SandboxPlan) LandlockPaths() policy.LandlockPaths {
 
 // ChildConfig is the serializable config sent from parent to child over a pipe.
 type ChildConfig struct {
-	Command           []string `json:"command"`
-	Env               []string `json:"env"`
-	ROPaths           []string `json:"ro_paths,omitempty"`
-	ROFiles           []string `json:"ro_files,omitempty"`
-	RWPaths           []string `json:"rw_paths,omitempty"`
-	RWFiles           []string `json:"rw_files,omitempty"`
-	HiddenPaths       []string `json:"hidden_paths,omitempty"`
-	DenyWritePaths    []string `json:"deny_write_paths,omitempty"`
-	DenyExecPaths     []string `json:"deny_exec_paths,omitempty"`
-	ExecPaths         []string `json:"exec_paths,omitempty"`
-	UsePivotRoot      bool     `json:"use_pivot_root,omitempty"`
-	UseLandlock       bool     `json:"use_landlock,omitempty"`
-	NoFSRestrict      bool     `json:"no_fs_restrict,omitempty"`
-	PidNS             bool     `json:"pid_ns,omitempty"`
-	ProxyEnabled      bool     `json:"proxy_enabled,omitempty"`
-	ProxyPort         int      `json:"proxy_port,omitempty"`
-	SOCKSPort         int      `json:"socks_port,omitempty"`
-	SSHConfigFile     string   `json:"ssh_config_file,omitempty"`
-	SSHConfigMountDst string   `json:"ssh_config_mount_dst,omitempty"`
-	AllowedDomains    []string `json:"allowed_domains,omitempty"`
-	AllowedIPs        []string `json:"allowed_ips,omitempty"`
-	UserPaths         []string `json:"user_paths,omitempty"`
-	AllowUnixSockets  bool     `json:"allow_unix_sockets,omitempty"`
-	Quiet             bool     `json:"quiet,omitempty"`
-	Verbose           bool     `json:"verbose,omitempty"`
-	Debug             bool     `json:"debug,omitempty"`
-	TempDir           string   `json:"temp_dir"`
+	Command           []string    `json:"command"`
+	Env               []string    `json:"env"`
+	ROPaths           []string    `json:"ro_paths,omitempty"`
+	ROFiles           []string    `json:"ro_files,omitempty"`
+	RWPaths           []string    `json:"rw_paths,omitempty"`
+	RWFiles           []string    `json:"rw_files,omitempty"`
+	HiddenPaths       []string    `json:"hidden_paths,omitempty"`
+	DenyWritePaths    []string    `json:"deny_write_paths,omitempty"`
+	DenyExecPaths     []string    `json:"deny_exec_paths,omitempty"`
+	ExecPaths         []string    `json:"exec_paths,omitempty"`
+	UsePivotRoot      bool        `json:"use_pivot_root,omitempty"`
+	UseLandlock       bool        `json:"use_landlock,omitempty"`
+	NoFSRestrict      bool        `json:"no_fs_restrict,omitempty"`
+	PidNS             bool        `json:"pid_ns,omitempty"`
+	ProxyEnabled      bool        `json:"proxy_enabled,omitempty"`
+	ProxyPort         int         `json:"proxy_port,omitempty"`
+	SOCKSPort         int         `json:"socks_port,omitempty"`
+	SSHConfigFile     string      `json:"ssh_config_file,omitempty"`
+	SSHConfigMountDst string      `json:"ssh_config_mount_dst,omitempty"`
+	SkillMounts       [][2]string `json:"skill_mounts,omitempty"`
+	AllowedDomains    []string    `json:"allowed_domains,omitempty"`
+	AllowedIPs        []string    `json:"allowed_ips,omitempty"`
+	UserPaths         []string    `json:"user_paths,omitempty"`
+	AllowUnixSockets  bool        `json:"allow_unix_sockets,omitempty"`
+	Quiet             bool        `json:"quiet,omitempty"`
+	Verbose           bool        `json:"verbose,omitempty"`
+	Debug             bool        `json:"debug,omitempty"`
+	TempDir           string      `json:"temp_dir"`
 }
 
 // LandlockPaths returns the path sets for Landlock rule construction.
@@ -579,6 +581,7 @@ func (p *SandboxPlan) childConfig() ChildConfig {
 		SOCKSPort:         p.SOCKSPort,
 		SSHConfigFile:     p.SSHConfigPath,
 		SSHConfigMountDst: p.SSHConfigDst,
+		SkillMounts:       p.SkillMounts,
 		AllowedDomains:    p.AllowedDomains,
 		AllowedIPs:        p.AllowedIPs,
 		AllowUnixSockets:  p.AllowUnixSockets,
@@ -1201,6 +1204,9 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 	delete(plan.EnvSet, "IS_SANDBOX")
 
 	plan.Command = cfg.Command
+	if err := writeSkill(plan, tmpDir); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 

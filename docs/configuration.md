@@ -164,6 +164,7 @@ By default, curb sets:
 
 - `TMPDIR` — a private temporary directory.
 - `IS_SANDBOX=1` — signals to child processes that they are sandboxed.
+- `CURB_SKILL_DIR` — path to the [Agent Skills](https://agentskills.io/) directory containing `SKILL.md` with the active sandbox constraints (filesystem, network, environment). Also written to `~/.agents/skills/curb/` (with a symlink at `~/.claude/skills/curb/`) for automatic discovery by compatible agents. When HOME is passed through (`--env HOME`), the skill directory is bind-mounted under the real HOME on Linux; on macOS, auto-discovery requires the default sandbox HOME.
 - `HOME` — the sandbox home directory (see [HOME and tilde expansion](#home-and-tilde-expansion) below). Always set, even if not explicitly configured.
 
 And passes through: `PATH`, `TERM`, `COLORTERM`, `NO_COLOR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`, `SHELL`.
