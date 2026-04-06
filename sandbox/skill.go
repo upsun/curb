@@ -103,6 +103,21 @@ description: Active sandbox constraints for this environment. Check when encount
 	return b.String()
 }
 
+// symlinkSkillDir creates a best-effort symlink at baseDir/.claude/skills/curb
+// pointing (relatively) to targetDir. Errors are silently ignored — the env
+// var is the authoritative pointer; the symlink is for agent auto-discovery.
+func symlinkSkillDir(baseDir, targetDir string) {
+	parent := filepath.Join(baseDir, filepath.Dir(skillSymlinkDir))
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return
+	}
+	rel, err := filepath.Rel(parent, targetDir)
+	if err != nil {
+		rel = targetDir
+	}
+	_ = os.Symlink(rel, filepath.Join(baseDir, skillSymlinkDir))
+}
+
 // writeSkillList writes a Markdown sub-list under a label, one item per line.
 func writeSkillList(b *strings.Builder, label string, items []string) {
 	if len(items) > 0 {
@@ -138,17 +153,7 @@ func writeSkill(plan *SandboxPlan, tmpDir string) error {
 	}
 
 	// Symlink .claude/skills/curb -> .agents/skills/curb (relative).
-	symlinkParent := filepath.Join(tmpDir, filepath.Dir(skillSymlinkDir))
-	if err := os.MkdirAll(symlinkParent, 0o755); err != nil {
-		return err
-	}
-	symlinkPath := filepath.Join(tmpDir, skillSymlinkDir)
-	rel, err := filepath.Rel(symlinkParent, primaryDir)
-	if err != nil {
-		rel = primaryDir // Fallback to absolute.
-	}
-	// Best-effort; if .claude/skills/curb already exists, skip.
-	_ = os.Symlink(rel, symlinkPath)
+	symlinkSkillDir(tmpDir, primaryDir)
 
 	// When HOME is not the TempDir, agents won't scan TempDir for skills.
 	// On Linux with mount NS, bind-mount the skill directory under the
@@ -172,6 +177,10 @@ func writeSkill(plan *SandboxPlan, tmpDir string) error {
 			// Ensure the skill directory is in the read allowlist so
 			// Landlock (defense-in-depth) permits access.
 			plan.ROPaths = appendUniq(plan.ROPaths, dst)
+
+			// Symlink HOME/.claude/skills/curb -> the bind-mounted
+			// primary dir so agents discover it via ~/.claude/skills/.
+			symlinkSkillDir(home, dst)
 		}
 	}
 

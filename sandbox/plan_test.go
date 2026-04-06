@@ -1020,6 +1020,12 @@ func TestWriteSkill_HomePassthrough(t *testing.T) {
 
 	// Skill directory should be in ROPaths for Landlock access.
 	assert.Contains(t, plan.ROPaths, filepath.Join(homeDir, skillPrimaryDir))
+
+	// Symlink at HOME/.claude/skills/curb -> HOME/.agents/skills/curb.
+	homeSymlink := filepath.Join(homeDir, skillSymlinkDir)
+	target, err := os.Readlink(homeSymlink)
+	require.NoError(t, err, "symlink should exist under HOME")
+	assert.Equal(t, "../../.agents/skills/curb", target)
 }
 
 func TestWriteSkill_HomePassthrough_NoMountNS(t *testing.T) {

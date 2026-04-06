@@ -894,6 +894,12 @@ func TestCurb_SkillFileReadable_HomePassthrough(t *testing.T) {
 	require.NoError(t, err, "curb --env HOME -- cat $CURB_SKILL_DIR/SKILL.md failed: %s", string(out))
 	assert.Contains(t, string(out), "name: curb")
 	assert.Contains(t, string(out), "# Sandbox Constraints")
+
+	// The symlink at ~/.claude/skills/curb should also resolve.
+	cmd = exec.Command(curbBin, "--exec", "cat", "--read", home, "--env", "HOME", "--", "sh", "-c", "cat ~/.claude/skills/curb/SKILL.md")
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "curb --env HOME -- cat ~/.claude/skills/curb/SKILL.md failed: %s", string(out))
+	assert.Contains(t, string(out), "name: curb")
 }
 
 // TestCurb_EnvExcludeIsSandbox verifies --env '!IS_SANDBOX' removes IS_SANDBOX.
