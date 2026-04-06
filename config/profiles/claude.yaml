@@ -10,9 +10,12 @@ commands: [claude]
 allow-unix-sockets: true
 domains:
   - api.anthropic.com
+  - downloads.claude.ai
+  - mcp.anthropic.com
   - platform.claude.com
   - statsig.anthropic.com
 read:
+  - ~/.claude.json
   - ~/.config/claude
   - ~/.gitconfig
   - ~/.config/git
@@ -23,11 +26,16 @@ write:
   - !~/.claude/agents
   - !~/.claude/commands
   - !~/.claude/CLAUDE.md
+  - !~/.claude/rules
   - !~/.claude/settings.json
+  - !~/.claude/skills
   - !./.claude/agents
   - !./.claude/commands
+  - !./.claude/rules
   - !./.claude/settings.json
   - !./.claude/settings.local.json
+  - !./.claude/skills
+  - !./.mcp.json
 exec:
   - /usr/bin
   - /bin
@@ -35,8 +43,10 @@ exec:
   - /opt/homebrew/bin
 env:
   - HOME
+  - SHELL
   - CLAUDE_CODE_TMPDIR=$TMPDIR
   - ANTHROPIC_API_KEY
+  - ANTHROPIC_BASE_URL
   - CLAUDE_CODE_MAX_TOKENS
   - GIT_AUTHOR_NAME
   - GIT_AUTHOR_EMAIL

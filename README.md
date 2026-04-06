@@ -88,7 +88,12 @@ curb -p node,github --write . -- npm install
 | `git` | GitHub/GitLab/Bitbucket, SSH keys, Git config |
 | `github` | GitHub API and raw content domains, `gh` CLI |
 | `docker` | Docker Hub registry, Docker socket |
-| `claude-code` | Anthropic API, Claude config, Node executables |
+| `claude` | Anthropic API, Claude config, system executables |
+| `gemini` | Google AI APIs, Gemini CLI config, system executables |
+| `codex` | OpenAI API, Codex config, system executables |
+| `opencode` | Common AI provider APIs, OpenCode config, system executables |
+| `vibe` | Mistral AI API, Vibe config, system executables |
+| `copilot` | GitHub Copilot API, Copilot config, system executables |
 
 List and inspect profiles:
 

@@ -15,7 +15,7 @@ func TestValidateProfileName(t *testing.T) {
 		wantErr bool
 	}{
 		{"node", false},
-		{"claude-code", false},
+		{"claude", false},
 		{"go", false},
 		{"a1", false},
 		{"0start", false},
@@ -50,7 +50,7 @@ func TestLoadProfile_Builtin(t *testing.T) {
 }
 
 func TestLoadProfile_AllBuiltins(t *testing.T) {
-	names := []string{"node", "python", "php", "go", "rust", "git", "github", "docker", "claude-code", "ssh"}
+	names := []string{"cc", "claude", "codex", "copilot", "docker", "gemini", "git", "github", "go", "node", "opencode", "php", "python", "rust", "shell", "ssh", "vibe"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadProfile(name)
@@ -454,9 +454,14 @@ func TestListProfiles_IncludesBuiltins(t *testing.T) {
 	assert.Equal(t, ProfileBuiltin, names["git"])
 	assert.Equal(t, ProfileBuiltin, names["github"])
 	assert.Equal(t, ProfileBuiltin, names["docker"])
-	assert.Equal(t, ProfileBuiltin, names["claude-code"])
+	assert.Equal(t, ProfileBuiltin, names["claude"])
 	assert.Equal(t, ProfileBuiltin, names["ssh"])
 	assert.Equal(t, ProfileBuiltin, names["shell"])
+	assert.Equal(t, ProfileBuiltin, names["gemini"])
+	assert.Equal(t, ProfileBuiltin, names["codex"])
+	assert.Equal(t, ProfileBuiltin, names["opencode"])
+	assert.Equal(t, ProfileBuiltin, names["vibe"])
+	assert.Equal(t, ProfileBuiltin, names["copilot"])
 }
 
 func TestListProfiles_UserOverridesBuiltin(t *testing.T) {
@@ -522,7 +527,12 @@ func TestMatchProfile_Builtins(t *testing.T) {
 		{"gh", "github"},
 		{"docker", "docker"},
 		{"docker-compose", "docker"},
-		{"claude", "claude-code"},
+		{"claude", "claude"},
+		{"gemini", "gemini"},
+		{"codex", "codex"},
+		{"opencode", "opencode"},
+		{"vibe", "vibe"},
+		{"copilot", "copilot"},
 		{"ssh", "ssh"},
 		{"scp", "ssh"},
 		{"sftp", "ssh"},
