@@ -50,7 +50,7 @@ func TestLoadProfile_Builtin(t *testing.T) {
 }
 
 func TestLoadProfile_AllBuiltins(t *testing.T) {
-	names := []string{"cc", "claude", "codex", "copilot", "docker", "gemini", "git", "github", "go", "node", "opencode", "php", "python", "rust", "shell", "ssh", "vibe"}
+	names := []string{"cc", "claude", "codex", "copilot", "docker", "gemini", "git", "github", "go", "node", "opencode", "php", "python", "ruby", "rust", "shell", "ssh", "vibe"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadProfile(name)
@@ -450,6 +450,7 @@ func TestListProfiles_IncludesBuiltins(t *testing.T) {
 	assert.Equal(t, ProfileBuiltin, names["python"])
 	assert.Equal(t, ProfileBuiltin, names["php"])
 	assert.Equal(t, ProfileBuiltin, names["go"])
+	assert.Equal(t, ProfileBuiltin, names["ruby"])
 	assert.Equal(t, ProfileBuiltin, names["rust"])
 	assert.Equal(t, ProfileBuiltin, names["git"])
 	assert.Equal(t, ProfileBuiltin, names["github"])
@@ -520,6 +521,12 @@ func TestMatchProfile_Builtins(t *testing.T) {
 		{"php", "php"},
 		{"composer", "php"},
 		{"go", "go"},
+		{"ruby", "ruby"},
+		{"gem", "ruby"},
+		{"bundle", "ruby"},
+		{"bundler", "ruby"},
+		{"irb", "ruby"},
+		{"rake", "ruby"},
 		{"cargo", "rust"},
 		{"rustc", "rust"},
 		{"rustup", "rust"},

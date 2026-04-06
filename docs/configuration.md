@@ -67,6 +67,7 @@ Activate via `-p`/`--profiles`, `CURB_PROFILES`, or the `profiles:` field in a c
 | `python` | | PyPI, pip cache, Python executables |
 | `php` | | Packagist, Composer cache, `vendor` write |
 | `go` | `cc` | Go module proxy, `~/go` read, `go` executable (includes C compiler for CGO) |
+| `ruby` | | RubyGems, gem/bundle cache, `vendor` write, Ruby executables |
 | `rust` | | crates.io, Cargo/Rustup home, `cargo`/`rustc` executables |
 | `docker` | | Docker Hub registry, Docker socket |
 | `claude` | | Anthropic API, Claude config, system/Git executables |

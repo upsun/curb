@@ -1,0 +1,26 @@
+# Ruby / Bundler
+# HOME is passed through so ~ paths below resolve to the real home directory.
+commands: [ruby, gem, bundle, bundler, irb, rake]
+domains:
+  - rubygems.org
+  - "*.rubygems.org"
+read:
+  - ~/.gem
+  - ~/.bundle
+  - ~/.local/share/gem
+write:
+  - vendor
+exec:
+  - sh
+  - ruby
+  - gem
+  - bundle
+  - irb
+  - rake
+env:
+  - HOME
+  - GEM_HOME
+  - GEM_PATH
+  - BUNDLE_PATH
+  - RACK_ENV
+  - RAILS_ENV
