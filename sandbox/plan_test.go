@@ -999,9 +999,10 @@ func TestWriteSkill_HomePassthrough(t *testing.T) {
 	tmpDir := t.TempDir()
 	homeDir := t.TempDir() // Separate writable dir simulating real HOME.
 	plan := &SandboxPlan{
-		ROPaths:     []string{"/usr"},
-		SandboxHome: homeDir,
-		EnvSet:      map[string]string{"TMPDIR": tmpDir, "IS_SANDBOX": "1", "HOME": homeDir},
+		ROPaths:      []string{"/usr"},
+		SandboxHome:  homeDir,
+		UsePivotRoot: true,
+		EnvSet:       map[string]string{"TMPDIR": tmpDir, "IS_SANDBOX": "1", "HOME": homeDir},
 	}
 	require.NoError(t, writeSkill(plan, tmpDir))
 
@@ -1016,4 +1017,25 @@ func TestWriteSkill_HomePassthrough(t *testing.T) {
 
 	// Env var should point to the HOME-relative path, not TempDir.
 	assert.Equal(t, filepath.Join(homeDir, skillPrimaryDir), plan.EnvSet[SkillDirEnvKey])
+
+	// Skill directory should be in ROPaths for Landlock access.
+	assert.Contains(t, plan.ROPaths, filepath.Join(homeDir, skillPrimaryDir))
+}
+
+func TestWriteSkill_HomePassthrough_NoMountNS(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := t.TempDir()
+	plan := &SandboxPlan{
+		ROPaths:     []string{"/usr"},
+		SandboxHome: homeDir,
+		UseLandlock: true,
+		EnvSet:      map[string]string{"TMPDIR": tmpDir, "IS_SANDBOX": "1", "HOME": homeDir},
+	}
+	require.NoError(t, writeSkill(plan, tmpDir))
+
+	// Without mount NS, env var should point to TempDir (where SKILL.md
+	// actually lives), not the HOME-relative path.
+	assert.Equal(t, filepath.Join(tmpDir, skillPrimaryDir), plan.EnvSet[SkillDirEnvKey])
+	assert.Empty(t, plan.SkillMounts, "no bind mounts without mount NS")
+	assert.Equal(t, []string{"/usr"}, plan.ROPaths, "ROPaths should be unchanged")
 }

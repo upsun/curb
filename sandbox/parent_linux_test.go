@@ -879,6 +879,23 @@ func TestCurb_SkillFileReadable(t *testing.T) {
 	assert.Contains(t, string(out), "# Sandbox Constraints")
 }
 
+// TestCurb_SkillFileReadable_HomePassthrough verifies SKILL.md is readable
+// when HOME is passed through (skill dir is bind-mounted under the real HOME).
+func TestCurb_SkillFileReadable_HomePassthrough(t *testing.T) {
+	requireUserNS(t)
+
+	home := os.Getenv("HOME")
+	if home == "" {
+		t.Skip("HOME not set")
+	}
+
+	cmd := exec.Command(curbBin, "--exec", "cat", "--read", home, "--env", "HOME", "--", "sh", "-c", "cat $CURB_SKILL_DIR/SKILL.md")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "curb --env HOME -- cat $CURB_SKILL_DIR/SKILL.md failed: %s", string(out))
+	assert.Contains(t, string(out), "name: curb")
+	assert.Contains(t, string(out), "# Sandbox Constraints")
+}
+
 // TestCurb_EnvExcludeIsSandbox verifies --env '!IS_SANDBOX' removes IS_SANDBOX.
 func TestCurb_EnvExcludeIsSandbox(t *testing.T) {
 	requireUserNS(t)

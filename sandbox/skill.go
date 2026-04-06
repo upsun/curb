@@ -151,22 +151,27 @@ func writeSkill(plan *SandboxPlan, tmpDir string) error {
 	_ = os.Symlink(rel, symlinkPath)
 
 	// When HOME is not the TempDir, agents won't scan TempDir for skills.
-	// On Linux, bind-mount the skill directory under the real HOME so
-	// agents discover it. On macOS (no mount namespaces), auto-discovery
-	// only works when HOME is TempDir; the env var is the fallback.
+	// On Linux with mount NS, bind-mount the skill directory under the
+	// real HOME so agents discover it. On macOS (no mount namespaces)
+	// or Linux without mount NS, auto-discovery only works when HOME is
+	// TempDir; the env var is the fallback.
 	//
 	// The mount point must be created on the real filesystem before the
 	// sandbox starts (inside the mount NS, HOME may be read-only). If
 	// HOME is read-only on the host too (e.g. --read /home/user without
 	// --write), MkdirAll fails and the env var is the fallback.
-	// Point the env var at the HOME-relative path when a bind mount
-	// will make it available there; otherwise use the TempDir path.
+	// Point the env var at the HOME-relative path only when a bind mount
+	// will make it available there (requires mount NS); otherwise use
+	// the TempDir path.
 	envDir := primaryDir
-	if home != tmpDir && runtime.GOOS == "linux" {
+	if home != tmpDir && runtime.GOOS == "linux" && plan.UsePivotRoot {
 		dst := filepath.Join(home, skillPrimaryDir)
 		if err := os.MkdirAll(dst, 0o755); err == nil {
 			plan.SkillMounts = append(plan.SkillMounts, [2]string{primaryDir, dst})
 			envDir = dst
+			// Ensure the skill directory is in the read allowlist so
+			// Landlock (defense-in-depth) permits access.
+			plan.ROPaths = appendUniq(plan.ROPaths, dst)
 		}
 	}
 
