@@ -1,0 +1,38 @@
+# Vibe (Mistral AI).
+# HOME is passed through so ~ paths below resolve to the real home directory.
+# Includes git config/env directly (not via profile composition, to avoid
+# inheriting SSH key access). Add -p ssh explicitly if needed.
+commands: [vibe]
+domains:
+  - api.mistral.ai
+  - codestral.mistral.ai
+read:
+  - ~/.vibe/trusted_folders.toml
+  - ~/.vibe/tools
+  - ~/.vibe/skills
+  - ~/.vibe/agents
+  - ~/.vibe/prompts
+  - ~/.gitconfig
+  - ~/.config/git
+write:
+  - .
+  - ~/.vibe
+  - !~/.vibe/trusted_folders.toml
+  - !~/.vibe/tools
+  - !~/.vibe/skills
+  - !~/.vibe/agents
+  - !~/.vibe/prompts
+exec:
+  - /usr/bin
+  - /bin
+  - /usr/local/bin
+  - /opt/homebrew/bin
+env:
+  - HOME
+  - SHELL
+  - MISTRAL_API_KEY
+  - VIBE_HOME
+  - GIT_AUTHOR_NAME
+  - GIT_AUTHOR_EMAIL
+  - GIT_COMMITTER_NAME
+  - GIT_COMMITTER_EMAIL

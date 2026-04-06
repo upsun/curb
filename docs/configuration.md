@@ -69,7 +69,12 @@ Activate via `-p`/`--profiles`, `CURB_PROFILES`, or the `profiles:` field in a c
 | `go` | `cc` | Go module proxy, `~/go` read, `go` executable (includes C compiler for CGO) |
 | `rust` | | crates.io, Cargo/Rustup home, `cargo`/`rustc` executables |
 | `docker` | | Docker Hub registry, Docker socket |
-| `claude-code` | | Anthropic API, Claude config, Node/Git executables |
+| `claude` | | Anthropic API, Claude config, system/Git executables |
+| `gemini` | | Google AI APIs, Gemini CLI config, system/Git executables |
+| `codex` | | OpenAI API, Codex config, system/Git executables |
+| `opencode` | | Common AI provider APIs, OpenCode config, system/Git executables |
+| `vibe` | | Mistral AI API, Vibe config, system/Git executables |
+| `copilot` | | GitHub Copilot API, Copilot config, system/Git executables |
 | `shell` | | System binary directories (`/usr/bin`, `/bin`, etc.) for interactive sessions |
 
 Built-in profiles that reference `~` paths pass through `HOME` so those paths resolve to the real home directory (see [HOME and tilde expansion](#home-and-tilde-expansion) below).

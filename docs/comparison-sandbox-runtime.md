@@ -103,9 +103,9 @@ of reusable profiles -- config must be assembled per invocation.
 
 **curb** uses YAML config files (`.curb.yaml`, auto-discovered by walking
 up from the current directory) and composable profiles. Profiles are named
-config bundles for common toolchains -- 9 are built in (`node`, `python`,
-`php`, `go`, `rust`, `git`, `github`, `docker`, `claude-code`) and users
-can add their own in `~/.config/curb/profiles/` or `/etc/curb/profiles/`.
+config bundles for common toolchains and coding agents (`curb profile list`
+shows all built-ins) and users can add their own in
+`~/.config/curb/profiles/` or `/etc/curb/profiles/`.
 Activated via `-p node,git`, `CURB_PROFILES=node,git`, or
 `profiles: [node, git]` in `.curb.yaml`. Config layers merge in priority
 order: profiles (lowest) -> config file -> CLI flags -> env vars (highest).
