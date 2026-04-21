@@ -45,9 +45,27 @@ func TestExpandGlobs_MixedLiteralAndGlob(t *testing.T) {
 	assert.Equal(t, []string{literal, filepath.Join(dir, "data.csv")}, expanded)
 }
 
-func TestExpandTildes(t *testing.T) {
-	result := ExpandTildes([]string{"~", "~/docs", "/abs/path", "relative"}, "/home/user")
+func TestExpandHomeRefs(t *testing.T) {
+	result := ExpandHomeRefs([]string{"~", "~/docs", "/abs/path", "relative"}, "/home/user")
 	assert.Equal(t, []string{"/home/user", "/home/user/docs", "/abs/path", "relative"}, result)
+}
+
+func TestExpandHomeRefs_ResolvesMarker(t *testing.T) {
+	// homeRefMarker is emitted by expandEnvPaths for $HOME / ${HOME}.
+	// ExpandHomeRefs replaces it with the given home directory regardless
+	// of where it appears in the path.
+	result := ExpandHomeRefs([]string{homeRefMarker + "/.ssh", "/backup" + homeRefMarker}, "/home/user")
+	assert.Equal(t, []string{"/home/user/.ssh", "/backup/home/user"}, result)
+}
+
+func TestPathReferencesHome(t *testing.T) {
+	assert.True(t, PathReferencesHome("~"))
+	assert.True(t, PathReferencesHome("~/.ssh"))
+	assert.True(t, PathReferencesHome(homeRefMarker+"/.ssh"))
+	assert.True(t, PathReferencesHome("/backup"+homeRefMarker))
+	assert.False(t, PathReferencesHome("/home/user/.ssh"))
+	assert.False(t, PathReferencesHome("/etc/ssl"))
+	assert.False(t, PathReferencesHome("~other"))
 }
 
 func TestDefaultEnvVars_NoSHELL(t *testing.T) {

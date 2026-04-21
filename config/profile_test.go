@@ -87,7 +87,7 @@ exec:
 	cf, err := LoadProfile("node")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"custom-registry.example.com"}, cf.Domains)
-	assert.Equal(t, []string{"custom-node"}, cf.Exec)
+	assert.Equal(t, pathList{"custom-node"}, cf.Exec)
 }
 
 func TestLoadProfile_SystemOverridesBuiltin(t *testing.T) {

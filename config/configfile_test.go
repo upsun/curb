@@ -36,11 +36,60 @@ unrestricted-net: false
 
 	assert.Equal(t, []string{"pypi.org", "*.pythonhosted.org"}, cf.Domains)
 	assert.Equal(t, []string{"10.0.0.0/8"}, cf.IPs)
-	assert.Equal(t, []string{"~/.cache/pip"}, cf.Read)
-	assert.Equal(t, []string{"."}, cf.Write)
-	assert.Equal(t, []string{"python3", "pip"}, cf.Exec)
+	assert.Equal(t, pathList{"~/.cache/pip"}, cf.Read)
+	assert.Equal(t, pathList{"."}, cf.Write)
+	assert.Equal(t, pathList{"python3", "pip"}, cf.Exec)
 	assert.Equal(t, []string{"VIRTUAL_ENV", "PIP_INDEX_URL"}, cf.Env)
 	assert.Equal(t, new(false), cf.UnrestrictedNet)
+}
+
+func TestLoadConfigFile_BangPrefixPreserved(t *testing.T) {
+	// yaml.v3 reads an unquoted "!something" scalar as a local tag with
+	// an empty value. pathList's UnmarshalYAML recovers the literal so
+	// our "!" exclusion syntax works without forcing profile authors
+	// to quote every entry.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+read:
+  - /etc
+  - '!/etc/shadow'
+  - !/usr/local/bin
+  - !~/.ssh/id_rsa
+write:
+  - .
+  - !./.git
+  - ~
+`), 0o644))
+
+	cf, err := LoadConfigFile(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, pathList{
+		"/etc",
+		"!/etc/shadow",
+		"!/usr/local/bin",
+		"!~/.ssh/id_rsa",
+	}, cf.Read)
+	assert.Equal(t, pathList{
+		".",
+		"!./.git",
+		"~",
+	}, cf.Write)
+}
+
+func TestLoadConfigFile_EmptyPathRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+read:
+  - /etc
+  - ""
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read[1] is empty")
 }
 
 func TestLoadConfigFile_HomeKeyRejected(t *testing.T) {
@@ -223,6 +272,115 @@ func TestMergeConfigFile_UnrestrictedNet(t *testing.T) {
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
 	assert.True(t, cfg.UnrestrictedNet)
+}
+
+func TestMergeConfigFile_ExpandEnvInPaths(t *testing.T) {
+	t.Setenv("CURB_TEST_DIR", "/tmp/curb-expand-test")
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	cf := &ConfigFile{
+		Read:  []string{"$CURB_TEST_DIR", "${CURB_TEST_DIR}/sub"},
+		Write: []string{"$CURB_TEST_DIR/out"},
+		Exec:  []string{"$CURB_TEST_DIR/bin"},
+	}
+	MergeConfigFile(cfg, cf, cmd.Flags())
+
+	assert.Equal(t, []string{"/tmp/curb-expand-test", "/tmp/curb-expand-test/sub"}, cfg.ROPaths)
+	assert.Equal(t, []string{"/tmp/curb-expand-test/out"}, cfg.RWPaths)
+	assert.Equal(t, []string{"/tmp/curb-expand-test/bin"}, cfg.ExecAllow)
+}
+
+func TestMergeConfigFile_ExpandEnvPreservesBangPrefix(t *testing.T) {
+	t.Setenv("CURB_TEST_DIR", "/tmp/curb-expand-test")
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	cf := &ConfigFile{
+		Read: []string{"!$CURB_TEST_DIR/secret", "!*", `\!$CURB_TEST_DIR/literal-bang`},
+	}
+	MergeConfigFile(cfg, cf, cmd.Flags())
+
+	assert.Equal(t, []string{
+		"!/tmp/curb-expand-test/secret",
+		"!*",
+		`\!/tmp/curb-expand-test/literal-bang`,
+	}, cfg.ROPaths)
+}
+
+func TestMergeConfigFile_ExpandEnvUnsetDropped(t *testing.T) {
+	require.NoError(t, os.Unsetenv("CURB_DEFINITELY_UNSET_VAR"))
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	cf := &ConfigFile{
+		Read: []string{"/keep/this", "$CURB_DEFINITELY_UNSET_VAR/foo", "/also/keep"},
+	}
+	MergeConfigFile(cfg, cf, cmd.Flags())
+
+	// Unset-var path is dropped; surrounding paths survive.
+	assert.Equal(t, []string{"/keep/this", "/also/keep"}, cfg.ROPaths)
+}
+
+func TestMergeConfigFile_ExpandEnvPreservesDollarHome(t *testing.T) {
+	// $HOME and ${HOME} are left as internal markers (not expanded to the
+	// host home literal) so the plan stage can distinguish them from
+	// user-written host-home paths and fire the mismatch warning correctly.
+	t.Setenv("HOME", "/host/home")
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	cf := &ConfigFile{
+		Read: []string{
+			"$HOME/.ssh",
+			"${HOME}/.config",
+			"/host/home/literal",
+		},
+	}
+	MergeConfigFile(cfg, cf, cmd.Flags())
+
+	// First two entries carry the marker (PathReferencesHome is true);
+	// the literal path does not.
+	require.Len(t, cfg.ROPaths, 3)
+	assert.True(t, PathReferencesHome(cfg.ROPaths[0]))
+	assert.True(t, PathReferencesHome(cfg.ROPaths[1]))
+	assert.False(t, PathReferencesHome(cfg.ROPaths[2]))
+
+	// The marker resolves to the host home at plan time.
+	resolved := ExpandHomeRefs(cfg.ROPaths, "/host/home")
+	assert.Equal(t, []string{"/host/home/.ssh", "/host/home/.config", "/host/home/literal"}, resolved)
+}
+
+func TestMergeConfigFile_ExpandEnvDollarEscape(t *testing.T) {
+	t.Setenv("CURB_TEST_DIR", "/tmp/curb-expand-test")
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	cf := &ConfigFile{
+		Read: []string{
+			"/foo$$bar",                  // literal $: "/foo$bar"
+			"/foo$$$$bar",                // literal $$: "/foo$$bar"
+			"$$/$CURB_TEST_DIR",          // literal $ then expansion: "$/tmp/curb-expand-test"
+			"$CURB_TEST_DIR$$tail",       // expansion then literal $: "/tmp/curb-expand-test$tail"
+			"$${CURB_TEST_DIR}",          // escape disarms braces: "${CURB_TEST_DIR}"
+			`\!$$bang`,                   // bang-escape + literal $: "\!$bang"
+		},
+	}
+	MergeConfigFile(cfg, cf, cmd.Flags())
+
+	assert.Equal(t, []string{
+		"/foo$bar",
+		"/foo$$bar",
+		"$//tmp/curb-expand-test",
+		"/tmp/curb-expand-test$tail",
+		"${CURB_TEST_DIR}",
+		`\!$bang`,
+	}, cfg.ROPaths)
 }
 
 func TestMergeConfigFile_EnvMerge(t *testing.T) {

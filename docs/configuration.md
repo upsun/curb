@@ -187,23 +187,24 @@ The sandbox HOME is resolved in this order:
 
 HOME is always set. Even `--env '!HOME'` only prevents *passthrough*; the tmpDir fallback still applies.
 
-### How `~` works in paths
+### How `~` and `$HOME` work in paths
 
-`~` in `--read`, `--write`, `--exec`, config files, and profiles expands to the **sandbox HOME** — whatever HOME will be inside the sandbox.
+`~`, `~/`, and `$HOME` in `--read`, `--write`, `--exec`, config files, and profiles all resolve to the **host** home directory — the same thing the shell would substitute on the command line. `~`/`$HOME` are host-side shorthands: they are not re-mapped to the sandbox's HOME even if `--env HOME=/path` changes what the sandboxed process sees.
 
-- If HOME is passed through (`--env HOME`), `~` expands to your real home directory.
-- If HOME is not passed through, `~` expands to the temporary sandbox directory. curb warns when this happens:
+For a granted path under the host home to be reachable by the sandboxed program via its own `$HOME`, the sandbox HOME has to equal the host HOME — i.e. HOME must be passed through (`--env HOME`). curb warns at plan time when a profile or config entry uses `~` or `$HOME` and the sandbox's HOME will differ:
 
-  ```
-  curb: warning: ~ in paths resolves to temporary directory /tmp/curb-xxx
-  (HOME not passed through); use --env HOME to use your real home
-  ```
+```
+curb: warning: ~ or $HOME in paths resolves to the host home (/home/user),
+but the sandbox's $HOME will be /tmp/curb-xxx — the sandboxed program
+cannot reach these paths via its own $HOME. Use --env HOME to align
+them, or ignore this warning if you meant the host path.
+```
 
-This means profiles that reference `~` paths (like `read: ["~/.ssh"]`) must include `HOME` in their `env:` list for those paths to point to real files. All built-in profiles do this.
+The warning only fires for paths that reference the host home symbolically (`~`, `~/...`, `$HOME`, `${HOME}`). An explicit literal like `read: ["/home/user/.ssh"]` is treated as the user's deliberate choice and does not warn. Shell-expanded CLI paths (`~/foo` becomes `/home/user/foo` before curb sees it) are equivalent to literals and also don't warn.
 
-### Why it works this way
+Built-in profiles that reference `~` paths (like `read: ["~/.ssh"]`) include `HOME` in their `env:` list so `curb --profile foo` needs no extra flags. User-authored profiles should do the same, unless they genuinely want to grant the host home to a program whose `$HOME` will point elsewhere.
 
-`~` resolves to the sandbox HOME — not the host home — to prevent accidental exposure. Without this, activating a profile would grant host filesystem access to paths the sandboxed process can't even reach via `$HOME` (because `$HOME` inside the sandbox would be a different directory). By tying `~` to the sandbox HOME, profiles only grant meaningful access when the user has explicitly opted into HOME passthrough.
+If `os.UserHomeDir()` cannot determine a host home (e.g. `$HOME` is unset and no passwd entry exists) and any configured path uses `~`, curb refuses to build the sandbox rather than silently expanding `~/.ssh` to `/.ssh`.
 
 ## The `!` prefix
 
@@ -224,7 +225,8 @@ Sub-path denials (`!` under an allowed parent) require mount namespace support. 
 
 Paths in `--read`, `--write`, `--exec`, config files, and profiles are expanded at plan time:
 
-1. **Tilde expansion** — `~` and `~/` are replaced with the sandbox HOME directory (see above). `~username` is not supported.
-2. **Glob expansion** — `*`, `?`, and `[` trigger glob matching (e.g. `--exec './dist/*/*'`).
-3. **Relative path resolution** — `.` and `./...` are resolved to absolute paths.
-4. **Symlink resolution** — symlinks in path lists are resolved so both the symlink and its target are covered. Note: symlinks *inside* mounted directories are not pre-resolved; if a file inside an allowed path is a symlink to an unallowed path, following it will fail.
+1. **Tilde expansion** — `~` and `~/` are replaced with the host home directory (see above). `~username` is not supported.
+2. **Environment variable expansion** — `$VAR` and `${VAR}` in `read`, `write`, and `exec` entries of config files and profiles are expanded against the **host** environment at merge time. Entries that reference an unset variable or expand to an empty string are dropped with a warning. Write a literal `$` as `$$` (Make convention); a literal `$$` is `$$$$`. CLI flags (`--read` etc.) are passed through the shell and are not re-expanded by curb.
+3. **Glob expansion** — `*`, `?`, and `[` trigger glob matching (e.g. `--exec './dist/*/*'`).
+4. **Relative path resolution** — `.` and `./...` are resolved to absolute paths.
+5. **Symlink resolution** — symlinks in path lists are resolved so both the symlink and its target are covered. Note: symlinks *inside* mounted directories are not pre-resolved; if a file inside an allowed path is a symlink to an unallowed path, following it will fail.

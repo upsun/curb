@@ -24,18 +24,24 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 	}
 	plan.TempDir = tmpDir
 
-	// Determine sandbox HOME before tilde expansion.
+	// ~ in path fields expands to the host HOME. Warn if the sandbox's
+	// $HOME will differ from it, so paths under ~ won't align with the
+	// sandboxed program's own $HOME.
 	sandboxHome := resolveSandboxHome(cfg, tmpDir)
 	plan.SandboxHome = sandboxHome
-	warnTildeToTmpDir(cfg, sandboxHome, tmpDir)
+	hostHome := resolveHostHome()
+	if err := checkHostHomeResolvable(cfg, hostHome); err != nil {
+		return nil, err
+	}
+	warnHostHomePathMismatch(cfg, sandboxHome, hostHome)
 
 	if err := resolveCapabilities(plan, cfg, caps); err != nil {
 		return nil, err
 	}
-	if err := resolveFilesystem(plan, cfg, &removals, sandboxHome); err != nil {
+	if err := resolveFilesystem(plan, cfg, &removals, hostHome); err != nil {
 		return nil, err
 	}
-	if err := resolveExec(plan, cfg, &removals, sandboxHome, logger); err != nil {
+	if err := resolveExec(plan, cfg, &removals, hostHome, logger); err != nil {
 		return nil, err
 	}
 	resolveNetwork(plan, cfg)
