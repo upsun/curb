@@ -185,11 +185,15 @@ func TestSeatbelt_SubpathDeny(t *testing.T) {
 
 // TestSeatbelt_WriteAllowed verifies that the sandbox temp dir (exposed as
 // $TMPDIR inside the sandbox) is writable and readable.
+//
+// Uses /bin/bash directly instead of /bin/sh: on macOS, /bin/sh is a trampoline
+// that opens /private/var/select/sh to pick a variant, so it needs extra read
+// and exec permissions that are beside the point of this test.
 func TestSeatbelt_WriteAllowed(t *testing.T) {
 	requireSeatbelt(t)
 	bin := buildCurb(t)
 
-	out, code := runCurb(t, bin, "--", "/bin/sh", "-c",
+	out, code := runCurb(t, bin, "--exec", "/bin/cat", "--", "/bin/bash", "-c",
 		"echo hello > $TMPDIR/out.txt && cat $TMPDIR/out.txt")
 	assert.Equal(t, 0, code, "writing to $TMPDIR should succeed")
 	assert.Contains(t, out, "hello")
@@ -214,6 +218,6 @@ func TestSeatbelt_ExitCode(t *testing.T) {
 	requireSeatbelt(t)
 	bin := buildCurb(t)
 
-	_, code := runCurb(t, bin, "--", "/bin/sh", "-c", "exit 42")
+	_, code := runCurb(t, bin, "--", "/bin/bash", "-c", "exit 42")
 	assert.Equal(t, 42, code, "curb should propagate the child's exit code")
 }
