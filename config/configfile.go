@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/pflag"
+	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/policy"
 	"gopkg.in/yaml.v3"
 )
@@ -17,14 +19,57 @@ type ConfigFile struct {
 	Profiles         []string `yaml:"profiles"`
 	Domains          []string `yaml:"domains"`
 	IPs              []string `yaml:"ips"`
-	Read             []string `yaml:"read"`
-	Write            []string `yaml:"write"`
-	Exec             []string `yaml:"exec"`
+	Read             pathList `yaml:"read"`
+	Write            pathList `yaml:"write"`
+	Exec             pathList `yaml:"exec"`
 	Env              []string `yaml:"env"`
-	AllowUnixSockets *bool `yaml:"allow-unix-sockets"`
-	UnrestrictedNet  *bool `yaml:"unrestricted-net"`
-	HostLoopback     *bool `yaml:"host-loopback"`
-	Auto             *bool `yaml:"auto"`
+	AllowUnixSockets *bool    `yaml:"allow-unix-sockets"`
+	UnrestrictedNet  *bool    `yaml:"unrestricted-net"`
+	HostLoopback     *bool    `yaml:"host-loopback"`
+	Auto             *bool    `yaml:"auto"`
+}
+
+// pathList is a YAML list of paths. It overrides default scalar decoding
+// to recover cases where yaml.v3 consumes the user's intended string
+// into the tag:
+//
+//   - unquoted "!something" parses as a local tag with empty value
+//     (Tag="!something", Value=""). The curb profiles use leading "!"
+//     for exclusion, so this is a common trap.
+//   - unquoted "~" or "null" parses as YAML null. Path lists want
+//     the literal characters.
+//
+// Both cases are silently lost by the default []string decoder — entries
+// end up as empty strings.
+type pathList []string
+
+func (pl *pathList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.SequenceNode {
+		return fmt.Errorf("expected a list, got kind %d", node.Kind)
+	}
+	out := make([]string, 0, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind != yaml.ScalarNode {
+			return fmt.Errorf("expected string in list")
+		}
+		out = append(out, pathScalarLiteral(item))
+	}
+	*pl = out
+	return nil
+}
+
+// pathScalarLiteral returns the literal string the user wrote for a
+// scalar node, recovering from yaml.v3's tag/null consumption.
+func pathScalarLiteral(node *yaml.Node) string {
+	// Custom local tag with empty value: the literal is the tag itself.
+	if node.Value == "" && strings.HasPrefix(node.Tag, "!") && !strings.HasPrefix(node.Tag, "!!") {
+		return node.Tag
+	}
+	// Plain "~" or "null" parsed as !!null: keep the literal text.
+	if node.Tag == "!!null" && node.Value != "" {
+		return node.Value
+	}
+	return node.Value
 }
 
 // LoadConfigFile reads and decodes a YAML config file.
@@ -64,6 +109,16 @@ func (cf *ConfigFile) validate() error {
 			return err
 		}
 	}
+	for _, pair := range [...]struct {
+		field string
+		list  pathList
+	}{{"read", cf.Read}, {"write", cf.Write}, {"exec", cf.Exec}} {
+		for i, p := range pair.list {
+			if p == "" {
+				return fmt.Errorf("%s[%d] is empty", pair.field, i)
+			}
+		}
+	}
 	return nil
 }
 
@@ -88,16 +143,85 @@ func FindConfigFile() string {
 }
 
 // mergeConfigLists prepends the list fields from a ConfigFile into cfg.
+// Path fields (read, write, exec) have $VAR / ${VAR} references expanded
+// from the host environment before merging; entries that expand to an
+// empty string or still contain an unresolved $ are dropped with a
+// warning. ~ and $HOME are resolved later at plan-build time against
+// the host HOME — see ExpandHomeRefs in config/defaults.go and
+// warnHostHomePathMismatch in sandbox/plan.go.
 func mergeConfigLists(cfg *Config, cf *ConfigFile) {
 	cfg.AllowedDomains = append(cf.Domains, cfg.AllowedDomains...)
 	cfg.AllowedIPs = append(cf.IPs, cfg.AllowedIPs...)
-	cfg.ROPaths = append(cf.Read, cfg.ROPaths...)
-	cfg.RWPaths = append(cf.Write, cfg.RWPaths...)
-	cfg.ExecAllow = append(cf.Exec, cfg.ExecAllow...)
+	cfg.ROPaths = append(expandEnvPaths([]string(cf.Read), "read"), cfg.ROPaths...)
+	cfg.RWPaths = append(expandEnvPaths([]string(cf.Write), "write"), cfg.RWPaths...)
+	cfg.ExecAllow = append(expandEnvPaths([]string(cf.Exec), "exec"), cfg.ExecAllow...)
 
 	passNames, setPairs := classifyEnvArgs(cf.Env)
 	cfg.EnvPassthrough = append(passNames, cfg.EnvPassthrough...)
 	cfg.EnvSet = append(setPairs, cfg.EnvSet...)
+}
+
+// expandEnvPaths expands $VAR and ${VAR} references in each path using the
+// host environment. Exclusion prefixes (!) and literal-bang escapes (\!)
+// are preserved across expansion. A literal "$" is spelled "$$" (Make
+// convention). Entries are dropped — with a warning — when any referenced
+// variable is unset or expansion yields an empty string. The "!*"
+// clear-defaults sentinel is passed through unchanged.
+//
+// $HOME and ${HOME} are NOT expanded here: they are replaced with an
+// internal marker (see homeRefMarker) so the plan stage can distinguish
+// $HOME-origin entries from user-literal paths that happen to equal the
+// host home. The marker is resolved to the host home by ExpandHomeRefs.
+//
+// field names the list being expanded ("read", "write", "exec") for use
+// in warnings.
+func expandEnvPaths(paths []string, field string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	// SOH is used as a local placeholder to shield "$$" from os.Expand's
+	// $-parsing. It's replaced back to "$" before the expanded path leaves
+	// this function, so the byte never appears in the output.
+	const dollarSentinel = "\x01"
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "!*" {
+			out = append(out, p)
+			continue
+		}
+		prefix, rest := "", p
+		switch {
+		case strings.HasPrefix(p, `\!`):
+			prefix, rest = `\!`, p[2:]
+		case strings.HasPrefix(p, "!"):
+			prefix, rest = "!", p[1:]
+		}
+		shielded := strings.ReplaceAll(rest, "$$", dollarSentinel)
+		var missing string
+		expanded := os.Expand(shielded, func(name string) string {
+			if name == "HOME" {
+				return homeRefMarker
+			}
+			if v, ok := os.LookupEnv(name); ok {
+				return v
+			}
+			if missing == "" {
+				missing = name
+			}
+			return ""
+		})
+		expanded = strings.ReplaceAll(expanded, dollarSentinel, "$")
+		if missing != "" {
+			clog.Warnf("profile %s: skipping %q: variable $%s is not set in the host environment", field, p, missing)
+			continue
+		}
+		if expanded == "" {
+			clog.Warnf("profile %s: skipping %q: expands to empty string", field, p)
+			continue
+		}
+		out = append(out, prefix+expanded)
+	}
+	return out
 }
 
 // MergeConfigFile merges a ConfigFile into cfg.

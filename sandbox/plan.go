@@ -254,20 +254,65 @@ func createTempDir() (string, error) {
 	return os.MkdirTemp("", "curb-")
 }
 
-// warnTildeToTmpDir logs a warning if any configured paths contain ~ and the
-// sandbox HOME is a temporary directory (i.e. HOME was not passed through).
-func warnTildeToTmpDir(cfg *config.Config, sandboxHome, tmpDir string) {
-	if sandboxHome != tmpDir {
-		return
+// resolveHostHome returns the host user's home directory, or "" if it
+// cannot be determined. Used as the resolution target for ~ in path fields.
+func resolveHostHome() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
 	}
+	return h
+}
+
+// stripExclusionPrefix removes a leading "!" or "\!" exclusion marker from
+// a configured path entry, returning the bare path.
+func stripExclusionPrefix(p string) string {
+	switch {
+	case strings.HasPrefix(p, `\!`):
+		return p[2:]
+	case strings.HasPrefix(p, "!"):
+		return p[1:]
+	}
+	return p
+}
+
+// anyPathReferencesHome reports whether any entry across the three path
+// lists is a host-home reference (~ or an internal $HOME marker).
+func anyPathReferencesHome(cfg *config.Config) bool {
 	for _, paths := range [][]string{cfg.ROPaths, cfg.RWPaths, cfg.ExecAllow} {
 		for _, p := range paths {
-			if strings.HasPrefix(p, "~/") || p == "~" {
-				clog.Warnf("~ in paths resolves to temporary directory %s (HOME not passed through); use --env HOME to use your real home", tmpDir)
-				return
+			if config.PathReferencesHome(stripExclusionPrefix(p)) {
+				return true
 			}
 		}
 	}
+	return false
+}
+
+// checkHostHomeResolvable returns an error if any configured path uses ~
+// or $HOME but the host home could not be determined. Without this check,
+// expansion silently produces broken paths like "/.ssh" from "~/.ssh".
+func checkHostHomeResolvable(cfg *config.Config, hostHome string) error {
+	if hostHome != "" || !anyPathReferencesHome(cfg) {
+		return nil
+	}
+	return fmt.Errorf("cannot resolve ~ or $HOME in paths: host home directory is unavailable (set $HOME, or remove ~ / $HOME references from profiles and config)")
+}
+
+// warnHostHomePathMismatch logs a warning when a configured path references
+// the host home (via literal ~ or $HOME) and the sandbox's $HOME will
+// differ — in that case the granted paths cannot be reached by the
+// sandboxed program via its own $HOME. Already-literal host-home paths
+// (e.g. a user-written "/home/user/.ssh") are excluded — those are the
+// user's explicit choice, not a variable-expansion surprise.
+func warnHostHomePathMismatch(cfg *config.Config, sandboxHome, hostHome string) {
+	if hostHome == "" || sandboxHome == hostHome {
+		return
+	}
+	if !anyPathReferencesHome(cfg) {
+		return
+	}
+	clog.Warnf("~ or $HOME in paths resolves to the host home (%s), but the sandbox's $HOME will be %s — the sandboxed program cannot reach these paths via its own $HOME. Use --env HOME to align them, or ignore this warning if you meant the host path.", hostHome, sandboxHome)
 }
 
 // resolveSandboxHome determines what HOME will be inside the sandbox.
@@ -301,16 +346,16 @@ func resolveSandboxHome(cfg *config.Config, tmpDir string) string {
 
 // resolveFilesystem merges default and user-configured paths, expands tildes
 // and globs, resolves symlinks. The temp directory must already be set on
-// plan.TempDir. The sandboxHome parameter controls tilde expansion.
-func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, sandboxHome string) error {
+// plan.TempDir. The hostHome parameter is the target for ~ expansion.
+func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, hostHome string) error {
 	plan.NoFSRestrict = cfg.NoFSRestrict
 	if !cfg.NoFSRestrict {
 		// Parse exclusions, expand tildes and globs, then merge with defaults.
 		var roAdds []string
 		var roRemoveAll bool
 		roAdds, removals.roRemoves, roRemoveAll = config.ParseExclusions(cfg.ROPaths)
-		roAdds = config.ExpandTildes(roAdds, sandboxHome)
-		removals.roRemoves = config.ExpandTildes(removals.roRemoves, sandboxHome)
+		roAdds = config.ExpandHomeRefs(roAdds, hostHome)
+		removals.roRemoves = config.ExpandHomeRefs(removals.roRemoves, hostHome)
 		roAdds = config.ExpandGlobs(roAdds)
 		removals.roRemoves = config.ExpandGlobs(removals.roRemoves)
 
@@ -328,8 +373,8 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 		var rwAdds []string
 		var rwRemoveAll bool
 		rwAdds, removals.rwRemoves, rwRemoveAll = config.ParseExclusions(cfg.RWPaths)
-		rwAdds = config.ExpandTildes(rwAdds, sandboxHome)
-		removals.rwRemoves = config.ExpandTildes(removals.rwRemoves, sandboxHome)
+		rwAdds = config.ExpandHomeRefs(rwAdds, hostHome)
+		removals.rwRemoves = config.ExpandHomeRefs(removals.rwRemoves, hostHome)
 		rwAdds = config.ExpandGlobs(rwAdds)
 		removals.rwRemoves = config.ExpandGlobs(removals.rwRemoves)
 		rwExcl := excludeArgs(removals.rwRemoves)
@@ -370,7 +415,7 @@ func resolveFilesystem(plan *SandboxPlan, cfg *config.Config, removals *planRemo
 // resolveExec resolves exec path allowlists: parse exclusions, look up
 // binaries via PATH, resolve symlinks, and ensure exec dirs are readable.
 // Binaries not found in PATH are silently skipped (logged at debug level).
-func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, sandboxHome string, logger *clog.Logger) error {
+func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, hostHome string, logger *clog.Logger) error {
 	removals.noExecRestrict = cfg.NoExecRestrict
 	if cfg.NoExecRestrict {
 		plan.NoExecRestrict = true
@@ -398,8 +443,8 @@ func resolveExec(plan *SandboxPlan, cfg *config.Config, removals *planRemovals, 
 	var execAdds []string
 	var execRemoveAll bool
 	execAdds, removals.execRemoves, execRemoveAll = config.ParseExclusions(cfg.ExecAllow)
-	execAdds = config.ExpandTildes(execAdds, sandboxHome)
-	removals.execRemoves = config.ExpandTildes(removals.execRemoves, sandboxHome)
+	execAdds = config.ExpandHomeRefs(execAdds, hostHome)
+	removals.execRemoves = config.ExpandHomeRefs(removals.execRemoves, hostHome)
 	removals.execRemoves = config.ExpandGlobs(removals.execRemoves)
 	if execRemoveAll {
 		plan.ExecPaths = nil

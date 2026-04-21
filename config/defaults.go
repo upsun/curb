@@ -121,17 +121,41 @@ func hasGlobMeta(path string) bool {
 	return strings.ContainsAny(path, "*?[")
 }
 
-// ExpandTildes replaces a leading ~ or ~/ in each path with the given home directory.
-func ExpandTildes(paths []string, home string) []string {
+// homeRefMarker is emitted by expandEnvPaths in place of $HOME / ${HOME}
+// references so the plan stage can distinguish profile/config entries
+// that originally named HOME from user-literal paths that happen to
+// equal the host home. NUL cannot appear in a filesystem path or in an
+// environment variable value (execve uses null-terminated strings), so
+// users cannot smuggle it in via $VAR expansion.
+const homeRefMarker = "\x00"
+
+// ExpandHomeRefs replaces a leading ~ or ~/ and any embedded $HOME /
+// ${HOME} markers (emitted by expandEnvPaths) in each path with the
+// given home directory.
+func ExpandHomeRefs(paths []string, home string) []string {
 	out := make([]string, len(paths))
 	for i, p := range paths {
-		if p == "~" {
+		switch {
+		case p == "~":
 			out[i] = home
-		} else if strings.HasPrefix(p, "~/") {
+		case strings.HasPrefix(p, "~/"):
 			out[i] = home + p[1:]
-		} else {
+		default:
 			out[i] = p
+		}
+		if strings.Contains(out[i], homeRefMarker) {
+			out[i] = strings.ReplaceAll(out[i], homeRefMarker, home)
 		}
 	}
 	return out
 }
+
+// PathReferencesHome reports whether a configured path entry originated
+// from a host-home reference (a leading ~ or a $HOME / ${HOME} variable
+// that expandEnvPaths preserved as a marker). Used to gate the
+// sandbox-home-mismatch warning: user-literal paths that happen to
+// match the host home are excluded.
+func PathReferencesHome(p string) bool {
+	return p == "~" || strings.HasPrefix(p, "~/") || strings.Contains(p, homeRefMarker)
+}
+

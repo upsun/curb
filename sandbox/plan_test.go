@@ -779,11 +779,10 @@ func TestResolveSandboxHome_PassthroughAllIncludesHOME(t *testing.T) {
 	assert.Equal(t, "/host/home", home)
 }
 
-// --- tilde expansion uses sandbox HOME ---
+// --- tilde expansion uses host HOME ---
 
-func TestBuildPlan_TildeExpandsToSandboxHome(t *testing.T) {
-	// When HOME is passed through, ~ in paths should resolve to the host HOME
-	// (which equals sandbox HOME since HOME is passed through).
+func TestBuildPlan_TildeExpandsToHostHome_WithPassthrough(t *testing.T) {
+	// When HOME is passed through, sandbox HOME == host HOME and ~ aligns.
 	t.Setenv("HOME", "/host/home")
 	cfg := &config.Config{
 		ROPaths:        []string{"~/.ssh"},
@@ -796,8 +795,10 @@ func TestBuildPlan_TildeExpandsToSandboxHome(t *testing.T) {
 	assert.Contains(t, plan.ROPaths, "/host/home/.ssh")
 }
 
-func TestBuildPlan_TildeExpandsToTmpDirWhenNoHome(t *testing.T) {
-	// When HOME is not passed through, ~ resolves to tmpDir.
+func TestBuildPlan_TildeExpandsToHostHome_WithoutPassthrough(t *testing.T) {
+	// Even without HOME passthrough, ~ resolves to the host home (not tmpDir).
+	// A mismatch warning is emitted because the sandbox's $HOME will differ.
+	t.Setenv("HOME", "/host/home")
 	cfg := &config.Config{
 		ROPaths: []string{"~/.config"},
 	}
@@ -805,17 +806,16 @@ func TestBuildPlan_TildeExpandsToTmpDirWhenNoHome(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	// ~ should have expanded to tmpDir, not os.UserHomeDir().
-	hostHome, _ := os.UserHomeDir()
-	assert.NotContains(t, plan.ROPaths, hostHome+"/.config",
-		"~ must not expand to host home when HOME is not passed through")
-
-	expected := plan.TempDir + "/.config"
-	assert.Contains(t, plan.ROPaths, expected,
-		"~ should expand to sandbox HOME (tmpDir)")
+	assert.Contains(t, plan.ROPaths, "/host/home/.config",
+		"~ should expand to the host home")
+	assert.NotContains(t, plan.ROPaths, plan.TempDir+"/.config",
+		"~ must no longer expand to tmpDir")
 }
 
-func TestBuildPlan_TildeExpandsToExplicitHome(t *testing.T) {
+func TestBuildPlan_TildeIgnoresExplicitSandboxHome(t *testing.T) {
+	// --env HOME=/custom sets the sandbox's HOME but does not redirect ~ —
+	// ~ is a host-side shorthand, so it still resolves to the host home.
+	t.Setenv("HOME", "/host/home")
 	cfg := &config.Config{
 		ROPaths: []string{"~/.ssh"},
 		EnvSet:  []string{"HOME=/custom"},
@@ -824,7 +824,47 @@ func TestBuildPlan_TildeExpandsToExplicitHome(t *testing.T) {
 	require.NoError(t, err)
 	defer plan.Cleanup()
 
-	assert.Contains(t, plan.ROPaths, "/custom/.ssh")
+	assert.Contains(t, plan.ROPaths, "/host/home/.ssh")
+	assert.NotContains(t, plan.ROPaths, "/custom/.ssh")
+}
+
+func TestBuildPlan_TildeErrorsWhenHostHomeUnavailable(t *testing.T) {
+	// If os.UserHomeDir() cannot determine HOME, tilde paths would silently
+	// degrade to "/foo". BuildPlan must refuse to proceed with a clear error.
+	t.Setenv("HOME", "")
+	cfg := &config.Config{
+		ROPaths: []string{"~/.ssh"},
+	}
+	_, err := BuildPlan(cfg, minCaps(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "host home")
+	assert.Contains(t, err.Error(), "~")
+}
+
+func TestBuildPlan_HostHomeUnavailableOKWithoutTildes(t *testing.T) {
+	// Host home being unresolvable is only an error if ~ is actually used.
+	t.Setenv("HOME", "")
+	cfg := &config.Config{
+		ROPaths: []string{"/etc/ssl"},
+	}
+	plan, err := BuildPlan(cfg, minCaps(), nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	assert.Contains(t, plan.ROPaths, "/etc/ssl")
+}
+
+func TestBuildPlan_LiteralHostHomePathDoesNotWarn(t *testing.T) {
+	// A user-written literal /home/user/.ssh is the user's explicit choice;
+	// the mismatch warning must not flag it. We can't easily assert on the
+	// absence of a log line here, but the path must resolve unchanged.
+	t.Setenv("HOME", "/host/home")
+	cfg := &config.Config{
+		ROPaths: []string{"/host/home/.ssh"},
+	}
+	plan, err := BuildPlan(cfg, minCaps(), nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	assert.Contains(t, plan.ROPaths, "/host/home/.ssh")
 }
 
 // --- ResolveEnv HOME fallback ---
