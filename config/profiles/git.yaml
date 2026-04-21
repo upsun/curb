@@ -6,6 +6,8 @@ profiles:
 read:
   - ~/.gitconfig
   - ~/.config/git
+  # macOS login keychain (osxkeychain credential helper). Ignored on Linux.
+  - ~/Library/Keychains
 exec:
   - sh
   - git

@@ -9,6 +9,8 @@ domains:
   - production.cloudflare.docker.com
 read:
   - ~/.docker
+  # macOS login keychain (docker-credential-osxkeychain). Ignored on Linux.
+  - ~/Library/Keychains
 exec:
   - docker
   - docker-compose

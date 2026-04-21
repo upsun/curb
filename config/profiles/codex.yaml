@@ -13,6 +13,8 @@ read:
   - ~/.codex/config.toml
   - ~/.gitconfig
   - ~/.config/git
+  # macOS login keychain (OAuth token). Ignored on Linux.
+  - ~/Library/Keychains
 write:
   - .
   - ~/.codex

@@ -25,6 +25,8 @@ read:
   - ~/.config/gh/hosts.yml
   - ~/.gitconfig
   - ~/.config/git
+  # macOS login keychain (OAuth token). Ignored on Linux.
+  - ~/Library/Keychains
 write:
   - .
   - ~/.copilot

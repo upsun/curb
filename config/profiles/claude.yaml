@@ -19,6 +19,9 @@ read:
   - ~/.config/claude
   - ~/.gitconfig
   - ~/.config/git
+  # macOS login keychain (OAuth token under "Claude Code-credentials").
+  # Ignored on Linux (path does not exist).
+  - ~/Library/Keychains
 write:
   - .
   - ~/.claude

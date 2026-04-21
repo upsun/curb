@@ -4,6 +4,8 @@ commands: [ssh, scp, sftp]
 allow-unix-sockets: true
 read:
   - ~/.ssh
+  # macOS login keychain (ssh UseKeychain passphrase storage). Ignored on Linux.
+  - ~/Library/Keychains
 exec:
   - ssh
   - ssh-keygen
