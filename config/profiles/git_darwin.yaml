@@ -1,0 +1,10 @@
+# macOS overlay for the git profile.
+# /usr/bin/git is an Apple xcrun shim that re-execs the real git from the
+# active developer directory. Allow only the git binary and its helper tree
+# (git-core/ contains only git-* subcommands: upload-pack, receive-pack,
+# credential-osxkeychain, http-backend, ...).
+exec:
+  - /Library/Developer/CommandLineTools/usr/bin/git
+  - /Library/Developer/CommandLineTools/usr/libexec/git-core
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/git
+  - /Applications/Xcode.app/Contents/Developer/usr/libexec/git-core

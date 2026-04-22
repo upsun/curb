@@ -1,8 +1,10 @@
 package config
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,7 +23,9 @@ func TestValidateProfileName(t *testing.T) {
 		{"0start", false},
 		{"", true},
 		{"-leading", true},
+		{"_leading_underscore", true},
 		{"has_underscore", true},
+		{"git_darwin", true},
 		{"HAS_UPPER", true},
 		{"../traversal", true},
 		{"path/sep", true},
@@ -50,7 +54,7 @@ func TestLoadProfile_Builtin(t *testing.T) {
 }
 
 func TestLoadProfile_AllBuiltins(t *testing.T) {
-	names := []string{"cc", "claude", "codex", "copilot", "docker", "gemini", "git", "github", "go", "node", "opencode", "php", "python", "ruby", "rust", "shell", "ssh", "vibe"}
+	names := []string{"cc", "claude", "codex", "copilot", "docker", "gemini", "git", "github", "go", "make", "node", "opencode", "php", "python", "ruby", "rust", "shell", "ssh", "vibe"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadProfile(name)
@@ -101,7 +105,7 @@ func TestMergeProfiles(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"node", "github"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"node", "github"}, cmd.Flags())
 	require.NoError(t, err)
 
 	// Node domains and github domains should both be present.
@@ -124,7 +128,7 @@ func TestMergeProfiles_Dedup(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"node", "node"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"node", "node"}, cmd.Flags())
 	require.NoError(t, err)
 
 	count := 0
@@ -141,7 +145,7 @@ func TestMergeProfiles_NotFound(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"nonexistent"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"nonexistent"}, cmd.Flags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -151,7 +155,7 @@ func TestMergeProfiles_InvalidName(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"../bad"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"../bad"}, cmd.Flags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid profile name")
 }
@@ -161,7 +165,7 @@ func TestMergeProfiles_ProfilesBelowConfigFile(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"node"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"node"}, cmd.Flags())
 	require.NoError(t, err)
 
 	assert.Contains(t, cfg.AllowedDomains, "registry.npmjs.org")
@@ -183,7 +187,7 @@ allow-unix-sockets: true
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
 	require.NoError(t, err)
 
 	assert.Contains(t, cfg.AllowedDomains, "example.com")
@@ -210,7 +214,7 @@ allow-unix-sockets: true
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
 	require.NoError(t, err)
 	assert.True(t, cfg.AllowUnixSockets)
 }
@@ -235,7 +239,7 @@ allow-unix-sockets: true
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"a", "b"}, cmd.Flags())
 	require.NoError(t, err)
 	assert.True(t, cfg.AllowUnixSockets)
 }
@@ -255,7 +259,7 @@ allow-unix-sockets: false
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"noop"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"noop"}, cmd.Flags())
 	require.NoError(t, err)
 	assert.False(t, cfg.AllowUnixSockets)
 }
@@ -276,7 +280,7 @@ allow-unix-sockets: true
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"custom"}, cmd.Flags())
 	require.NoError(t, err)
 
 	assert.True(t, cfg.AllowUnixSockets)
@@ -307,7 +311,7 @@ exec:
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"child"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"child"}, cmd.Flags())
 	require.NoError(t, err)
 
 	// Both profiles' lists should be present.
@@ -340,7 +344,7 @@ domains:
 	require.NoError(t, err)
 
 	// "base" is included by "child" AND listed explicitly — should load once.
-	err = MergeProfiles(cfg, []string{"child", "base"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"child", "base"}, cmd.Flags())
 	require.NoError(t, err)
 
 	count := 0
@@ -374,7 +378,7 @@ domains:
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"a"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"a"}, cmd.Flags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cycle")
 }
@@ -392,7 +396,7 @@ func TestMergeProfiles_TransitiveCycle(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"a"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"a"}, cmd.Flags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cycle")
 	assert.Contains(t, err.Error(), "a -> b -> c -> a")
@@ -404,7 +408,7 @@ func TestMergeProfiles_BuiltinComposition(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"github"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"github"}, cmd.Flags())
 	require.NoError(t, err)
 
 	// From ssh profile (via github -> git -> ssh).
@@ -427,7 +431,7 @@ func TestMergeProfiles_GoIncludesCC(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	err = MergeProfiles(cfg, []string{"go"}, cmd.Flags())
+	_, err = MergeProfiles(cfg, []string{"go"}, cmd.Flags())
 	require.NoError(t, err)
 
 	// From cc profile (via go -> cc).
@@ -619,4 +623,257 @@ func TestShowProfile_UserOverridesBuiltin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ProfileUser, source)
 	assert.Contains(t, string(data), "# custom")
+}
+
+// TestMergeProfiles_PlatformOverlay verifies that a "<name>_<GOOS>" overlay
+// is auto-loaded and merged when "<name>" is loaded.
+func TestMergeProfiles_PlatformOverlay(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool.yaml"), []byte(`
+exec:
+  - tool
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool_"+runtime.GOOS+".yaml"), []byte(`
+exec:
+  - /opt/platform-tool
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	notes, err := MergeProfiles(cfg, []string{"tool"}, cmd.Flags())
+	require.NoError(t, err)
+	assert.Contains(t, cfg.ExecAllow, "tool")
+	assert.Contains(t, cfg.ExecAllow, "/opt/platform-tool")
+	// Overlay application is reported as a debug note.
+	require.Len(t, notes, 1)
+	assert.Contains(t, notes[0], "tool_"+runtime.GOOS)
+	assert.Contains(t, notes[0], "applied overlay")
+}
+
+// TestMergeProfiles_PlatformOverlay_WrongOSNotLoaded verifies that a non-matching
+// platform overlay is not applied.
+func TestMergeProfiles_PlatformOverlay_WrongOSNotLoaded(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool.yaml"), []byte(`
+exec:
+  - tool
+`), 0o644))
+	// Overlay for an OS that is never the current one (invert runtime.GOOS).
+	otherOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherOS = "darwin"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool_"+otherOS+".yaml"), []byte(`
+exec:
+  - /opt/should-not-load
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	notes, err := MergeProfiles(cfg, []string{"tool"}, cmd.Flags())
+	require.NoError(t, err)
+	assert.Contains(t, cfg.ExecAllow, "tool")
+	assert.NotContains(t, cfg.ExecAllow, "/opt/should-not-load")
+	assert.Empty(t, notes)
+}
+
+// TestLoadProfile_OverlayOnlyOnMatchingOS verifies that a profile whose
+// only file is an "<name>_<GOOS>.yaml" overlay is loadable by its base
+// name on the matching OS.
+func TestLoadProfile_OverlayOnlyOnMatchingOS(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "only_"+runtime.GOOS+".yaml"), []byte(`
+exec:
+  - only-tool
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cf, err := LoadProfile("only")
+	require.NoError(t, err)
+	assert.Contains(t, cf.Exec, "only-tool")
+}
+
+// TestLoadProfile_OverlayOnlyOtherOS verifies that a profile whose only
+// file is an overlay for a different OS reports a friendly error naming
+// the supported OS.
+func TestLoadProfile_OverlayOnlyOtherOS(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	otherOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherOS = "darwin"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "only_"+otherOS+".yaml"), []byte(`
+exec:
+  - only-tool
+`), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadProfile("only")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only available on "+otherOS)
+}
+
+// TestLoadProfile_UnderscoreNameRejected verifies that a suffixed overlay
+// name cannot be referenced directly.
+func TestLoadProfile_UnderscoreNameRejected(t *testing.T) {
+	_, err := LoadProfile("git_darwin")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid profile name")
+}
+
+// TestMergeProfiles_OverlayNotRecursive verifies that an overlay does not
+// itself attempt to load a "<name>_<os>_<os>" meta-overlay.
+func TestMergeProfiles_OverlayNotRecursive(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool.yaml"), []byte("exec:\n  - tool\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool_"+runtime.GOOS+".yaml"), []byte("exec:\n  - overlay\n"), 0o644))
+	// A meta-overlay must not get auto-loaded.
+	metaName := "tool_" + runtime.GOOS + "_" + runtime.GOOS + ".yaml"
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, metaName), []byte("exec:\n  - meta\n"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	_, err = MergeProfiles(cfg, []string{"tool"}, cmd.Flags())
+	require.NoError(t, err)
+	assert.Contains(t, cfg.ExecAllow, "tool")
+	assert.Contains(t, cfg.ExecAllow, "overlay")
+	assert.NotContains(t, cfg.ExecAllow, "meta")
+}
+
+// TestMergeProfiles_MakeOnDarwinPullsXcode verifies that on macOS the make
+// profile composes through make_darwin -> xcode_darwin, and that $TMPDIR
+// in xcode_darwin.yaml expands from the host environment.
+func TestMergeProfiles_MakeOnDarwinPullsXcode(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-only")
+	}
+	t.Setenv("TMPDIR", "/var/folders/fake/curb-test/T")
+
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	_, err = MergeProfiles(cfg, []string{"make"}, cmd.Flags())
+	require.NoError(t, err)
+
+	// From make.yaml.
+	assert.Contains(t, cfg.ExecAllow, "make")
+	// From make_darwin.yaml.
+	assert.Contains(t, cfg.ExecAllow, "/Library/Developer/CommandLineTools/usr/bin/make")
+	// From xcode_darwin.yaml — $TMPDIR expanded from host env.
+	assert.Contains(t, cfg.ROPaths, "/var/folders/fake/curb-test/T")
+	assert.Contains(t, cfg.RWPaths, "/var/folders/fake/curb-test/T")
+	assert.Contains(t, cfg.ROPaths, "/Applications/Xcode.app")
+	assert.Contains(t, cfg.ROPaths, "/private/var/select")
+}
+
+// TestListProfiles_HidesOverlayFiles verifies that overlay files never
+// appear as standalone entries in the listing: on the matching OS they
+// fold into the base-name entry, and on other OSes they are hidden.
+func TestListProfiles_HidesOverlayFiles(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool.yaml"), []byte("exec:\n  - tool\n"), 0o644))
+	otherOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherOS = "darwin"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool_"+otherOS+".yaml"), []byte("exec:\n  - other\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "tool_"+runtime.GOOS+".yaml"), []byte("exec:\n  - current\n"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	var names []string
+	for _, p := range ListProfiles() {
+		names = append(names, p.Name)
+	}
+	assert.Contains(t, names, "tool")
+	assert.NotContains(t, names, "tool_"+runtime.GOOS)
+	assert.NotContains(t, names, "tool_"+otherOS)
+}
+
+// TestListProfiles_LowerSourceBaseShadowsHigherSourceOverlay verifies
+// that a real base file in a lower-priority source (e.g. builtin) wins
+// over an overlay-only file in a higher-priority source (e.g. user),
+// matching what LoadProfile actually returns for that name.
+func TestListProfiles_LowerSourceBaseShadowsHigherSourceOverlay(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	// User dir has only an overlay for a builtin profile ("python") —
+	// the builtin base file should still drive the listing's Source/Path.
+	require.NoError(t, os.WriteFile(filepath.Join(profileDir, "python_"+runtime.GOOS+".yaml"), []byte("exec:\n  - custom\n"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	var found *ProfileInfo
+	for _, p := range ListProfiles() {
+		if p.Name == "python" {
+			p := p
+			found = &p
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, ProfileBuiltin, found.Source)
+	assert.Empty(t, found.Path)
+}
+
+// TestListProfiles_IncludesOverlayOnlyProfile verifies that a profile
+// whose only file is an overlay for the current OS is listed under its
+// base name with the overlay file's path.
+func TestListProfiles_IncludesOverlayOnlyProfile(t *testing.T) {
+	dir := t.TempDir()
+	profileDir := filepath.Join(dir, "curb", "profiles")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	overlayPath := filepath.Join(profileDir, "only_"+runtime.GOOS+".yaml")
+	require.NoError(t, os.WriteFile(overlayPath, []byte("exec:\n  - only\n"), 0o644))
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	var found *ProfileInfo
+	for _, p := range ListProfiles() {
+		if p.Name == "only" {
+			p := p
+			found = &p
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, ProfileUser, found.Source)
+	assert.Equal(t, overlayPath, found.Path)
+}
+
+// TestBuiltinProfiles_AllParse verifies that every embedded profile file
+// (base and overlay) parses cleanly. Overlays are not loadable by name;
+// they are read directly from the embed FS for this check.
+func TestBuiltinProfiles_AllParse(t *testing.T) {
+	entries, err := fs.ReadDir(builtinProfiles, "profiles")
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+	for _, e := range entries {
+		t.Run(e.Name(), func(t *testing.T) {
+			data, err := builtinProfiles.ReadFile("profiles/" + e.Name())
+			require.NoError(t, err)
+			_, err = decodeProfile(data, e.Name())
+			require.NoError(t, err)
+		})
+	}
 }

@@ -1,0 +1,16 @@
+# macOS overlay for the shell profile.
+# Interactive shells on macOS routinely invoke xcrun-dispatched tools
+# (python3, make, swift, xcodebuild, otool, ...) whose /usr/bin entries
+# are shims that re-exec into the active developer directory. Allowing
+# the CommandLineTools and Xcode bin dirs mirrors the base profile's
+# /usr/bin entry — broad by design, in keeping with the shell profile's
+# "restore standard system binaries" philosophy.
+#
+# /Applications is not in the macOS default read paths (unlike /Library),
+# so Xcode-selected users also need the developer dir readable so xcrun
+# can navigate its contents.
+read:
+  - /Applications/Xcode.app/Contents/Developer
+exec:
+  - /Library/Developer/CommandLineTools/usr/bin
+  - /Applications/Xcode.app/Contents/Developer/usr/bin

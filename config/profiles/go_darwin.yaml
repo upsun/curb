@@ -1,0 +1,7 @@
+# macOS overlay for the go profile.
+# Go's default GOCACHE on macOS is ~/Library/Caches/go-build, not ~/.cache/go-build.
+write:
+  - ~/Library/Caches/go-build
+exec:
+  # go test compiles test binaries into the build cache and runs them from there.
+  - ~/Library/Caches/go-build

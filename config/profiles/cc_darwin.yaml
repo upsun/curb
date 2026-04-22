@@ -1,0 +1,23 @@
+# macOS overlay for the cc profile.
+# /usr/bin/{clang,cc,...} are Apple xcrun shims that re-exec the real
+# compiler binaries from the active developer directory. Enumerate only the
+# tools cc.yaml already names by basename.
+exec:
+  - /Library/Developer/CommandLineTools/usr/bin/clang
+  - /Library/Developer/CommandLineTools/usr/bin/clang++
+  - /Library/Developer/CommandLineTools/usr/bin/cc
+  - /Library/Developer/CommandLineTools/usr/bin/c++
+  - /Library/Developer/CommandLineTools/usr/bin/gcc
+  - /Library/Developer/CommandLineTools/usr/bin/g++
+  - /Library/Developer/CommandLineTools/usr/bin/cpp
+  - /Library/Developer/CommandLineTools/usr/bin/as
+  - /Library/Developer/CommandLineTools/usr/bin/ld
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/clang
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/clang++
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/cc
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/c++
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/gcc
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/g++
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/cpp
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/as
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/ld

@@ -1,0 +1,20 @@
+# Xcode-select dispatch for tools invoked via /usr/bin/<tool> xcrun shims.
+# On macOS many /usr/bin entries (make, swift, clang, xcodebuild, otool, ...)
+# are small shims that re-exec into the active developer directory. xcrun
+# maintains a cache in the host per-user TMPDIR, reads the xcode-select
+# symlink under /var/select, and (for heavier tools) invokes xcodebuild
+# which needs access to Xcode.app's SharedFrameworks, Frameworks, and SDKs.
+#
+# $TMPDIR expands from the host environment at profile-merge time, which
+# is what we want here: the sandbox replaces TMPDIR for the child, but the
+# host per-user temp dir (/var/folders/<hash>/T) is what xcrun uses via
+# confstr(_CS_DARWIN_USER_TEMP_DIR) — a syscall that ignores $TMPDIR.
+read:
+  - /Applications/Xcode.app
+  - /private/var/select
+  - $TMPDIR
+write:
+  - $TMPDIR
+exec:
+  - /Applications/Xcode.app/Contents/Developer/usr/bin
+  - /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin

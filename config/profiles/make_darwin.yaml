@@ -1,0 +1,10 @@
+# macOS overlay for the make profile.
+# /usr/bin/make is an xcrun shim that dispatches into the active developer
+# directory — either CommandLineTools (a plain GNU make binary) or Xcode.app
+# (re-execs via xcodebuild -find make). Both dispatch targets are enumerated;
+# the xcode profile carries the xcrun/xcodebuild support paths.
+profiles:
+  - xcode
+exec:
+  - /Library/Developer/CommandLineTools/usr/bin/make
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/make

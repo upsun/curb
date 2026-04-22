@@ -111,7 +111,8 @@ func runSandbox(cmd *cobra.Command, args []string, extraProfiles []string) error
 		}
 	}
 
-	if err := config.MergeProfiles(cfg, profileNames, cmd.Flags()); err != nil {
+	profileNotes, err := config.MergeProfiles(cfg, profileNames, cmd.Flags())
+	if err != nil {
 		return err
 	}
 
@@ -131,6 +132,9 @@ func runSandbox(cmd *cobra.Command, args []string, extraProfiles []string) error
 
 	for _, p := range cfg.ConfigFilePaths {
 		logger.Info("config: loaded %s.", p)
+	}
+	for _, n := range profileNotes {
+		logger.Debug("%s", n)
 	}
 	for _, e := range matchErrs {
 		logger.Warn("auto: %v.", e)

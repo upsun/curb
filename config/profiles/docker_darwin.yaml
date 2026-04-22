@@ -1,0 +1,10 @@
+# macOS overlay for the docker profile.
+# Docker Desktop installs its CLIs under /Applications and its runtime
+# socket under ~/.docker/run, rather than /usr/local/bin and /var/run/.
+exec:
+  - /Applications/Docker.app/Contents/Resources/bin/docker
+  - /Applications/Docker.app/Contents/Resources/bin/docker-compose
+read:
+  - ~/.docker/run
+write:
+  - ~/.docker/run

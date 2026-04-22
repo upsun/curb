@@ -1,0 +1,7 @@
+# macOS overlay for the github profile.
+# gh stores auth and config under ~/Library/Application Support/gh on macOS
+# (Go's os.UserConfigDir() returns that path when XDG_CONFIG_HOME is unset).
+read:
+  - ~/Library/Application Support/gh
+write:
+  - ~/Library/Application Support/gh

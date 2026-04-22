@@ -19,6 +19,11 @@ exec:
   - sh
   - go
   - ~/.cache/go-build
+  # GOTOOLCHAIN=auto downloads alternate toolchains into
+  # ~/go/pkg/mod/golang.org/toolchain@<version>-<platform>/ and re-execs
+  # the nested go<version> binary. The parent dir also holds module caches
+  # for golang.org/* modules; exec there is scoped to Go's module tree.
+  - ~/go/pkg/mod/golang.org
 env:
   - HOME
   - CGO_ENABLED

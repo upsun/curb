@@ -1,0 +1,9 @@
+# GNU make and common build-tool shell-outs.
+commands: [make, gmake]
+exec:
+  - sh
+  - make
+  - gmake
+env:
+  - MAKEFLAGS
+  - MAKELEVEL

@@ -1,0 +1,17 @@
+# macOS overlay for the python profile.
+# /usr/bin/python3 is an Apple xcrun shim. The shim re-execs a posix_spawn
+# target inside Python3.framework — the shim binary under usr/bin alone is
+# not sufficient, the framework tree needs read+exec too. pip on macOS
+# uses ~/Library/Caches/pip and installs user packages under ~/Library/Python.
+exec:
+  - /Library/Developer/CommandLineTools/usr/bin/python3
+  - /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework
+  - /Applications/Xcode.app/Contents/Developer/usr/bin/python3
+  - /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework
+read:
+  - /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework
+  - /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework
+  - ~/Library/Caches/pip
+  - ~/Library/Python
+write:
+  - ~/Library/Caches/pip
