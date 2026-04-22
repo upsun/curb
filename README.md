@@ -78,22 +78,7 @@ curb -p node,github --write . -- npm install
 
 ### Built-in profiles
 
-| Profile | What it allows |
-|---------|---------------|
-| `node` | npm/yarn/pnpm registries, `node_modules` write, Node executables |
-| `python` | PyPI, pip cache, Python executables |
-| `php` | Packagist, Composer cache, `vendor` write |
-| `go` | Go module proxy, `~/go` read, `go` executable |
-| `rust` | crates.io, Cargo/Rustup home, `cargo`/`rustc` executables |
-| `git` | GitHub/GitLab/Bitbucket, SSH keys, Git config |
-| `github` | GitHub API and raw content domains, `gh` CLI |
-| `docker` | Docker Hub registry, Docker socket |
-| `claude` | Anthropic API, Claude config, system executables |
-| `gemini` | Google AI APIs, Gemini CLI config, system executables |
-| `codex` | OpenAI API, Codex config, system executables |
-| `opencode` | Common AI provider APIs, OpenCode config, system executables |
-| `vibe` | Mistral AI API, Vibe config, system executables |
-| `copilot` | GitHub Copilot API, Copilot config, system executables |
+Profiles cover common toolchains (`node`, `python`, `go`, `rust`, `ruby`, `php`, `make`, `cc`), version control (`git`, `github`, `ssh`), container tooling (`docker`), AI CLIs (`claude`, `codex`, `gemini`, `opencode`, `vibe`, `copilot`), interactive use (`shell`), and macOS-specific tooling (`xcode`). See [docs/configuration.md](docs/configuration.md#built-in-profiles) for the full list. Some profiles transparently pick up OS-specific paths on macOS — see [platform-specific overlays](docs/configuration.md#platform-specific-overlays).
 
 List and inspect profiles:
 

@@ -70,6 +70,7 @@ Activate via `-p`/`--profiles`, `CURB_PROFILES`, or the `profiles:` field in a c
 | `ruby` | | RubyGems, gem/bundle cache, `vendor` write, Ruby executables |
 | `rust` | | crates.io, Cargo/Rustup home, `cargo`/`rustc` executables |
 | `docker` | | Docker Hub registry, Docker socket |
+| `make` | | `make` executable and common Makefile shell tools |
 | `claude` | | Anthropic API, Claude config, system/Git executables |
 | `gemini` | | Google AI APIs, Gemini CLI config, system/Git executables |
 | `codex` | | OpenAI API, Codex config, system/Git executables |
@@ -77,6 +78,7 @@ Activate via `-p`/`--profiles`, `CURB_PROFILES`, or the `profiles:` field in a c
 | `vibe` | | Mistral AI API, Vibe config, system/Git executables |
 | `copilot` | | GitHub Copilot API, Copilot config, system/Git executables |
 | `shell` | | System binary directories (`/usr/bin`, `/bin`, etc.) for interactive sessions |
+| `xcode` | | macOS Xcode/Command Line Tools paths (darwin only) |
 
 Built-in profiles that reference `~` paths pass through `HOME` so those paths resolve to the real home directory (see [HOME and tilde expansion](#home-and-tilde-expansion) below).
 
@@ -101,6 +103,14 @@ Using `-p custom-ci` activates `ssh` (via `git`), `git`, `node`, and the custom 
 
 Scalar fields (like `allow-unix-sockets: true` in the `ssh` profile) are also applied from included profiles. If two profiles set conflicting values for the same scalar, curb reports an error.
 
+### Platform-specific overlays
+
+Profiles can have a platform overlay file named `<name>_<GOOS>.yaml` (currently `_linux` or `_darwin`). It is auto-merged when `<name>` is loaded on the matching OS, and invisible otherwise. Overlays are a filename-only convention — they are never referenced by name; users (and other profiles' `profiles:` fields) always refer to the base name.
+
+For example, `-p python` on macOS merges `python.yaml` plus the built-in `python_darwin.yaml` overlay (which adds Homebrew-installed Python paths); on Linux no overlay exists and only the base loads. Overlays are one level deep: `foo_darwin` does not itself get an `foo_darwin_darwin` overlay.
+
+A profile that only makes sense on one OS can be shipped as the overlay file alone, with no base. The built-in `xcode` profile is one such case: `xcode_darwin.yaml` is the only file, so `-p xcode` on macOS loads it as the profile; on Linux `-p xcode` fails with "profile 'xcode' is only available on darwin".
+
 ### Custom profiles
 
 Profiles are loaded from (in search order):
@@ -109,7 +119,7 @@ Profiles are loaded from (in search order):
 2. `/etc/curb/profiles/`
 3. Built-in (embedded in the binary)
 
-Profile names must match `[a-z0-9][a-z0-9-]*`. Create a YAML file with the same fields as a config file.
+Profile names must match `[a-z0-9][a-z0-9-]*`. Underscores are reserved for the overlay filename convention above and are not allowed in referenceable names.
 
 ```
 curb profile list          # list available profiles
