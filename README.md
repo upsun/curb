@@ -22,7 +22,9 @@ curb runs commands inside a locked-down sandbox with restrictive filesystem, net
 
 ## Installation
 
-Clone the repository, then install with `go install`
+```
+go install github.com/upsun/curb@latest
+```
 
 ## Quick start
 
