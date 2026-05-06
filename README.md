@@ -4,6 +4,8 @@ Sandbox any process. No root required.
 
 curb runs commands inside a locked-down sandbox with restrictive filesystem, network, environment, and executable defaults — using only unprivileged OS features (Linux namespaces/Landlock, macOS Seatbelt). Give a program access to exactly the domains and paths it needs, and nothing else.
 
+> **Status: experimental.** curb is in early development. It is useful as a defense-in-depth layer for tools you already trust (build systems, package managers, AI coding agents), but not yet as a sole security boundary for untrusted code or multi-tenant isolation. For those use cases, a container or VM runtime is more appropriate, although the approaches can be combined. Interfaces, flags, and config formats can still change without notice. See [SECURITY.md](SECURITY.md) for the threat model and how to report vulnerabilities.
+
 ## Why curb?
 
 - **Single binary, no privileges** — no root, no Docker, no daemon.

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - name: go fix
+        run: |
+          if [ -n "$(go fix -diff ./...)" ]; then
+            go fix -diff ./...
+            echo "go fix: run 'go fix ./...' to apply fixes" >&2
+            exit 1
+          fi
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.10
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - run: make govulncheck
+
+  test-linux:
+    runs-on: ubuntu-latest
+    # Run in a Debian-based Go container. The host (ubuntu-24.04) ships with
+    # AppArmor restrictions on unprivileged user namespaces that break the
+    # namespace-based sandbox tests; Debian does not.
+    container:
+      image: golang:1.26
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v6
+      # The checkout action writes files as the host runner user; inside the
+      # container they look foreign-owned, so git refuses with "dubious
+      # ownership" and Go's -buildvcs stamping fails (exit 128). Mark the
+      # workspace as safe.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: apt-get update -qq && apt-get install -y -qq dnsutils
+      - run: make test-coverage
+
+  test-macos:
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - run: make test
