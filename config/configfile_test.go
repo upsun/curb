@@ -203,7 +203,7 @@ inject-header:
 	_, err := LoadConfigFile(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "inject-header")
-	assert.Contains(t, err.Error(), "not valid")
+	assert.Contains(t, err.Error(), "not a valid environment variable name")
 }
 
 func TestFindConfigFile_InCWD(t *testing.T) {

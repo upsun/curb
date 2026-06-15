@@ -71,7 +71,26 @@ func ValidateInjectHost(host string) (string, error) {
 	if strings.Contains(host, "*") {
 		return "", fmt.Errorf("host %q must be an exact hostname (no wildcards)", host)
 	}
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."), nil
+	return NormalizeHost(host), nil
+}
+
+// ParseInjectHeader parses one credential-injection binding "ENV_VAR=HOST",
+// returning the env var name and the normalized host. The binding is var-first
+// because a credential belongs to its variable and may be valid for more than
+// one host. Callers wrap the error with their own flag/field prefix.
+func ParseInjectHeader(entry string) (envVar, host string, err error) {
+	envVar, host, ok := strings.Cut(entry, "=")
+	if !ok || envVar == "" || host == "" {
+		return "", "", fmt.Errorf("must be ENV_VAR=HOST, got %q", entry)
+	}
+	if !ValidEnvName(envVar) {
+		return "", "", fmt.Errorf("env var name %q is not a valid environment variable name", envVar)
+	}
+	host, err = ValidateInjectHost(host)
+	if err != nil {
+		return "", "", err
+	}
+	return envVar, host, nil
 }
 
 // ValidEnvName reports whether name is a valid environment variable name (a C

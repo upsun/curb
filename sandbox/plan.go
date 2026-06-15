@@ -587,20 +587,11 @@ type injectSpec struct {
 	host   string
 }
 
-// parseInjectHeader parses --inject-header "ENV_VAR=HOST". The binding is
-// var-first because a credential belongs to its variable and may be valid for
-// more than one host (a comma-separated host list is a natural future extension).
+// parseInjectHeader parses --inject-header "ENV_VAR=HOST" entries.
 func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	var specs []injectSpec
 	for _, e := range entries {
-		envVar, host, ok := strings.Cut(e, "=")
-		if !ok || envVar == "" || host == "" {
-			return nil, fmt.Errorf("--inject-header must be ENV_VAR=HOST, got %q", e)
-		}
-		if !policy.ValidEnvName(envVar) {
-			return nil, fmt.Errorf("--inject-header env var name %q is not a valid environment variable name", envVar)
-		}
-		host, err := policy.ValidateInjectHost(host)
+		envVar, host, err := policy.ParseInjectHeader(e)
 		if err != nil {
 			return nil, fmt.Errorf("--inject-header %w", err)
 		}

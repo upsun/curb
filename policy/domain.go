@@ -21,7 +21,7 @@ func NewDomainMatcher(domains []string) *DomainMatcher {
 		exactDomains: make(map[string]bool),
 	}
 	for _, d := range domains {
-		d = normalizeDomain(d)
+		d = NormalizeHost(d)
 		if d == "*" {
 			m.matchAll = true
 			return m
@@ -41,7 +41,7 @@ func (m *DomainMatcher) Match(domain string) bool {
 	if m.matchAll {
 		return true
 	}
-	domain = normalizeDomain(domain)
+	domain = NormalizeHost(domain)
 	if domain == "" {
 		return false
 	}
@@ -62,6 +62,11 @@ func (m *DomainMatcher) Match(domain string) bool {
 	return false
 }
 
-func normalizeDomain(s string) string {
+// NormalizeHost lowercases a host and trims surrounding whitespace and a
+// trailing root-label dot, so api.example.com, API.EXAMPLE.COM, and
+// api.example.com. all compare equal. Shared by the domain matcher, the
+// injection-host validator, and the proxy's binding lookup so they agree on
+// what counts as the same host.
+func NormalizeHost(s string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
 }

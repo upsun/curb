@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bufio"
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/upsun/curb/policy"
 )
 
 // CA is a per-run certificate authority used to mint leaf certificates for the
@@ -149,20 +150,13 @@ func NewInjector(ca *CA) *Injector {
 // Bind adds a header injection for a destination host. Multiple headers may be
 // bound to the same host.
 func (in *Injector) Bind(host string, inj Injection) {
-	host = normalizeHost(host)
+	host = policy.NormalizeHost(host)
 	in.byHost[host] = append(in.byHost[host], inj)
 }
 
 func (in *Injector) binding(host string) ([]Injection, bool) {
-	injs, ok := in.byHost[normalizeHost(host)]
+	injs, ok := in.byHost[policy.NormalizeHost(host)]
 	return injs, ok
-}
-
-// normalizeHost lowercases and trims a trailing dot so binding keys match
-// CONNECT targets regardless of case or root-label dot (api.example.com,
-// API.EXAMPLE.COM, and api.example.com. are the same host).
-func normalizeHost(host string) string {
-	return strings.TrimSuffix(strings.ToLower(host), ".")
 }
 
 // injectCONNECT terminates the client's TLS with a per-run leaf for host,
@@ -235,7 +229,7 @@ func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injec
 		req.Host = authority
 		req.RequestURI = ""
 
-		resp, err := rt.RoundTrip(req.WithContext(context.Background()))
+		resp, err := rt.RoundTrip(req)
 		if err != nil {
 			writeGatewayError(client)
 			return

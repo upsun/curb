@@ -111,14 +111,7 @@ func (cf *ConfigFile) validate() error {
 		}
 	}
 	for i, e := range cf.InjectHeader {
-		envVar, host, ok := strings.Cut(e, "=")
-		if !ok || envVar == "" || host == "" {
-			return fmt.Errorf("inject-header[%d] must be ENV_VAR=HOST, got %q", i, e)
-		}
-		if !policy.ValidEnvName(envVar) {
-			return fmt.Errorf("inject-header[%d] env var name %q is not valid", i, envVar)
-		}
-		if _, err := policy.ValidateInjectHost(host); err != nil {
+		if _, _, err := policy.ParseInjectHeader(e); err != nil {
 			return fmt.Errorf("inject-header[%d] %w", i, err)
 		}
 	}
