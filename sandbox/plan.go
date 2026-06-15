@@ -638,8 +638,19 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	if len(bindings) == 0 {
 		return nil // nothing to inject (all source vars were absent)
 	}
+	matcher := policy.NewDomainMatcher(plan.AllowedDomains)
+	hosts := make([]string, 0, len(bindings))
+	for host := range bindings {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	for _, host := range hosts {
+		if !matcher.Match(host) {
+			return fmt.Errorf("credential injection host %q is not allowed; add --domains %s", host, host)
+		}
+	}
 	if !plan.ProxyEnabled {
-		return fmt.Errorf("credential injection requires the network proxy (needs user and network namespaces)")
+		return fmt.Errorf("credential injection requires the network proxy; allow the host with --domains and do not use --unrestricted-net")
 	}
 	ca, err := proxy.NewCA()
 	if err != nil {
@@ -1374,7 +1385,7 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 	plan := &SandboxPlan{Caps: caps}
 
 	if len(cfg.InjectHeader) > 0 {
-		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux")
+		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS")
 	}
 
 	if len(cfg.AllowedDomains) > 0 {

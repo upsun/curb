@@ -113,12 +113,13 @@ only for approved hosts. The placeholder is 32 random bytes so it is long
 and unique enough not to collide with legitimate request content during
 that scan.
 
-**curb** has opt-in credential injection via `--inject-header ENV_VAR=HOST`
-(Linux only). The two tools' mechanisms have converged: the sandbox sees only a
+**curb** has opt-in credential injection via `--inject-header ENV_VAR=HOST`.
+The two tools' mechanisms have converged: the sandbox sees only a
 placeholder in `ENV_VAR`, never the real value; the proxy terminates TLS for
 `HOST` (presenting a per-run CA the sandbox trusts) and substitutes the
 placeholder with the real value wherever the client put it among the request
-headers. Like zerobox, it is header-agnostic — `Authorization: Bearer`,
+headers. `HOST` must also be explicitly allowed by the network policy. Like
+zerobox, it is header-agnostic — `Authorization: Bearer`,
 `x-api-key`, or any other header all work, with no auth-scheme knowledge
 configured. Without the flag, curb performs no injection and no TLS termination;
 secrets otherwise reach the process only via `--env`.
@@ -250,7 +251,7 @@ Linux. curb has no external runtime dependencies.
 | Default network | Blocked | Blocked |
 | FS enforcement | bwrap (mount NS) + Landlock fallback | pivot_root (mount NS) + Landlock layered |
 | Network filtering | HTTP proxy (MITM when secrets active) | HTTP + SOCKS5 proxy (CONNECT passthrough; per-host TLS termination only with `--inject-header`) |
-| Secret injection | Yes (MITM all HTTPS, placeholder substitution) | Yes (`--inject-header`, placeholder substitution, TLS terminated per host, Linux) |
+| Secret injection | Yes (MITM all HTTPS, placeholder substitution) | Yes (`--inject-header`, placeholder substitution, TLS terminated per explicitly allowed host) |
 | Snapshot/restore | Yes (BLAKE3 + Merkle tree) | No (stateless) |
 | IP/CIDR filtering | No | Yes (`--ips`) |
 | SOCKS5 (non-HTTP TCP) | No | Yes |

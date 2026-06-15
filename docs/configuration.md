@@ -187,8 +187,6 @@ And passes through: `PATH`, `TERM`, `COLORTERM`, `NO_COLOR`, `LANG`, `LC_ALL`, `
 
 ## Credential injection
 
-> Linux only.
-
 `--inject-header ENV_VAR=HOST` keeps a credential out of the sandbox entirely.
 curb generates a stable placeholder for `ENV_VAR`, sets the sandbox's copy of
 `ENV_VAR` to that placeholder (so the process never sees the real value), and
@@ -218,10 +216,15 @@ Injection is opt-in per credential: if `ENV_VAR` is unset or empty on the host,
 the binding is skipped silently (no error). This is what lets a profile carry an
 injection that simply does nothing when the credential is absent.
 
+An active injection binding does not grant network access by itself. `HOST` must
+also match the explicit domain allowlist from `--domains`, `CURB_DOMAINS`,
+config, or a profile. If the host credential is present but the host is not
+allowed, curb fails during planning instead of broadening the sandbox policy.
+
 ```
 # Real value read from the host's $GH_TOKEN; the sandbox sees only a placeholder,
 # and gh sends it in whatever header it uses:
-GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
+GH_TOKEN=ghp_xxx curb --domains api.github.com --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 ```
 
 The placeholder is constant per variable (e.g. `curb-inject-GH_TOKEN-placeholder`)
@@ -235,16 +238,15 @@ The built-in **`claude`** profile does exactly this for Claude Code: it injects
 host* the sandbox sees only the placeholder and the proxy substitutes the real
 key in whichever header Claude Code sends (`x-api-key` or, for OAuth,
 `Authorization`). With no host key set it is a no-op and OAuth/subscription auth
-works unchanged. Linux only; on first run Claude Code may prompt once to approve
-the placeholder as a custom key. A custom `ANTHROPIC_BASE_URL` is not covered
+works unchanged. On first run Claude Code may prompt once to approve the
+placeholder as a custom key. A custom `ANTHROPIC_BASE_URL` is not covered
 (injection targets `api.anthropic.com`).
 
-The flag is repeatable (bindings accumulate) and implies network filtering: the
-host is added to the allowlist and routed through the proxy. curb generates a
-combined CA bundle (system roots plus the per-run CA) and points the standard CA
-environment variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`,
-`REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) at it, so common tools trust the
-terminated connection while still reaching other hosts normally.
+The flag is repeatable (bindings accumulate). For active bindings, curb
+generates a combined CA bundle (system roots plus the per-run CA) and points the
+standard CA environment variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+`GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) at it, so common
+tools trust the terminated connection while still reaching other hosts normally.
 
 After terminating TLS, curb parses the decrypted stream as HTTP/1.1 and does not
 negotiate HTTP/2 (no `h2` ALPN). An HTTP/2-only client or protocol — some gRPC

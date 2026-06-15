@@ -158,7 +158,7 @@ Inject a credential the sandboxed process never sees — the token stays in
 curb's proxy, which adds it to requests bound for the named host:
 
 ```
-GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
+GH_TOKEN=ghp_xxx curb --domains api.github.com --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 ```
 
 ## CLI reference
@@ -169,7 +169,7 @@ GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 |------|---------|-------------|
 | `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all. |
 | `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
-| `--inject-header` | `CURB_INJECT_HEADER` | Keep a credential out of the sandbox: `ENV_VAR=HOST` sets the sandbox's copy of `ENV_VAR` to a placeholder, and the proxy replaces it with the real host value in requests to `HOST` (terminating TLS), wherever the client sent it (any header — `Authorization: Bearer`, `x-api-key`, etc.), so no auth-scheme knowledge is needed. Skipped if `ENV_VAR` is unset. Repeatable; also settable via the `inject-header:` config-file/profile key. Linux only. |
+| `--inject-header` | `CURB_INJECT_HEADER` | Keep a credential out of the sandbox: `ENV_VAR=HOST` sets the sandbox's copy of `ENV_VAR` to a placeholder, and the proxy replaces it with the real host value in requests to `HOST` (terminating TLS), wherever the client sent it (any header — `Authorization: Bearer`, `x-api-key`, etc.), so no auth-scheme knowledge is needed. `HOST` must also be allowed by `--domains` or a profile. Skipped if `ENV_VAR` is unset. Repeatable; also settable via the `inject-header:` config-file/profile key. |
 | `--host-loopback` | `CURB_HOST_LOOPBACK` | Forward localhost/127.0.0.1 traffic to the host loopback. Cannot combine with `--unrestricted-net`. |
 | `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains`, `--ips`, or `--host-loopback`. |
 

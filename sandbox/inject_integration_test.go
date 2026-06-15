@@ -156,6 +156,7 @@ func TestCurb_Inject_EndToEnd(t *testing.T) {
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--host-loopback",
+		"--domains", "localhost",
 		"--inject-header", "DEMO_TOKEN=localhost",
 		"--", "sh", "-c", script)
 	cmd.Env = append(envWithout("DEMO_TOKEN", "SSL_CERT_FILE"),
@@ -193,6 +194,7 @@ func TestCurb_Inject_HeaderAgnostic(t *testing.T) {
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--host-loopback",
+		"--domains", "localhost",
 		"--inject-header", "DEMO_KEY=localhost",
 		"--", "sh", "-c", script)
 	cmd.Env = append(envWithout("DEMO_KEY", "SSL_CERT_FILE"),

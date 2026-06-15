@@ -230,7 +230,8 @@ func TestPrintDryRun_Injection(t *testing.T) {
 	}
 	t.Setenv("CURB_DRYRUN_TOKEN", "sk-secret-must-not-leak")
 	cfg := &config.Config{
-		InjectHeader: []string{"CURB_DRYRUN_TOKEN=api.example.com"},
+		AllowedDomains: []string{"api.example.com"},
+		InjectHeader:   []string{"CURB_DRYRUN_TOKEN=api.example.com"},
 	}
 
 	plan, err := BuildPlan(cfg, caps, nil)
