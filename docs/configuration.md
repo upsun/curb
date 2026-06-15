@@ -194,7 +194,9 @@ curb's proxy terminates TLS for `HOST`, presenting a per-run CA that the sandbox
 trusts, and adds `Authorization: Bearer <token>` to requests on their way to the
 real upstream. The sandboxed process holds no token — only the proxy does — and
 the credential is bound to `HOST`, so it is never attached to any other host the
-program connects to.
+program connects to. `HOST` must be an exact hostname — wildcards are rejected,
+since they cannot identify the single destination a credential belongs to. The
+host is matched case-insensitively and a trailing dot is ignored.
 
 `SOURCE` is one of:
 

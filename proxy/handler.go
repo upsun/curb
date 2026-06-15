@@ -111,20 +111,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = upstream.Close() }()
 
-	// Strip hop-by-hop headers before forwarding (RFC 7230 §6.1).
-	// Parse Connection header for additional hop-by-hop headers to remove.
-	for _, connHdr := range r.Header.Values("Connection") {
-		for part := range strings.SplitSeq(connHdr, ",") {
-			r.Header.Del(strings.TrimSpace(part))
-		}
-	}
-	r.Header.Del("Connection")
-	r.Header.Del("Keep-Alive")
-	r.Header.Del("Proxy-Connection")
-	r.Header.Del("Proxy-Authorization")
-	r.Header.Del("TE")
-	r.Header.Del("Trailer")
-	r.Header.Del("Upgrade")
+	stripHopByHop(r.Header)
 	r.Header.Set("Connection", "close")
 
 	// Write the request to the upstream.
@@ -152,6 +139,24 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	h.logEvent("proxy_http", r.Host, "allowed", "")
 
 	relay(upstream, clientConn)
+}
+
+// stripHopByHop removes hop-by-hop headers (RFC 7230 §6.1) before forwarding a
+// request upstream, including any named in the Connection header. This keeps
+// proxy-specific headers such as Proxy-Authorization from leaking to the origin.
+func stripHopByHop(h http.Header) {
+	for _, connHdr := range h.Values("Connection") {
+		for part := range strings.SplitSeq(connHdr, ",") {
+			h.Del(strings.TrimSpace(part))
+		}
+	}
+	h.Del("Connection")
+	h.Del("Keep-Alive")
+	h.Del("Proxy-Connection")
+	h.Del("Proxy-Authorization")
+	h.Del("TE")
+	h.Del("Trailer")
+	h.Del("Upgrade")
 }
 
 // splitHostPort splits host:port, using defaultPort if no port is present.

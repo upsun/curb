@@ -133,6 +133,22 @@ func get(t *testing.T, client *http.Client, rawURL string) string {
 	return string(body)
 }
 
+// TestInjector_BindingNormalizesHost confirms bindings match CONNECT targets
+// regardless of case or a trailing dot.
+func TestInjector_BindingNormalizesHost(t *testing.T) {
+	in := &Injector{byHost: map[string][]Injection{}}
+	in.Bind("API.GitHub.COM.", Injection{Header: "Authorization", Value: "Bearer t"})
+
+	for _, host := range []string{"api.github.com", "API.GITHUB.COM", "api.github.com.", "Api.GitHub.Com."} {
+		injs, ok := in.binding(host)
+		require.True(t, ok, "expected binding to match %q", host)
+		assert.Equal(t, "Bearer t", injs[0].Value)
+	}
+
+	_, ok := in.binding("other.com")
+	assert.False(t, ok)
+}
+
 // TestInjector_InjectsBoundCredential verifies the placeholder request leaves
 // the sandbox with the real credential attached.
 func TestInjector_InjectsBoundCredential(t *testing.T) {

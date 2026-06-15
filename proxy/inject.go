@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -98,7 +99,11 @@ func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	leaf := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: ca.cert}
+	leafCert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	leaf := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leafCert}
 	ca.leaves[host] = leaf
 	return leaf, nil
 }
@@ -136,12 +141,20 @@ func NewInjector(ca *CA) *Injector {
 // Bind adds a header injection for a destination host. Multiple headers may be
 // bound to the same host.
 func (in *Injector) Bind(host string, inj Injection) {
+	host = normalizeHost(host)
 	in.byHost[host] = append(in.byHost[host], inj)
 }
 
 func (in *Injector) binding(host string) ([]Injection, bool) {
-	injs, ok := in.byHost[host]
+	injs, ok := in.byHost[normalizeHost(host)]
 	return injs, ok
+}
+
+// normalizeHost lowercases and trims a trailing dot so binding keys match
+// CONNECT targets regardless of case or root-label dot (api.example.com,
+// API.EXAMPLE.COM, and api.example.com. are the same host).
+func normalizeHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(host), ".")
 }
 
 // injectCONNECT terminates the client's TLS with a per-run leaf for host,
@@ -193,12 +206,14 @@ func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injec
 		if err != nil {
 			return
 		}
+		// Strip hop-by-hop headers first so the client cannot drop an injected
+		// header by naming it in Connection.
+		stripHopByHop(req.Header)
 		// Overwrite any client-supplied values: the sandbox holds only a
 		// placeholder and must not pre-empt the real credential.
 		for _, inj := range injs {
 			req.Header.Set(inj.Header, inj.Value)
 		}
-		req.Header.Del("Proxy-Connection")
 		req.URL.Scheme = "https"
 		req.URL.Host = net.JoinHostPort(host, port)
 		req.RequestURI = ""

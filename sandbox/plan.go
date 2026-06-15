@@ -598,12 +598,28 @@ func parseInjectBearer(entries []string) ([]injectSpec, error) {
 		if !ok || host == "" || source == "" {
 			return nil, fmt.Errorf("--inject-bearer must be HOST=SOURCE, got %q", e)
 		}
-		if err := policy.ValidateDomains([]string{host}); err != nil {
-			return nil, fmt.Errorf("--inject-bearer host %q: %w", host, err)
+		host, err := normalizeInjectHost(host)
+		if err != nil {
+			return nil, fmt.Errorf("--inject-bearer host: %w", err)
 		}
 		specs = append(specs, injectSpec{host: host, header: "Authorization", prefix: "Bearer ", source: source})
 	}
 	return specs, nil
+}
+
+// normalizeInjectHost validates a credential-injection host and returns it
+// normalized (lowercase, no trailing dot). Unlike --domains, an injection host
+// must be an exact hostname: a wildcard would broaden the allowlist (in the
+// case of "*", to every domain) while never matching a binding at runtime, so
+// the credential would never be injected.
+func normalizeInjectHost(host string) (string, error) {
+	if err := policy.ValidateDomains([]string{host}); err != nil {
+		return "", err
+	}
+	if strings.Contains(host, "*") {
+		return "", fmt.Errorf("%q must be an exact hostname (no wildcards)", host)
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."), nil
 }
 
 // parseInjectHeader parses --inject-header "HOST=HEADER=SOURCE" into a binding
@@ -616,8 +632,9 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 			return nil, fmt.Errorf("--inject-header must be HOST=HEADER=SOURCE, got %q", e)
 		}
 		host, header, source := parts[0], parts[1], parts[2]
-		if err := policy.ValidateDomains([]string{host}); err != nil {
-			return nil, fmt.Errorf("--inject-header host %q: %w", host, err)
+		host, err := normalizeInjectHost(host)
+		if err != nil {
+			return nil, fmt.Errorf("--inject-header host: %w", err)
 		}
 		if strings.ContainsAny(header, " \t:") {
 			return nil, fmt.Errorf("--inject-header header name %q is not a valid token", header)

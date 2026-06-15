@@ -29,6 +29,18 @@ func TestParseInjectBearer(t *testing.T) {
 		_, err := parseInjectBearer([]string{bad})
 		assert.Error(t, err, "expected error for %q", bad)
 	}
+
+	// Wildcards must be rejected: "*" would broaden the allowlist to every
+	// domain while never matching a binding.
+	for _, bad := range []string{"*=@T", "*.example.com=@T"} {
+		_, err := parseInjectBearer([]string{bad})
+		assert.Error(t, err, "expected wildcard %q to be rejected", bad)
+	}
+
+	// Hosts are normalized to lowercase with no trailing dot.
+	specs, err = parseInjectBearer([]string{"API.GitHub.COM.=@T"})
+	require.NoError(t, err)
+	assert.Equal(t, "api.github.com", specs[0].host)
 }
 
 func TestParseInjectBearer_FillsAuthorization(t *testing.T) {
@@ -53,10 +65,15 @@ func TestParseInjectHeader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ab=cd", specs[0].source)
 
-	for _, bad := range []string{"", "h.com", "h.com=x-api-key", "=x=y", "h.com==y", "h.com=bad header=y"} {
+	for _, bad := range []string{"", "h.com", "h.com=x-api-key", "=x=y", "h.com==y", "h.com=bad header=y", "*=x=@T", "*.h.com=x=@T"} {
 		_, err := parseInjectHeader([]string{bad})
 		assert.Error(t, err, "expected error for %q", bad)
 	}
+
+	// Hosts are normalized to lowercase with no trailing dot.
+	specs, err = parseInjectHeader([]string{"API.Anthropic.COM.=x-api-key=@T"})
+	require.NoError(t, err)
+	assert.Equal(t, "api.anthropic.com", specs[0].host)
 }
 
 func TestResolveSecretSource(t *testing.T) {
