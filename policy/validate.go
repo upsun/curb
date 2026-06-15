@@ -74,6 +74,27 @@ func ValidateInjectHost(host string) (string, error) {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."), nil
 }
 
+// ValidHeaderName reports whether name is a valid HTTP header field name (an
+// RFC 7230 token). Rejecting invalid names early gives a clear error instead of
+// a runtime 502 when net/http rejects the upstream request.
+func ValidHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	// tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
+	//         "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA  (RFC 7230 §3.2.6).
+	const special = "!#$%&'*+-.^_`|~"
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune(special, r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // stripScheme removes http:// or https:// and any trailing path from a URL-like string.
 func stripScheme(s string) string {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "https://"), "http://")

@@ -38,7 +38,7 @@ Unknown keys are rejected. All fields are optional.
 
 ### List fields
 
-`domains`, `ips`, `inject-bearer`, `read`, `write`, `exec`, `env` — merged additively. Config file values are prepended to CLI values, so CLI exclusions (`!`) can override config file entries.
+`domains`, `ips`, `inject-bearer`, `inject-header`, `read`, `write`, `exec`, `env` — merged additively. Config file values are prepended to CLI values, so CLI exclusions (`!`) can override config file entries.
 
 ### Scalar fields
 
@@ -212,9 +212,11 @@ GH_TOKEN=ghp_xxx curb --inject-bearer 'api.github.com=@GH_TOKEN' -- gh api user
 ```
 
 For schemes that do not use a bearer token, `--inject-header HOST=HEADER=SOURCE`
-injects an arbitrary request header. `--inject-bearer HOST=SOURCE` is exactly
-sugar for `--inject-header HOST=Authorization=Bearer …`. For example, the
-Anthropic API authenticates with the `x-api-key` header, not `Authorization`:
+injects an arbitrary request header. It is the general form: `--inject-bearer`
+is the same mechanism with the header fixed to `Authorization` and the value
+prefixed with `Bearer ` (`--inject-header` sets the header value to the resolved
+token verbatim, with no prefix). For example, the Anthropic API authenticates
+with the `x-api-key` header, not `Authorization`:
 
 ```
 # api.anthropic.com gets x-api-key from $ANTHROPIC_API_KEY; the sandbox never has it:

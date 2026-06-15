@@ -218,6 +218,20 @@ inject-header:
 	assert.Contains(t, err.Error(), "inject-header")
 }
 
+func TestLoadConfigFile_InjectHeaderInvalidName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-header:
+  - "api.example.com=bad header=@KEY"
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inject-header")
+	assert.Contains(t, err.Error(), "valid token")
+}
+
 func TestFindConfigFile_InCWD(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".curb.yaml")

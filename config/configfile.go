@@ -128,6 +128,9 @@ func (cf *ConfigFile) validate() error {
 		if _, err := policy.ValidateInjectHost(parts[0]); err != nil {
 			return fmt.Errorf("inject-header[%d] %w", i, err)
 		}
+		if !policy.ValidHeaderName(parts[1]) {
+			return fmt.Errorf("inject-header[%d] header name %q is not a valid token (RFC 7230)", i, parts[1])
+		}
 	}
 	for _, pair := range [...]struct {
 		field string

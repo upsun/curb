@@ -206,6 +206,12 @@ func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs [
 // each to the upstream with the bound credentials set, relaying the response.
 func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injection) {
 	rt := h.Injector.Upstream
+	// authority is the upstream the request is bound to. Drop the default
+	// https port so the Host header matches what a direct client would send.
+	authority := host
+	if port != "443" {
+		authority = net.JoinHostPort(host, port)
+	}
 	br := bufio.NewReader(client)
 	for {
 		req, err := http.ReadRequest(br)
@@ -221,7 +227,10 @@ func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injec
 			req.Header.Set(inj.Header, inj.Value)
 		}
 		req.URL.Scheme = "https"
-		req.URL.Host = net.JoinHostPort(host, port)
+		req.URL.Host = authority
+		// Align the Host header with the upstream we dial; the client may have
+		// sent a placeholder or an incorrect port.
+		req.Host = authority
 		req.RequestURI = ""
 
 		resp, err := rt.RoundTrip(req.WithContext(context.Background()))

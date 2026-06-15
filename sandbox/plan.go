@@ -621,33 +621,12 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 		if err != nil {
 			return nil, fmt.Errorf("--inject-header %w", err)
 		}
-		if !validHeaderName(header) {
+		if !policy.ValidHeaderName(header) {
 			return nil, fmt.Errorf("--inject-header header name %q is not a valid token (RFC 7230)", header)
 		}
 		specs = append(specs, injectSpec{host: host, header: header, source: source})
 	}
 	return specs, nil
-}
-
-// validHeaderName reports whether name is a valid HTTP header field name (an
-// RFC 7230 token). Rejecting invalid names here gives an immediate, clear error
-// instead of a runtime 502 when net/http rejects the upstream request.
-func validHeaderName(name string) bool {
-	if name == "" {
-		return false
-	}
-	// tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
-	//         "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA  (RFC 7230 §3.2.6).
-	const special = "!#$%&'*+-.^_`|~"
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case strings.ContainsRune(special, r):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // resolveInject generates the per-run CA, resolves each bound token, and

@@ -21,6 +21,7 @@ import (
 type authRecorder struct {
 	srv     *httptest.Server
 	headers []http.Header
+	hosts   []string
 }
 
 func newAuthRecorder(t *testing.T) *authRecorder {
@@ -28,6 +29,7 @@ func newAuthRecorder(t *testing.T) *authRecorder {
 	rec := &authRecorder{}
 	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.headers = append(rec.headers, r.Header.Clone())
+		rec.hosts = append(rec.hosts, r.Host)
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(rec.srv.Close)
@@ -147,6 +149,24 @@ func TestInjector_BindingNormalizesHost(t *testing.T) {
 
 	_, ok := in.binding("other.com")
 	assert.False(t, ok)
+}
+
+// TestInjector_SetsHostHeader confirms the upstream request's Host header is
+// the bound host, not whatever the client put on the decrypted request.
+func TestInjector_SetsHostHeader(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	gh := newAuthRecorder(t)
+	proxyURL := injectTestProxy(t, ca,
+		map[string]string{"api.github.com": "ghs_realtoken"},
+		map[string]*authRecorder{"api.github.com": gh},
+	)
+	client := clientThroughProxy(proxyURL, ca)
+
+	get(t, client, "https://api.github.com/user")
+	require.Equal(t, 1, len(gh.hosts))
+	assert.Equal(t, "api.github.com", gh.hosts[0])
 }
 
 // TestInjector_InjectsBoundCredential verifies the placeholder request leaves
