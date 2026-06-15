@@ -189,22 +189,6 @@ func TestBuildPlan_NoLandlock_NoFSRestrict(t *testing.T) {
 	defer plan.Cleanup()
 }
 
-func TestBuildPlan_ConditionalEnvSet(t *testing.T) {
-	// "VAR=?value" applies only when VAR is set in the host environment.
-	t.Setenv("CURB_COND_PRESENT", "real")
-	cfg := &config.Config{EnvSet: []string{
-		"CURB_COND_PRESENT=?placeholder",
-		"CURB_COND_ABSENT=?placeholder",
-	}}
-	plan, err := BuildPlan(cfg, minCaps(), nil)
-	require.NoError(t, err)
-	defer plan.Cleanup()
-
-	assert.Equal(t, "placeholder", plan.EnvSet["CURB_COND_PRESENT"], "set when host var is present")
-	_, ok := plan.EnvSet["CURB_COND_ABSENT"]
-	assert.False(t, ok, "skipped when host var is absent")
-}
-
 func TestBuildPlan_AllProxyDefaultAndOverride(t *testing.T) {
 	// By default the SOCKS env is advertised via ALL_PROXY.
 	cfg := &config.Config{AllowedDomains: []string{"example.com"}}

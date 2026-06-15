@@ -621,8 +621,13 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 // replaces it with the real token before the request leaves the host — so the
 // string being predictable is harmless: an in-sandbox process already holds it
 // (curb set it in the env), and substitution only happens for the bound host.
+//
+// The env var is wrapped by a trailing "-placeholder": because a valid env var
+// name (ValidEnvName) cannot contain "-", no placeholder can be a prefix of
+// another (e.g. TOK vs TOK2), so the substring substitution in replaceInHeaders
+// cannot corrupt one credential's placeholder while replacing another's.
 func injectPlaceholder(envVar string) string {
-	return "curb-sealed-placeholder-" + envVar
+	return "curb-sealed-" + envVar + "-placeholder"
 }
 
 // resolveInject generates the per-run CA, resolves each bound token, and
@@ -1029,16 +1034,6 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	}
 	for _, pair := range cfg.EnvSet {
 		k, v, _ := strings.Cut(pair, "=")
-		// A "?" prefix on the value makes the assignment conditional: apply it
-		// only if k is set in the host environment. Used to placeholder a
-		// credential the sandbox would otherwise receive, without introducing
-		// one when it is absent (e.g. ANTHROPIC_API_KEY for OAuth users).
-		if rest, ok := strings.CutPrefix(v, "?"); ok {
-			if _, present := os.LookupEnv(k); !present {
-				continue
-			}
-			v = rest
-		}
 		// Expand $VAR references against the sandbox env built so far.
 		v = os.Expand(v, func(name string) string {
 			if val, ok := plan.EnvSet[name]; ok {

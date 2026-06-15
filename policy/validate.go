@@ -40,7 +40,7 @@ func validateDomain(d string) error {
 			return fmt.Errorf("--domains %q contains invalid character (whitespace or control)", d)
 		}
 		switch r {
-		case '/', '\\', ':', '@', '#', '?':
+		case '/', '\\', ':', '@', '#', '?', '=':
 			return fmt.Errorf("--domains %q contains invalid character %q", d, string(r))
 		}
 	}

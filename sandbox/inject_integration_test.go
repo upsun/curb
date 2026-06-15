@@ -167,7 +167,7 @@ func TestCurb_Inject_EndToEnd(t *testing.T) {
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "sandboxed curl failed: %s", outStr)
 	assert.Contains(t, outStr, "a=0", "request should succeed (sandbox trusts the per-run CA)")
-	assert.Contains(t, outStr, "seal=curb-sealed-placeholder-DEMO_TOKEN", "sandbox sees only the placeholder")
+	assert.Contains(t, outStr, "seal=curb-sealed-DEMO_TOKEN-placeholder", "sandbox sees only the placeholder")
 	assert.NotContains(t, outStr, "integration-secret", "real secret must not enter the sandbox")
 
 	seen := rec.got("Authorization")

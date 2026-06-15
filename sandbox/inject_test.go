@@ -3,6 +3,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ func TestParseInjectHeader(t *testing.T) {
 		"bad-var=h.com",       // invalid env var name (dash)
 		"T=*", "T=*.h.com",    // wildcard hosts rejected
 		"TOK=not a host",      // invalid host
+		"A=b.com=x",           // '=' in host (would bind a never-matching host)
 	} {
 		_, err := parseInjectHeader([]string{bad})
 		assert.Error(t, err, "expected error for %q", bad)
@@ -38,6 +40,12 @@ func TestInjectPlaceholder(t *testing.T) {
 	assert.Equal(t, injectPlaceholder("ANTHROPIC_API_KEY"), injectPlaceholder("ANTHROPIC_API_KEY"))
 	assert.NotEqual(t, injectPlaceholder("A"), injectPlaceholder("B"))
 	assert.Contains(t, injectPlaceholder("GH_TOKEN"), "GH_TOKEN")
+
+	// No placeholder may be a prefix of another, or replaceInHeaders' substring
+	// substitution would corrupt one credential while replacing another bound to
+	// the same host (e.g. TOK vs TOK2).
+	tok, tok2 := injectPlaceholder("TOK"), injectPlaceholder("TOK2")
+	assert.False(t, strings.HasPrefix(tok2, tok), "%q must not be a prefix of %q", tok, tok2)
 }
 
 func TestWriteCABundle(t *testing.T) {
