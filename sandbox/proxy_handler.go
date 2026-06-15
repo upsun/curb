@@ -21,9 +21,17 @@ func buildFilterBase(plan *SandboxPlan) proxy.FilterBase {
 
 // buildProxyHandler creates the HTTP proxy handler from the sandbox plan.
 func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
-	return &proxy.Handler{
-		FilterBase: buildFilterBase(plan),
+	h := &proxy.Handler{FilterBase: buildFilterBase(plan)}
+	if plan.CA != nil && len(plan.InjectBindings) > 0 {
+		inj := proxy.NewInjector(plan.CA)
+		for host, injections := range plan.InjectBindings {
+			for _, injection := range injections {
+				inj.Bind(host, injection)
+			}
+		}
+		h.Injector = inj
 	}
+	return h
 }
 
 // buildSOCKS5Server creates the SOCKS5 proxy server from the sandbox plan.

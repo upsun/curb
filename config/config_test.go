@@ -22,6 +22,8 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("exec", nil, "")
 	f.StringSlice("env", nil, "")
 	f.StringSlice("ips", nil, "")
+	f.StringSlice("inject-bearer", nil, "")
+	f.StringSlice("inject-header", nil, "")
 	f.Bool("unrestricted-net", false, "")
 	f.Bool("allow-unix-sockets", false, "")
 	f.Bool("host-loopback", false, "")
@@ -122,6 +124,28 @@ func TestMergeEnv_ListsAdditive(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"b.com", "a.com"}, cfg.AllowedDomains)
+}
+
+func TestMergeEnv_InjectBearerAdditive(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-bearer", "b.com=@B"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_INJECT_BEARER", "a.com=@A")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, []string{"b.com=@B", "a.com=@A"}, cfg.InjectBearer)
+}
+
+func TestMergeEnv_InjectHeaderAdditive(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-header", "b.com=x-tok=@B"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_INJECT_HEADER", "a.com=x-api-key=@A")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, []string{"b.com=x-tok=@B", "a.com=x-api-key=@A"}, cfg.InjectHeader)
 }
 
 func TestMergeEnv_CommaSeparatedList(t *testing.T) {

@@ -24,6 +24,9 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 	if caps.Seatbelt != nil {
 		return nil, fmt.Errorf("fatal: sandbox-exec is required on macOS: %w", caps.Seatbelt)
 	}
+	if len(cfg.InjectBearer) > 0 || len(cfg.InjectHeader) > 0 {
+		return nil, fmt.Errorf("credential injection (--inject-bearer/--inject-header) is only supported on Linux")
+	}
 
 	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet, Logger: logger}
 	var removals planRemovals

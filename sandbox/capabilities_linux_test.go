@@ -219,6 +219,34 @@ func TestPrintDryRun_ContainsExpectedSections(t *testing.T) {
 	assert.Contains(t, output, "status:     full")
 }
 
+func TestPrintDryRun_Injection(t *testing.T) {
+	caps := &Capabilities{
+		UserNS:      nil,
+		MountNS:     nil,
+		NetNS:       nil,
+		LandlockABI: 4,
+		Seccomp:     true,
+		KernelInfo:  "6.8.0-test",
+	}
+	t.Setenv("CURB_DRYRUN_TOKEN", "sk-secret-must-not-leak")
+	cfg := &config.Config{
+		InjectHeader: []string{"api.example.com=x-api-key=@CURB_DRYRUN_TOKEN"},
+	}
+
+	plan, err := BuildPlan(cfg, caps, nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	var buf bytes.Buffer
+	plan.PrintDryRun(&buf)
+	output := buf.String()
+
+	assert.Contains(t, output, "inject:")
+	assert.Contains(t, output, "api.example.com: x-api-key")
+	assert.Contains(t, output, "ca-trust:")
+	assert.NotContains(t, output, "sk-secret-must-not-leak", "dry-run must never print the injected token")
+}
+
 func TestPrintDryRun_DegradedEnforcement(t *testing.T) {
 	caps := &Capabilities{
 		UserNS:      nil,

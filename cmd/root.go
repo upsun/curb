@@ -27,7 +27,8 @@ Use -- before the command when it has its own flags.`,
   curb --domains example.com -- curl https://example.com    # allow specific domains
   curb -p node -w . -- npm install                          # profile + writable cwd
   curb -a cargo build                                       # auto-select profile
-  curb --dry-run -p node -- npm install                     # preview sandbox plan`,
+  curb --dry-run -p node -- npm install                     # preview sandbox plan
+  curb --inject-bearer api.github.com=@TOK -- gh pr list    # inject a token, kept out of the sandbox`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -329,6 +330,8 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("ips", nil, "allowed IP/CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16)")
 	f.Bool("unrestricted-net", false, "skip network restrictions entirely")
 	f.Bool("host-loopback", false, "forward localhost traffic to host loopback")
+	f.StringSlice("inject-bearer", nil, "terminate TLS for HOST and inject 'Authorization: Bearer <token>' (HOST=@ENV_VAR reads the token from an env var, keeping it out of argv)")
+	f.StringSlice("inject-header", nil, "terminate TLS for HOST and inject an arbitrary request header (HOST=HEADER=@ENV_VAR, e.g. api.example.com=x-api-key=@KEY)")
 
 	// Executables.
 	f.StringSlice("exec", nil, "allowed executables (default: invoked command only)")

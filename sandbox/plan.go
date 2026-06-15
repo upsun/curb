@@ -16,6 +16,7 @@ import (
 	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 	"github.com/upsun/curb/policy"
+	"github.com/upsun/curb/proxy"
 )
 
 const (
@@ -106,6 +107,12 @@ type SandboxPlan struct {
 	Command          []string
 	Caps             *Capabilities
 	Logger           *clog.Logger
+
+	// Credential injection (parent-only; never serialized to the child).
+	// CA mints leaf certs for injected hosts; InjectBindings maps a host to
+	// the credential headers the proxy attaches to it.
+	CA             *proxy.CA
+	InjectBindings map[string][]proxy.Injection
 }
 
 // LandlockPaths returns the path sets for Landlock rule construction.
@@ -572,6 +579,162 @@ func appendUniq(s []string, v string) []string {
 	return s
 }
 
+// injectSpec is a parsed injection binding: for requests to host, set header to
+// prefix + the resolved token. The token comes from source (an @ENV_VAR
+// reference or a literal). --inject-bearer fills prefix with "Bearer ".
+type injectSpec struct {
+	host   string
+	header string
+	prefix string
+	source string
+}
+
+// parseInjectBearer parses --inject-bearer "HOST=SOURCE" into an Authorization:
+// Bearer binding (sugar over parseInjectHeader).
+func parseInjectBearer(entries []string) ([]injectSpec, error) {
+	var specs []injectSpec
+	for _, e := range entries {
+		host, source, ok := strings.Cut(e, "=")
+		if !ok || host == "" || source == "" {
+			return nil, fmt.Errorf("--inject-bearer must be HOST=SOURCE, got %q", e)
+		}
+		if err := policy.ValidateDomains([]string{host}); err != nil {
+			return nil, fmt.Errorf("--inject-bearer host %q: %w", host, err)
+		}
+		specs = append(specs, injectSpec{host: host, header: "Authorization", prefix: "Bearer ", source: source})
+	}
+	return specs, nil
+}
+
+// parseInjectHeader parses --inject-header "HOST=HEADER=SOURCE" into a binding
+// that sets an arbitrary request header (e.g. x-api-key) to the resolved token.
+func parseInjectHeader(entries []string) ([]injectSpec, error) {
+	var specs []injectSpec
+	for _, e := range entries {
+		parts := strings.SplitN(e, "=", 3)
+		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return nil, fmt.Errorf("--inject-header must be HOST=HEADER=SOURCE, got %q", e)
+		}
+		host, header, source := parts[0], parts[1], parts[2]
+		if err := policy.ValidateDomains([]string{host}); err != nil {
+			return nil, fmt.Errorf("--inject-header host %q: %w", host, err)
+		}
+		if strings.ContainsAny(header, " \t:") {
+			return nil, fmt.Errorf("--inject-header header name %q is not a valid token", header)
+		}
+		specs = append(specs, injectSpec{host: host, header: header, source: source})
+	}
+	return specs, nil
+}
+
+// resolveInject generates the per-run CA, resolves each bound token, and
+// delivers the CA to the sandbox trust store. It runs after proxy and env
+// resolution. The CA key and tokens stay in the parent; only the public CA
+// (in a combined bundle) and the placeholder-free env reach the child.
+func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
+	if len(specs) == 0 {
+		return nil
+	}
+	bindings := make(map[string][]proxy.Injection, len(specs))
+	for _, s := range specs {
+		token, ok, err := resolveSecretSource(s.source, plan.Logger)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue // optional source (@?VAR) absent — skip this binding
+		}
+		bindings[s.host] = append(bindings[s.host], proxy.Injection{Header: s.header, Value: s.prefix + token})
+	}
+	if len(bindings) == 0 {
+		return nil // nothing to inject (all sources were optional and absent)
+	}
+	if !plan.ProxyEnabled {
+		return fmt.Errorf("credential injection requires the network proxy (needs user and network namespaces)")
+	}
+	ca, err := proxy.NewCA()
+	if err != nil {
+		return fmt.Errorf("generating per-run CA: %w", err)
+	}
+	plan.CA = ca
+	plan.InjectBindings = bindings
+
+	// Trust-store delivery: a combined bundle (system roots + per-run CA) the
+	// action trusts for the proxy's leaf certs. The CA validates only inside
+	// this run, so it is not sensitive to the action.
+	bundle, err := writeCABundle(plan.TempDir, ca.CertPEM())
+	if err != nil {
+		return err
+	}
+	plan.ROFiles = appendUniq(plan.ROFiles, bundle)
+	for _, k := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+		plan.EnvSet[k] = bundle
+	}
+	return nil
+}
+
+// resolveSecretSource reads a token from a credential-injection source. It
+// returns ok=false (no error) when an optional @?ENV_VAR source is unset, so
+// the caller can skip that binding.
+//
+//   - @?VAR — optional: the var's value if set and non-empty, else skip.
+//   - @VAR  — required: the var's value, or an error if unset or empty.
+//   - literal — returned as-is (warning that argv is world-readable).
+func resolveSecretSource(source string, log *clog.Logger) (string, bool, error) {
+	if name, ok := strings.CutPrefix(source, "@?"); ok {
+		val, present := os.LookupEnv(name)
+		if !present || val == "" {
+			return "", false, nil
+		}
+		return val, true, nil
+	}
+	if name, ok := strings.CutPrefix(source, "@"); ok {
+		val, present := os.LookupEnv(name)
+		if !present || val == "" {
+			return "", false, fmt.Errorf("credential injection source $%s is unset or empty", name)
+		}
+		return val, true, nil
+	}
+	log.Warn("credential injection literal token is visible in process arguments; prefer @ENV_VAR")
+	return source, true, nil
+}
+
+// writeCABundle writes a PEM bundle of the system roots plus the per-run CA to
+// the temp dir and returns its path.
+func writeCABundle(tmpDir string, caPEM []byte) (string, error) {
+	var buf []byte
+	if sys := systemCABundle(); sys != "" {
+		if data, err := os.ReadFile(sys); err == nil {
+			buf = append(buf, data...)
+			if len(buf) > 0 && buf[len(buf)-1] != '\n' {
+				buf = append(buf, '\n')
+			}
+		}
+	}
+	buf = append(buf, caPEM...)
+	path := filepath.Join(tmpDir, "ca-bundle.pem")
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		return "", fmt.Errorf("writing CA bundle: %w", err)
+	}
+	return path, nil
+}
+
+// systemCABundle returns the first system CA bundle found, or "".
+func systemCABundle() string {
+	for _, p := range []string{
+		"/etc/ssl/certs/ca-certificates.crt",                // Debian, Ubuntu, Alpine
+		"/etc/pki/tls/certs/ca-bundle.crt",                  // Fedora, RHEL
+		"/etc/ssl/ca-bundle.pem",                            // openSUSE
+		"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
+		"/etc/ssl/cert.pem",                                 // macOS, some BSDs
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 // resolveEnv applies environment policy, sets up shell init files, and writes
 // an SSH config for ProxyCommand routing through the SOCKS5 proxy.
 func resolveEnv(plan *SandboxPlan, cfg *config.Config) error {
@@ -774,6 +937,23 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 			ln("    localhost:  sandbox-internal (NO_PROXY)")
 		}
 		ln("    blocked:    everything else")
+		if len(p.InjectBindings) > 0 {
+			hosts := make([]string, 0, len(p.InjectBindings))
+			for h := range p.InjectBindings {
+				hosts = append(hosts, h)
+			}
+			sort.Strings(hosts)
+			ln("    inject:     TLS terminated; credential headers added by the proxy (token never enters the sandbox)")
+			for _, h := range hosts {
+				var headers []string
+				for _, inj := range p.InjectBindings[h] {
+					headers = append(headers, inj.Header)
+				}
+				sort.Strings(headers)
+				pr("      %s: %s\n", h, strings.Join(headers, ", "))
+			}
+			ln("    ca-trust:   per-run CA bundle in env (SSL_CERT_FILE, CURL_CA_BUNDLE, GIT_SSL_CAINFO, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS)")
+		}
 	}
 
 	// Environment.
@@ -868,6 +1048,16 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 	}
 	for _, pair := range cfg.EnvSet {
 		k, v, _ := strings.Cut(pair, "=")
+		// A "?" prefix on the value makes the assignment conditional: apply it
+		// only if k is set in the host environment. Used to placeholder a
+		// credential the sandbox would otherwise receive, without introducing
+		// one when it is absent (e.g. ANTHROPIC_API_KEY for OAuth users).
+		if rest, ok := strings.CutPrefix(v, "?"); ok {
+			if _, present := os.LookupEnv(k); !present {
+				continue
+			}
+			v = rest
+		}
 		// Expand $VAR references against the sandbox env built so far.
 		v = os.Expand(v, func(name string) string {
 			if val, ok := plan.EnvSet[name]; ok {
@@ -1215,6 +1405,10 @@ func resolveSymlinks(paths []string) []string {
 // sanitization is available. Used by degradedPlanBuilder and tests.
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan := &SandboxPlan{Caps: caps}
+
+	if len(cfg.InjectBearer) > 0 || len(cfg.InjectHeader) > 0 {
+		return nil, fmt.Errorf("credential injection (--inject-bearer/--inject-header) is only supported on Linux")
+	}
 
 	if len(cfg.AllowedDomains) > 0 {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{

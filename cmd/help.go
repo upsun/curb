@@ -20,7 +20,7 @@ type flagGroup struct {
 // flagGroups defines the order and grouping of flags in help output.
 var flagGroups = []flagGroup{
 	{"Filesystem", []string{"read", "write"}},
-	{"Network", []string{"domains", "ips", "unrestricted-net", "host-loopback", "allow-unix-sockets"}},
+	{"Network", []string{"domains", "ips", "inject-bearer", "inject-header", "unrestricted-net", "host-loopback", "allow-unix-sockets"}},
 	{"Executables", []string{"exec"}},
 	{"Environment", []string{"env"}},
 	{"Profiles & Config", []string{"profiles", "auto", "config-file"}},

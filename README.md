@@ -154,6 +154,13 @@ Pass through a specific environment variable:
 curb --env 'DATABASE_URL' -- ./migrate.sh
 ```
 
+Inject a credential the sandboxed process never sees — the token stays in
+curb's proxy, which adds it to requests bound for the named host:
+
+```
+GH_TOKEN=ghp_xxx curb --inject-bearer 'api.github.com=@GH_TOKEN' -- gh api user
+```
+
 ## CLI reference
 
 ### Network
@@ -162,6 +169,8 @@ curb --env 'DATABASE_URL' -- ./migrate.sh
 |------|---------|-------------|
 | `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all. |
 | `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
+| `--inject-bearer` | `CURB_INJECT_BEARER` | Terminate TLS for a host and inject `Authorization: Bearer <token>` on the way out, so the token never enters the sandbox. `HOST=@ENV_VAR` reads the token from an env var (kept out of argv); `HOST=literal` also works but exposes it in process arguments. Repeatable; also settable via the `inject-bearer:` config-file/profile key. Linux only. |
+| `--inject-header` | `CURB_INJECT_HEADER` | Like `--inject-bearer`, but injects an arbitrary request header: `HOST=HEADER=SOURCE` (e.g. `api.example.com=x-api-key=@KEY`). `--inject-bearer HOST=SOURCE` is sugar for `HOST=Authorization=Bearer …`. Repeatable; also a config-file/profile key. Linux only. |
 | `--host-loopback` | `CURB_HOST_LOOPBACK` | Forward localhost/127.0.0.1 traffic to the host loopback. Cannot combine with `--unrestricted-net`. |
 | `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains`, `--ips`, or `--host-loopback`. |
 

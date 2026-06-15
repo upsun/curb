@@ -68,6 +68,14 @@ description: Active sandbox constraints for this environment. Check when encount
 		} else if plan.ProxyEnabled {
 			b.WriteString("- Localhost: sandbox-internal\n")
 		}
+		if len(plan.InjectBindings) > 0 {
+			hosts := make([]string, 0, len(plan.InjectBindings))
+			for h := range plan.InjectBindings {
+				hosts = append(hosts, h)
+			}
+			sort.Strings(hosts)
+			fmt.Fprintf(&b, "- Credential injection: auth headers are added automatically to requests for %s; no token is present in this sandbox, so do not expect or look for one.\n", strings.Join(hosts, ", "))
+		}
 		if !plan.ProxyEnabled && len(plan.AllowedDomains) == 0 && len(plan.AllowedIPs) == 0 {
 			b.WriteString("- Allowed: none\n")
 		}

@@ -17,6 +17,21 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet, Logger: logger}
 	var removals planRemovals
 
+	// Parse credential-injection bindings first and ensure their hosts are
+	// allowed, so capability/proxy resolution routes them through the proxy.
+	injects, err := parseInjectBearer(cfg.InjectBearer)
+	if err != nil {
+		return nil, err
+	}
+	headerInjects, err := parseInjectHeader(cfg.InjectHeader)
+	if err != nil {
+		return nil, err
+	}
+	injects = append(injects, headerInjects...)
+	for _, s := range injects {
+		cfg.AllowedDomains = appendUniq(cfg.AllowedDomains, s.host)
+	}
+
 	// Create tmpDir first — needed for sandbox HOME fallback.
 	tmpDir, err := createTempDir()
 	if err != nil {
@@ -49,6 +64,9 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 		return nil, err
 	}
 	if err := resolveEnv(plan, cfg); err != nil {
+		return nil, err
+	}
+	if err := resolveInject(plan, injects); err != nil {
 		return nil, err
 	}
 	resolveDenials(plan, &removals)

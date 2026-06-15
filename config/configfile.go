@@ -19,6 +19,8 @@ type ConfigFile struct {
 	Profiles         []string `yaml:"profiles"`
 	Domains          []string `yaml:"domains"`
 	IPs              []string `yaml:"ips"`
+	InjectBearer     []string `yaml:"inject-bearer"`
+	InjectHeader     []string `yaml:"inject-header"`
 	Read             pathList `yaml:"read"`
 	Write            pathList `yaml:"write"`
 	Exec             pathList `yaml:"exec"`
@@ -109,6 +111,24 @@ func (cf *ConfigFile) validate() error {
 			return err
 		}
 	}
+	for i, e := range cf.InjectBearer {
+		host, source, ok := strings.Cut(e, "=")
+		if !ok || host == "" || source == "" {
+			return fmt.Errorf("inject-bearer[%d] must be HOST=SOURCE, got %q", i, e)
+		}
+		if err := policy.ValidateDomains([]string{host}); err != nil {
+			return fmt.Errorf("inject-bearer[%d] host %q: %w", i, host, err)
+		}
+	}
+	for i, e := range cf.InjectHeader {
+		parts := strings.SplitN(e, "=", 3)
+		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return fmt.Errorf("inject-header[%d] must be HOST=HEADER=SOURCE, got %q", i, e)
+		}
+		if err := policy.ValidateDomains([]string{parts[0]}); err != nil {
+			return fmt.Errorf("inject-header[%d] host %q: %w", i, parts[0], err)
+		}
+	}
 	for _, pair := range [...]struct {
 		field string
 		list  pathList
@@ -152,6 +172,8 @@ func FindConfigFile() string {
 func mergeConfigLists(cfg *Config, cf *ConfigFile) {
 	cfg.AllowedDomains = append(cf.Domains, cfg.AllowedDomains...)
 	cfg.AllowedIPs = append(cf.IPs, cfg.AllowedIPs...)
+	cfg.InjectBearer = append(cf.InjectBearer, cfg.InjectBearer...)
+	cfg.InjectHeader = append(cf.InjectHeader, cfg.InjectHeader...)
 	cfg.ROPaths = append(expandEnvPaths([]string(cf.Read), "read"), cfg.ROPaths...)
 	cfg.RWPaths = append(expandEnvPaths([]string(cf.Write), "write"), cfg.RWPaths...)
 	cfg.ExecAllow = append(expandEnvPaths([]string(cf.Exec), "exec"), cfg.ExecAllow...)

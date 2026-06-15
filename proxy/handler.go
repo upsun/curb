@@ -15,6 +15,9 @@ import (
 // encrypted stream without terminating TLS.
 type Handler struct {
 	FilterBase
+	// Injector, when set, terminates TLS and injects a bound credential for
+	// hosts it has a binding for. Hosts without a binding stay passthrough.
+	Injector *Injector
 }
 
 // ServeHTTP implements http.Handler.
@@ -40,6 +43,15 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "curb: domain not allowed: "+host+" (see $CURB_SKILL_DIR/SKILL.md)", http.StatusForbidden)
 		h.logEvent("proxy_connect", r.Host, "blocked", "domain")
 		return
+	}
+
+	// A bound host is TLS-terminated so the credential can be injected;
+	// everything else keeps the passthrough relay below.
+	if h.Injector != nil {
+		if injs, ok := h.Injector.binding(host); ok {
+			h.injectCONNECT(w, host, port, injs)
+			return
+		}
 	}
 
 	// Hijack the client connection.
