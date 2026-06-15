@@ -598,28 +598,13 @@ func parseInjectBearer(entries []string) ([]injectSpec, error) {
 		if !ok || host == "" || source == "" {
 			return nil, fmt.Errorf("--inject-bearer must be HOST=SOURCE, got %q", e)
 		}
-		host, err := normalizeInjectHost(host)
+		host, err := policy.ValidateInjectHost(host)
 		if err != nil {
-			return nil, fmt.Errorf("--inject-bearer host: %w", err)
+			return nil, fmt.Errorf("--inject-bearer %w", err)
 		}
 		specs = append(specs, injectSpec{host: host, header: "Authorization", prefix: "Bearer ", source: source})
 	}
 	return specs, nil
-}
-
-// normalizeInjectHost validates a credential-injection host and returns it
-// normalized (lowercase, no trailing dot). Unlike --domains, an injection host
-// must be an exact hostname: a wildcard would broaden the allowlist (in the
-// case of "*", to every domain) while never matching a binding at runtime, so
-// the credential would never be injected.
-func normalizeInjectHost(host string) (string, error) {
-	if err := policy.ValidateDomains([]string{host}); err != nil {
-		return "", err
-	}
-	if strings.Contains(host, "*") {
-		return "", fmt.Errorf("%q must be an exact hostname (no wildcards)", host)
-	}
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."), nil
 }
 
 // parseInjectHeader parses --inject-header "HOST=HEADER=SOURCE" into a binding
@@ -632,16 +617,37 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 			return nil, fmt.Errorf("--inject-header must be HOST=HEADER=SOURCE, got %q", e)
 		}
 		host, header, source := parts[0], parts[1], parts[2]
-		host, err := normalizeInjectHost(host)
+		host, err := policy.ValidateInjectHost(host)
 		if err != nil {
-			return nil, fmt.Errorf("--inject-header host: %w", err)
+			return nil, fmt.Errorf("--inject-header %w", err)
 		}
-		if strings.ContainsAny(header, " \t:") {
-			return nil, fmt.Errorf("--inject-header header name %q is not a valid token", header)
+		if !validHeaderName(header) {
+			return nil, fmt.Errorf("--inject-header header name %q is not a valid token (RFC 7230)", header)
 		}
 		specs = append(specs, injectSpec{host: host, header: header, source: source})
 	}
 	return specs, nil
+}
+
+// validHeaderName reports whether name is a valid HTTP header field name (an
+// RFC 7230 token). Rejecting invalid names here gives an immediate, clear error
+// instead of a runtime 502 when net/http rejects the upstream request.
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	// tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
+	//         "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA  (RFC 7230 §3.2.6).
+	const special = "!#$%&'*+-.^_`|~"
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune(special, r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // resolveInject generates the per-run CA, resolves each bound token, and
@@ -717,16 +723,21 @@ func resolveSecretSource(source string, log *clog.Logger) (string, bool, error) 
 }
 
 // writeCABundle writes a PEM bundle of the system roots plus the per-run CA to
-// the temp dir and returns its path.
+// the temp dir and returns its path. It fails if the system roots cannot be
+// located or read: this bundle replaces the sandbox's TLS trust (SSL_CERT_FILE
+// etc.), so a bundle holding only the per-run CA would break trust for every
+// HTTPS destination other than the injected hosts.
 func writeCABundle(tmpDir string, caPEM []byte) (string, error) {
-	var buf []byte
-	if sys := systemCABundle(); sys != "" {
-		if data, err := os.ReadFile(sys); err == nil {
-			buf = append(buf, data...)
-			if len(buf) > 0 && buf[len(buf)-1] != '\n' {
-				buf = append(buf, '\n')
-			}
-		}
+	sys := systemCABundle()
+	if sys == "" {
+		return "", fmt.Errorf("credential injection: no system CA bundle found; cannot deliver TLS trust to the sandbox without overriding it")
+	}
+	buf, err := os.ReadFile(sys)
+	if err != nil {
+		return "", fmt.Errorf("credential injection: reading system CA bundle %s: %w", sys, err)
+	}
+	if len(buf) > 0 && buf[len(buf)-1] != '\n' {
+		buf = append(buf, '\n')
 	}
 	buf = append(buf, caPEM...)
 	path := filepath.Join(tmpDir, "ca-bundle.pem")

@@ -241,6 +241,12 @@ environment variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`,
 `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) at it, so common tools trust the
 terminated connection while still reaching other hosts normally.
 
+After terminating TLS, curb parses the decrypted stream as HTTP/1.1 and does not
+negotiate HTTP/2 (no `h2` ALPN). An HTTP/2-only client or protocol — some gRPC
+setups, for example — may fail against a host with injection enabled. Hosts
+without an injection binding keep the untouched passthrough relay and are
+unaffected.
+
 Both are also settable via environment variables (`CURB_INJECT_BEARER`,
 `CURB_INJECT_HEADER`, comma-separated) and the `inject-bearer:` /
 `inject-header:` config-file/profile keys, merged additively like `domains`. The

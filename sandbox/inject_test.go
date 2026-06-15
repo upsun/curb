@@ -65,7 +65,11 @@ func TestParseInjectHeader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ab=cd", specs[0].source)
 
-	for _, bad := range []string{"", "h.com", "h.com=x-api-key", "=x=y", "h.com==y", "h.com=bad header=y", "*=x=@T", "*.h.com=x=@T"} {
+	for _, bad := range []string{
+		"", "h.com", "h.com=x-api-key", "=x=y", "h.com==y",
+		"h.com=bad header=y", "*=x=@T", "*.h.com=x=@T",
+		"h.com=x/y=@T", "h.com=x(y)=@T", "h.com=a:b=@T", // invalid header-name tokens
+	} {
 		_, err := parseInjectHeader([]string{bad})
 		assert.Error(t, err, "expected error for %q", bad)
 	}
@@ -112,16 +116,21 @@ func TestWriteCABundle(t *testing.T) {
 	dir := t.TempDir()
 	caPEM := []byte("-----BEGIN CERTIFICATE-----\nPERRUNCA\n-----END CERTIFICATE-----\n")
 
+	if systemCABundle() == "" {
+		// Without system roots, the bundle would override TLS trust with an
+		// incomplete set, so injection fails rather than break other hosts.
+		_, err := writeCABundle(dir, caPEM)
+		require.Error(t, err)
+		return
+	}
+
 	path, err := writeCABundle(dir, caPEM)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, "ca-bundle.pem"), path)
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	// The per-run CA is always present; system roots are appended before it
-	// when a system bundle exists on the host.
+	// The per-run CA is appended after the system roots.
 	assert.Contains(t, string(data), "PERRUNCA")
-	if sys := systemCABundle(); sys != "" {
-		assert.Greater(t, len(data), len(caPEM), "combined bundle should include system roots")
-	}
+	assert.Greater(t, len(data), len(caPEM), "combined bundle should include system roots")
 }

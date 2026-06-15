@@ -178,6 +178,20 @@ inject-bearer:
 	assert.Contains(t, err.Error(), "inject-bearer")
 }
 
+func TestLoadConfigFile_InjectBearerWildcard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-bearer:
+  - "*.github.com=@GH_TOKEN"
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inject-bearer")
+	assert.Contains(t, err.Error(), "exact hostname")
+}
+
 func TestLoadConfigFile_InjectHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".curb.yaml")

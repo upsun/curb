@@ -59,6 +59,21 @@ func validateDomain(d string) error {
 	return nil
 }
 
+// ValidateInjectHost validates a credential-injection host and returns it
+// normalized (lowercase, no trailing dot). Unlike a --domains pattern, an
+// injection host must be an exact hostname: a wildcard cannot identify the
+// single destination a credential belongs to, and "*" would broaden the
+// allowlist to every domain while never matching a binding at runtime.
+func ValidateInjectHost(host string) (string, error) {
+	if err := validateDomain(host); err != nil {
+		return "", err
+	}
+	if strings.Contains(host, "*") {
+		return "", fmt.Errorf("host %q must be an exact hostname (no wildcards)", host)
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."), nil
+}
+
 // stripScheme removes http:// or https:// and any trailing path from a URL-like string.
 func stripScheme(s string) string {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "https://"), "http://")

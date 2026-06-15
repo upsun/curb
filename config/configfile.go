@@ -116,8 +116,8 @@ func (cf *ConfigFile) validate() error {
 		if !ok || host == "" || source == "" {
 			return fmt.Errorf("inject-bearer[%d] must be HOST=SOURCE, got %q", i, e)
 		}
-		if err := policy.ValidateDomains([]string{host}); err != nil {
-			return fmt.Errorf("inject-bearer[%d] host %q: %w", i, host, err)
+		if _, err := policy.ValidateInjectHost(host); err != nil {
+			return fmt.Errorf("inject-bearer[%d] %w", i, err)
 		}
 	}
 	for i, e := range cf.InjectHeader {
@@ -125,8 +125,8 @@ func (cf *ConfigFile) validate() error {
 		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 			return fmt.Errorf("inject-header[%d] must be HOST=HEADER=SOURCE, got %q", i, e)
 		}
-		if err := policy.ValidateDomains([]string{parts[0]}); err != nil {
-			return fmt.Errorf("inject-header[%d] host %q: %w", i, parts[0], err)
+		if _, err := policy.ValidateInjectHost(parts[0]); err != nil {
+			return fmt.Errorf("inject-header[%d] %w", i, err)
 		}
 	}
 	for _, pair := range [...]struct {

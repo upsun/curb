@@ -74,7 +74,7 @@ description: Active sandbox constraints for this environment. Check when encount
 				hosts = append(hosts, h)
 			}
 			sort.Strings(hosts)
-			fmt.Fprintf(&b, "- Credential injection: auth headers are added automatically to requests for %s; no token is present in this sandbox, so do not expect or look for one.\n", strings.Join(hosts, ", "))
+			fmt.Fprintf(&b, "- Credential injection: credential headers are added automatically to requests for %s; no token is present in this sandbox, so do not expect or look for one.\n", strings.Join(hosts, ", "))
 		}
 		if !plan.ProxyEnabled && len(plan.AllowedDomains) == 0 && len(plan.AllowedIPs) == 0 {
 			b.WriteString("- Allowed: none\n")

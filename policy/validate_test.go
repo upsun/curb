@@ -51,6 +51,37 @@ func TestValidateDomains(t *testing.T) {
 	}
 }
 
+func TestValidateInjectHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		want    string
+		wantErr string
+	}{
+		{"exact host", "api.github.com", "api.github.com", ""},
+		{"lowercased", "API.GitHub.COM", "api.github.com", ""},
+		{"trailing dot trimmed", "api.github.com.", "api.github.com", ""},
+		{"both", "API.GitHub.COM.", "api.github.com", ""},
+
+		{"reject match-all", "*", "", "exact hostname"},
+		{"reject wildcard", "*.github.com", "", "exact hostname"},
+		{"reject URL", "https://api.github.com", "", "looks like a URL"},
+		{"reject IP", "10.0.0.1", "", "use --ips instead"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ValidateInjectHost(tt.host)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateIPs(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -129,12 +129,18 @@ type Injector struct {
 	byHost map[string][]Injection
 }
 
-// NewInjector creates an injector backed by the per-run CA.
+// NewInjector creates an injector backed by the per-run CA. Its upstream
+// transport uses the same dial and TLS-handshake timeouts as passthrough
+// traffic so an injected request cannot hang indefinitely tying up a goroutine.
 func NewInjector(ca *CA) *Injector {
 	return &Injector{
-		CA:       ca,
-		Upstream: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
-		byHost:   map[string][]Injection{},
+		CA: ca,
+		Upstream: &http.Transport{
+			DialContext:         (&net.Dialer{Timeout: dialTimeout}).DialContext,
+			TLSHandshakeTimeout: dialTimeout,
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+		byHost: map[string][]Injection{},
 	}
 }
 
