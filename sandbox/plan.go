@@ -1086,11 +1086,20 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 		// SOCKS5 proxy env vars. Most HTTP clients prefer HTTP_PROXY/HTTPS_PROXY
 		// over ALL_PROXY, so HTTP/HTTPS still goes through the HTTP proxy.
 		// ALL_PROXY covers non-HTTP tools (curl --socks5, cargo, etc.).
+		//
+		// Respect a user-provided value (as NO_PROXY does below): set ALL_PROXY
+		// empty to suppress the SOCKS env for HTTP-only workloads. httpx eagerly
+		// builds a transport for ALL_PROXY at client construction and needs the
+		// socks extra otherwise; ssh routing does not use it (setupSSHConfig).
 		if plan.SOCKSPort > 0 {
 			socksAddr := fmt.Sprintf("127.0.0.1:%d", plan.SOCKSPort)
 			socksURL := fmt.Sprintf("socks5h://%s", socksAddr)
-			plan.EnvSet["ALL_PROXY"] = socksURL
-			plan.EnvSet["all_proxy"] = socksURL
+			if _, ok := plan.EnvSet["ALL_PROXY"]; !ok {
+				plan.EnvSet["ALL_PROXY"] = socksURL
+			}
+			if _, ok := plan.EnvSet["all_proxy"]; !ok {
+				plan.EnvSet["all_proxy"] = socksURL
+			}
 			plan.EnvSet[SOCKSAddrEnvKey] = socksAddr
 		}
 	}
