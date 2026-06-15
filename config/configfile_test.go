@@ -152,70 +152,44 @@ func TestLoadConfigFile_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestLoadConfigFile_InjectBearer(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".curb.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`
-inject-bearer:
-  - api.github.com=@GH_TOKEN
-`), 0o644))
-
-	cf, err := LoadConfigFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"api.github.com=@GH_TOKEN"}, cf.InjectBearer)
-}
-
-func TestLoadConfigFile_InjectBearerInvalid(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".curb.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`
-inject-bearer:
-  - missing-source
-`), 0o644))
-
-	_, err := LoadConfigFile(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "inject-bearer")
-}
-
-func TestLoadConfigFile_InjectBearerWildcard(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".curb.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`
-inject-bearer:
-  - "*.github.com=@GH_TOKEN"
-`), 0o644))
-
-	_, err := LoadConfigFile(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "inject-bearer")
-	assert.Contains(t, err.Error(), "exact hostname")
-}
-
 func TestLoadConfigFile_InjectHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".curb.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 inject-header:
-  - api.anthropic.com=x-api-key=@ANTHROPIC_API_KEY
+  - ANTHROPIC_API_KEY=api.anthropic.com
 `), 0o644))
 
 	cf, err := LoadConfigFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"api.anthropic.com=x-api-key=@ANTHROPIC_API_KEY"}, cf.InjectHeader)
+	assert.Equal(t, []string{"ANTHROPIC_API_KEY=api.anthropic.com"}, cf.InjectHeader)
 }
 
-func TestLoadConfigFile_InjectHeaderInvalid(t *testing.T) {
+func TestLoadConfigFile_InjectHeaderMissingHost(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".curb.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 inject-header:
-  - api.anthropic.com=x-api-key
+  - ANTHROPIC_API_KEY
 `), 0o644))
 
 	_, err := LoadConfigFile(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "inject-header")
+}
+
+func TestLoadConfigFile_InjectHeaderWildcard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-header:
+  - "GH_TOKEN=*.github.com"
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inject-header")
+	assert.Contains(t, err.Error(), "exact hostname")
 }
 
 func TestLoadConfigFile_InjectHeaderInvalidName(t *testing.T) {
@@ -223,13 +197,13 @@ func TestLoadConfigFile_InjectHeaderInvalidName(t *testing.T) {
 	path := filepath.Join(dir, ".curb.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 inject-header:
-  - "api.example.com=bad header=@KEY"
+  - "bad-var=api.example.com"
 `), 0o644))
 
 	_, err := LoadConfigFile(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "inject-header")
-	assert.Contains(t, err.Error(), "valid token")
+	assert.Contains(t, err.Error(), "not valid")
 }
 
 func TestFindConfigFile_InCWD(t *testing.T) {
@@ -279,15 +253,14 @@ func TestFindConfigFile_NotFound(t *testing.T) {
 }
 
 func TestMergeConfigFile_ListsPrepend(t *testing.T) {
-	cmd := newTestCmd([]string{"--domains", "cli.com", "--inject-bearer", "cli.com=@C", "--inject-header", "cli.com=x-tok=@H"})
+	cmd := newTestCmd([]string{"--domains", "cli.com", "--inject-header", "H=cli.com"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
 		Domains:      []string{"file.com"},
 		IPs:          []string{"10.0.0.1"},
-		InjectBearer: []string{"file.com=@F"},
-		InjectHeader: []string{"file.com=x-api-key=@K"},
+		InjectHeader: []string{"K=file.com"},
 		Read:         []string{"/opt"},
 		Write:        []string{"/data"},
 		Exec:         []string{"python3"},
@@ -297,8 +270,7 @@ func TestMergeConfigFile_ListsPrepend(t *testing.T) {
 
 	assert.Equal(t, []string{"file.com", "cli.com"}, cfg.AllowedDomains)
 	assert.Equal(t, []string{"10.0.0.1"}, cfg.AllowedIPs)
-	assert.Equal(t, []string{"file.com=@F", "cli.com=@C"}, cfg.InjectBearer)
-	assert.Equal(t, []string{"file.com=x-api-key=@K", "cli.com=x-tok=@H"}, cfg.InjectHeader)
+	assert.Equal(t, []string{"K=file.com", "H=cli.com"}, cfg.InjectHeader)
 	assert.Equal(t, []string{"/opt"}, cfg.ROPaths)
 	assert.Equal(t, []string{"/data"}, cfg.RWPaths)
 	assert.Equal(t, []string{"python3"}, cfg.ExecAllow)

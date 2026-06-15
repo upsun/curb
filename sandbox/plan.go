@@ -579,77 +579,77 @@ func appendUniq(s []string, v string) []string {
 	return s
 }
 
-// injectSpec is a parsed injection binding: for requests to host, set header to
-// prefix + the resolved token. The token comes from source (an @ENV_VAR
-// reference or a literal). --inject-bearer fills prefix with "Bearer ".
+// injectSpec is a parsed injection binding: the credential in env var envVar may
+// be sent to host. The sandbox sees envVar set to a placeholder; the proxy
+// replaces that placeholder with envVar's real (host) value in requests to host,
+// wherever the client placed it among the request headers.
 type injectSpec struct {
+	envVar string
 	host   string
-	header string
-	prefix string
-	source string
 }
 
-// parseInjectBearer parses --inject-bearer "HOST=SOURCE" into an Authorization:
-// Bearer binding (sugar over parseInjectHeader).
-func parseInjectBearer(entries []string) ([]injectSpec, error) {
-	var specs []injectSpec
-	for _, e := range entries {
-		host, source, ok := strings.Cut(e, "=")
-		if !ok || host == "" || source == "" {
-			return nil, fmt.Errorf("--inject-bearer must be HOST=SOURCE, got %q", e)
-		}
-		host, err := policy.ValidateInjectHost(host)
-		if err != nil {
-			return nil, fmt.Errorf("--inject-bearer %w", err)
-		}
-		specs = append(specs, injectSpec{host: host, header: "Authorization", prefix: "Bearer ", source: source})
-	}
-	return specs, nil
-}
-
-// parseInjectHeader parses --inject-header "HOST=HEADER=SOURCE" into a binding
-// that sets an arbitrary request header (e.g. x-api-key) to the resolved token.
+// parseInjectHeader parses --inject-header "ENV_VAR=HOST". The env var both reads
+// the real value on the host and carries the placeholder in the sandbox. The
+// binding is var-first because a credential conceptually belongs to its variable
+// and may be valid for more than one host (a comma-separated host list is a
+// natural future extension). No header name is needed: the client emits the
+// placeholder in whatever header its auth scheme uses, and the proxy substitutes
+// it in place.
 func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	var specs []injectSpec
 	for _, e := range entries {
-		parts := strings.SplitN(e, "=", 3)
-		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-			return nil, fmt.Errorf("--inject-header must be HOST=HEADER=SOURCE, got %q", e)
+		envVar, host, ok := strings.Cut(e, "=")
+		if !ok || envVar == "" || host == "" {
+			return nil, fmt.Errorf("--inject-header must be ENV_VAR=HOST, got %q", e)
 		}
-		host, header, source := parts[0], parts[1], parts[2]
+		if !policy.ValidEnvName(envVar) {
+			return nil, fmt.Errorf("--inject-header env var name %q is not a valid environment variable name", envVar)
+		}
 		host, err := policy.ValidateInjectHost(host)
 		if err != nil {
 			return nil, fmt.Errorf("--inject-header %w", err)
 		}
-		if !policy.ValidHeaderName(header) {
-			return nil, fmt.Errorf("--inject-header header name %q is not a valid token (RFC 7230)", header)
-		}
-		specs = append(specs, injectSpec{host: host, header: header, source: source})
+		specs = append(specs, injectSpec{envVar: envVar, host: host})
 	}
 	return specs, nil
+}
+
+// injectPlaceholder returns the stable, distinctive sentinel the sandbox sees in
+// place of a real credential. It is constant per env var: the same secret keeps
+// the same placeholder across runs, so a tool that approves a custom key (e.g.
+// Claude Code) approves it once. Its value carries no secret weight — the proxy
+// replaces it with the real token before the request leaves the host — so the
+// string being predictable is harmless: an in-sandbox process already holds it
+// (curb set it in the env), and substitution only happens for the bound host.
+func injectPlaceholder(envVar string) string {
+	return "curb-sealed-placeholder-" + envVar
 }
 
 // resolveInject generates the per-run CA, resolves each bound token, and
 // delivers the CA to the sandbox trust store. It runs after proxy and env
 // resolution. The CA key and tokens stay in the parent; only the public CA
 // (in a combined bundle) and the placeholder-free env reach the child.
+//
+// A source var that is unset or empty is skipped silently: injection is opt-in
+// per credential, and the common case (e.g. the claude profile for an OAuth
+// user) is that the key is simply not present.
 func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	if len(specs) == 0 {
 		return nil
 	}
 	bindings := make(map[string][]proxy.Injection, len(specs))
+	seals := make(map[string]string)
 	for _, s := range specs {
-		token, ok, err := resolveSecretSource(s.source, plan.Logger)
-		if err != nil {
-			return err
+		token, present := os.LookupEnv(s.envVar)
+		if !present || token == "" {
+			continue // source var absent — nothing to inject for this binding
 		}
-		if !ok {
-			continue // optional source (@?VAR) absent — skip this binding
-		}
-		bindings[s.host] = append(bindings[s.host], proxy.Injection{Header: s.header, Value: s.prefix + token})
+		placeholder := injectPlaceholder(s.envVar)
+		bindings[s.host] = append(bindings[s.host], proxy.Injection{Placeholder: placeholder, Value: token})
+		seals[s.envVar] = placeholder
 	}
 	if len(bindings) == 0 {
-		return nil // nothing to inject (all sources were optional and absent)
+		return nil // nothing to inject (all source vars were absent)
 	}
 	if !plan.ProxyEnabled {
 		return fmt.Errorf("credential injection requires the network proxy (needs user and network namespaces)")
@@ -660,6 +660,11 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	}
 	plan.CA = ca
 	plan.InjectBindings = bindings
+
+	// Seal the source vars: the sandbox sees only the placeholder. EnvSet wins
+	// over passthrough in ResolveEnv, so the real value cannot leak in even under
+	// --env '*'.
+	maps.Copy(plan.EnvSet, seals)
 
 	// Trust-store delivery: a combined bundle (system roots + per-run CA) the
 	// action trusts for the proxy's leaf certs. The CA validates only inside
@@ -673,32 +678,6 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 		plan.EnvSet[k] = bundle
 	}
 	return nil
-}
-
-// resolveSecretSource reads a token from a credential-injection source. It
-// returns ok=false (no error) when an optional @?ENV_VAR source is unset, so
-// the caller can skip that binding.
-//
-//   - @?VAR — optional: the var's value if set and non-empty, else skip.
-//   - @VAR  — required: the var's value, or an error if unset or empty.
-//   - literal — returned as-is (warning that argv is world-readable).
-func resolveSecretSource(source string, log *clog.Logger) (string, bool, error) {
-	if name, ok := strings.CutPrefix(source, "@?"); ok {
-		val, present := os.LookupEnv(name)
-		if !present || val == "" {
-			return "", false, nil
-		}
-		return val, true, nil
-	}
-	if name, ok := strings.CutPrefix(source, "@"); ok {
-		val, present := os.LookupEnv(name)
-		if !present || val == "" {
-			return "", false, fmt.Errorf("credential injection source $%s is unset or empty", name)
-		}
-		return val, true, nil
-	}
-	log.Warn("credential injection literal token is visible in process arguments; prefer @ENV_VAR")
-	return source, true, nil
 }
 
 // writeCABundle writes a PEM bundle of the system roots plus the per-run CA to
@@ -950,14 +929,9 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 				hosts = append(hosts, h)
 			}
 			sort.Strings(hosts)
-			ln("    inject:     TLS terminated; credential headers added by the proxy (token never enters the sandbox)")
+			ln("    inject:     TLS terminated; the proxy replaces a placeholder with the real credential in request headers (the real token never enters the sandbox)")
 			for _, h := range hosts {
-				var headers []string
-				for _, inj := range p.InjectBindings[h] {
-					headers = append(headers, inj.Header)
-				}
-				sort.Strings(headers)
-				pr("      %s: %s\n", h, strings.Join(headers, ", "))
+				pr("      %s\n", h)
 			}
 			ln("    ca-trust:   per-run CA bundle in env (SSL_CERT_FILE, CURL_CA_BUNDLE, GIT_SSL_CAINFO, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS)")
 		}
@@ -1422,8 +1396,8 @@ func resolveSymlinks(paths []string) []string {
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan := &SandboxPlan{Caps: caps}
 
-	if len(cfg.InjectBearer) > 0 || len(cfg.InjectHeader) > 0 {
-		return nil, fmt.Errorf("credential injection (--inject-bearer/--inject-header) is only supported on Linux")
+	if len(cfg.InjectHeader) > 0 {
+		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux")
 	}
 
 	if len(cfg.AllowedDomains) > 0 {

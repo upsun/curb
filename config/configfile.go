@@ -19,7 +19,6 @@ type ConfigFile struct {
 	Profiles         []string `yaml:"profiles"`
 	Domains          []string `yaml:"domains"`
 	IPs              []string `yaml:"ips"`
-	InjectBearer     []string `yaml:"inject-bearer"`
 	InjectHeader     []string `yaml:"inject-header"`
 	Read             pathList `yaml:"read"`
 	Write            pathList `yaml:"write"`
@@ -111,25 +110,16 @@ func (cf *ConfigFile) validate() error {
 			return err
 		}
 	}
-	for i, e := range cf.InjectBearer {
-		host, source, ok := strings.Cut(e, "=")
-		if !ok || host == "" || source == "" {
-			return fmt.Errorf("inject-bearer[%d] must be HOST=SOURCE, got %q", i, e)
+	for i, e := range cf.InjectHeader {
+		envVar, host, ok := strings.Cut(e, "=")
+		if !ok || envVar == "" || host == "" {
+			return fmt.Errorf("inject-header[%d] must be ENV_VAR=HOST, got %q", i, e)
+		}
+		if !policy.ValidEnvName(envVar) {
+			return fmt.Errorf("inject-header[%d] env var name %q is not valid", i, envVar)
 		}
 		if _, err := policy.ValidateInjectHost(host); err != nil {
-			return fmt.Errorf("inject-bearer[%d] %w", i, err)
-		}
-	}
-	for i, e := range cf.InjectHeader {
-		parts := strings.SplitN(e, "=", 3)
-		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-			return fmt.Errorf("inject-header[%d] must be HOST=HEADER=SOURCE, got %q", i, e)
-		}
-		if _, err := policy.ValidateInjectHost(parts[0]); err != nil {
 			return fmt.Errorf("inject-header[%d] %w", i, err)
-		}
-		if !policy.ValidHeaderName(parts[1]) {
-			return fmt.Errorf("inject-header[%d] header name %q is not a valid token (RFC 7230)", i, parts[1])
 		}
 	}
 	for _, pair := range [...]struct {
@@ -175,7 +165,6 @@ func FindConfigFile() string {
 func mergeConfigLists(cfg *Config, cf *ConfigFile) {
 	cfg.AllowedDomains = append(cf.Domains, cfg.AllowedDomains...)
 	cfg.AllowedIPs = append(cf.IPs, cfg.AllowedIPs...)
-	cfg.InjectBearer = append(cf.InjectBearer, cfg.InjectBearer...)
 	cfg.InjectHeader = append(cf.InjectHeader, cfg.InjectHeader...)
 	cfg.ROPaths = append(expandEnvPaths([]string(cf.Read), "read"), cfg.ROPaths...)
 	cfg.RWPaths = append(expandEnvPaths([]string(cf.Write), "write"), cfg.RWPaths...)

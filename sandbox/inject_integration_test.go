@@ -128,10 +128,12 @@ func envWithout(keys ...string) []string {
 	return out
 }
 
-// TestCurb_Inject_BearerEndToEnd runs the real curb binary with --inject-bearer
-// and a sandboxed curl against a local HTTPS server, asserting the proxy injects
-// the bound credential — and overwrites a client-supplied placeholder.
-func TestCurb_Inject_BearerEndToEnd(t *testing.T) {
+// TestCurb_Inject_EndToEnd runs the real curb binary with --inject-header and a
+// sandboxed curl against a local HTTPS server. The sandbox sees only a
+// placeholder in the carrier env var; the proxy replaces it with the real
+// credential on the wire. It also confirms the real secret never enters the
+// sandbox.
+func TestCurb_Inject_EndToEnd(t *testing.T) {
 	requireProxyNS(t)
 
 	rec := &headerRecorder{}
@@ -144,16 +146,17 @@ func TestCurb_Inject_BearerEndToEnd(t *testing.T) {
 	require.NoError(t, os.WriteFile(caFile, caPEM, 0o644))
 
 	url := fmt.Sprintf("https://localhost:%s/", port)
-	// First request: no client credential. Second: a placeholder that must be
-	// overwritten, not honored.
+	// $DEMO_TOKEN inside the sandbox is the placeholder. The script sends it in
+	// the Authorization header; the proxy substitutes the real value. Echoing it
+	// lets us confirm the sandbox never holds the real secret.
 	script := fmt.Sprintf(
-		"curl -sf --connect-timeout 10 %s; echo \" a=$?\"; "+
-			"curl -sf --connect-timeout 10 -H 'Authorization: Bearer client-placeholder' %s; echo \" b=$?\"",
-		url, url)
+		"echo \" seal=$DEMO_TOKEN\"; "+
+			"curl -sf --connect-timeout 10 -H \"Authorization: Bearer $DEMO_TOKEN\" %s; echo \" a=$?\"",
+		url)
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--host-loopback",
-		"--inject-bearer", "localhost=@DEMO_TOKEN",
+		"--inject-header", "DEMO_TOKEN=localhost",
 		"--", "sh", "-c", script)
 	cmd.Env = append(envWithout("DEMO_TOKEN", "SSL_CERT_FILE"),
 		"DEMO_TOKEN=integration-secret",
@@ -163,19 +166,18 @@ func TestCurb_Inject_BearerEndToEnd(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "sandboxed curl failed: %s", outStr)
-	assert.Contains(t, outStr, "a=0", "first request should succeed (sandbox trusts the per-run CA)")
-	assert.Contains(t, outStr, "b=0", "second request should succeed")
+	assert.Contains(t, outStr, "a=0", "request should succeed (sandbox trusts the per-run CA)")
+	assert.Contains(t, outStr, "seal=curb-sealed-placeholder-DEMO_TOKEN", "sandbox sees only the placeholder")
+	assert.NotContains(t, outStr, "integration-secret", "real secret must not enter the sandbox")
 
 	seen := rec.got("Authorization")
-	require.Len(t, seen, 2, "upstream should have received two requests")
-	assert.Equal(t, "Bearer integration-secret", seen[0], "credential injected on the wire")
-	assert.Equal(t, "Bearer integration-secret", seen[1], "client placeholder overwritten, not honored")
+	require.Len(t, seen, 1)
+	assert.Equal(t, "Bearer integration-secret", seen[0], "real credential injected on the wire")
 }
 
-// TestCurb_Inject_HeaderEndToEnd runs the real curb binary with --inject-header
-// and a sandboxed curl, asserting an arbitrary header (x-api-key, as Anthropic
-// uses) is injected and overwrites a client-supplied placeholder.
-func TestCurb_Inject_HeaderEndToEnd(t *testing.T) {
+// TestCurb_Inject_HeaderAgnostic confirms the same binding works for a different
+// auth header (x-api-key, as Anthropic uses) with no header configured.
+func TestCurb_Inject_HeaderAgnostic(t *testing.T) {
 	requireProxyNS(t)
 
 	rec := &headerRecorder{}
@@ -187,11 +189,11 @@ func TestCurb_Inject_HeaderEndToEnd(t *testing.T) {
 
 	url := fmt.Sprintf("https://localhost:%s/", port)
 	script := fmt.Sprintf(
-		"curl -sf --connect-timeout 10 -H 'x-api-key: sk-placeholder' %s; echo \" a=$?\"", url)
+		"curl -sf --connect-timeout 10 -H \"x-api-key: $DEMO_KEY\" %s; echo \" a=$?\"", url)
 
 	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
 		"--host-loopback",
-		"--inject-header", "localhost=x-api-key=@DEMO_KEY",
+		"--inject-header", "DEMO_KEY=localhost",
 		"--", "sh", "-c", script)
 	cmd.Env = append(envWithout("DEMO_KEY", "SSL_CERT_FILE"),
 		"DEMO_KEY=sk-ant-real-integration",
@@ -205,5 +207,5 @@ func TestCurb_Inject_HeaderEndToEnd(t *testing.T) {
 
 	seen := rec.got("x-api-key")
 	require.Len(t, seen, 1)
-	assert.Equal(t, "sk-ant-real-integration", seen[0], "x-api-key injected, placeholder overwritten")
+	assert.Equal(t, "sk-ant-real-integration", seen[0], "x-api-key placeholder replaced with real value")
 }

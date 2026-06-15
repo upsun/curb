@@ -21,7 +21,6 @@ type Config struct {
 	EnvSet            []string
 	EnvPassthroughAll bool
 	AllowedIPs        []string
-	InjectBearer      []string
 	InjectHeader      []string
 	UnrestrictedNet   bool
 	NoFSRestrict      bool
@@ -67,10 +66,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		return nil, err
 	}
 	env, err := flags.GetStringSlice("env")
-	if err != nil {
-		return nil, err
-	}
-	injectBearer, err := flags.GetStringSlice("inject-bearer")
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +128,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	cfg := &Config{
 		AllowedDomains:   allow,
 		AllowedIPs:       ips,
-		InjectBearer:     injectBearer,
 		InjectHeader:     injectHeader,
 		UnrestrictedNet:  unrestrictedNet,
 		ROPaths:          ro,
@@ -181,7 +175,6 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	// List values: always additive, with wildcard detection.
 	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_DOMAINS")
 	cfg.AllowedIPs = appendEnvList(cfg.AllowedIPs, "CURB_IPS")
-	cfg.InjectBearer = appendEnvList(cfg.InjectBearer, "CURB_INJECT_BEARER")
 	cfg.InjectHeader = appendEnvList(cfg.InjectHeader, "CURB_INJECT_HEADER")
 
 	roEnv := appendEnvList(nil, "CURB_READ")

@@ -158,7 +158,7 @@ Inject a credential the sandboxed process never sees — the token stays in
 curb's proxy, which adds it to requests bound for the named host:
 
 ```
-GH_TOKEN=ghp_xxx curb --inject-bearer 'api.github.com=@GH_TOKEN' -- gh api user
+GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 ```
 
 ## CLI reference
@@ -169,8 +169,7 @@ GH_TOKEN=ghp_xxx curb --inject-bearer 'api.github.com=@GH_TOKEN' -- gh api user
 |------|---------|-------------|
 | `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all. |
 | `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
-| `--inject-bearer` | `CURB_INJECT_BEARER` | Terminate TLS for a host and inject `Authorization: Bearer <token>` on the way out, so the token never enters the sandbox. `HOST=@ENV_VAR` reads the token from an env var (kept out of argv); `HOST=literal` also works but exposes it in process arguments. Repeatable; also settable via the `inject-bearer:` config-file/profile key. Linux only. |
-| `--inject-header` | `CURB_INJECT_HEADER` | Like `--inject-bearer`, but injects an arbitrary request header: `HOST=HEADER=SOURCE` (e.g. `api.example.com=x-api-key=@KEY`). The header value is the resolved token verbatim (no `Bearer ` prefix). Repeatable; also a config-file/profile key. Linux only. |
+| `--inject-header` | `CURB_INJECT_HEADER` | Terminate TLS for a host and replace a placeholder with a real credential in request headers, so the token never enters the sandbox. `ENV_VAR=HOST` reads the real value from the host's env var and seals the sandbox's copy to a placeholder; the proxy substitutes it wherever the client sent it (any header — `Authorization: Bearer`, `x-api-key`, etc.), so no auth-scheme knowledge is needed. Skipped if `ENV_VAR` is unset. Repeatable; also settable via the `inject-header:` config-file/profile key. Linux only. |
 | `--host-loopback` | `CURB_HOST_LOOPBACK` | Forward localhost/127.0.0.1 traffic to the host loopback. Cannot combine with `--unrestricted-net`. |
 | `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains`, `--ips`, or `--host-loopback`. |
 

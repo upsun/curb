@@ -230,7 +230,7 @@ func TestPrintDryRun_Injection(t *testing.T) {
 	}
 	t.Setenv("CURB_DRYRUN_TOKEN", "sk-secret-must-not-leak")
 	cfg := &config.Config{
-		InjectHeader: []string{"api.example.com=x-api-key=@CURB_DRYRUN_TOKEN"},
+		InjectHeader: []string{"CURB_DRYRUN_TOKEN=api.example.com"},
 	}
 
 	plan, err := BuildPlan(cfg, caps, nil)
@@ -242,7 +242,7 @@ func TestPrintDryRun_Injection(t *testing.T) {
 	output := buf.String()
 
 	assert.Contains(t, output, "inject:")
-	assert.Contains(t, output, "api.example.com: x-api-key")
+	assert.Contains(t, output, "api.example.com")
 	assert.Contains(t, output, "ca-trust:")
 	assert.NotContains(t, output, "sk-secret-must-not-leak", "dry-run must never print the injected token")
 }

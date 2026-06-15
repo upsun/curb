@@ -108,11 +108,13 @@ func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
 	return leaf, nil
 }
 
-// Injection is a credential bound to a destination host: the proxy sets Header
-// to Value on requests it forwards to that host, and to no other host.
+// Injection is a credential bound to a destination host: on requests the proxy
+// forwards to that host, it replaces every occurrence of Placeholder in the
+// request header values with Value, and does so for no other host. The sandbox
+// holds only Placeholder; Value (the real credential) is parent-only.
 type Injection struct {
-	Header string
-	Value  string
+	Placeholder string
+	Value       string
 }
 
 // Injector terminates TLS for bound hosts and injects their credentials. A host
@@ -218,14 +220,14 @@ func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injec
 		if err != nil {
 			return
 		}
-		// Strip hop-by-hop headers first so the client cannot drop an injected
-		// header by naming it in Connection.
+		// Strip hop-by-hop headers first so the client cannot smuggle a
+		// placeholder past substitution by naming a header in Connection.
 		stripHopByHop(req.Header)
-		// Overwrite any client-supplied values: the sandbox holds only a
-		// placeholder and must not pre-empt the real credential.
-		for _, inj := range injs {
-			req.Header.Set(inj.Header, inj.Value)
-		}
+		// Replace the placeholder with the real credential wherever the client
+		// placed it among the request headers. The sandbox never holds the real
+		// value, so this is where the credential is first introduced. Header
+		// values only: bodies and the request URI are left untouched.
+		replaceInHeaders(req.Header, injs)
 		req.URL.Scheme = "https"
 		req.URL.Host = authority
 		// Align the Host header with the upstream we dial; the client may have
@@ -242,6 +244,23 @@ func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injec
 		_ = resp.Body.Close()
 		if werr != nil {
 			return
+		}
+	}
+}
+
+// replaceInHeaders substitutes each binding's placeholder with its real value in
+// every request header value. Placement is the client's choice — Authorization:
+// Bearer <ph>, x-api-key: <ph>, or any other header all work, so the proxy needs
+// no knowledge of the host's auth scheme.
+func replaceInHeaders(hdr http.Header, injs []Injection) {
+	for _, values := range hdr {
+		for i, v := range values {
+			for _, inj := range injs {
+				if inj.Placeholder != "" {
+					v = strings.ReplaceAll(v, inj.Placeholder, inj.Value)
+				}
+			}
+			values[i] = v
 		}
 	}
 }

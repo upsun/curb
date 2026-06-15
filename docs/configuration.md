@@ -38,7 +38,7 @@ Unknown keys are rejected. All fields are optional.
 
 ### List fields
 
-`domains`, `ips`, `inject-bearer`, `inject-header`, `read`, `write`, `exec`, `env` — merged additively. Config file values are prepended to CLI values, so CLI exclusions (`!`) can override config file entries.
+`domains`, `ips`, `inject-header`, `read`, `write`, `exec`, `env` — merged additively. Config file values are prepended to CLI values, so CLI exclusions (`!`) can override config file entries.
 
 ### Scalar fields
 
@@ -189,54 +189,57 @@ And passes through: `PATH`, `TERM`, `COLORTERM`, `NO_COLOR`, `LANG`, `LC_ALL`, `
 
 > Linux only.
 
-`--inject-bearer HOST=SOURCE` keeps a bearer token out of the sandbox entirely.
-curb's proxy terminates TLS for `HOST`, presenting a per-run CA that the sandbox
-trusts, and adds `Authorization: Bearer <token>` to requests on their way to the
-real upstream. The sandboxed process holds no token — only the proxy does — and
-the credential is bound to `HOST`, so it is never attached to any other host the
-program connects to. `HOST` must be an exact hostname — wildcards are rejected,
-since they cannot identify the single destination a credential belongs to. The
-host is matched case-insensitively and a trailing dot is ignored.
+`--inject-header ENV_VAR=HOST` keeps a credential out of the sandbox entirely.
+curb generates a stable placeholder for `ENV_VAR`, sets the sandbox's copy of
+`ENV_VAR` to that placeholder (so the process never sees the real value), and
+reads the real value from the *host's* `ENV_VAR`. Its proxy terminates TLS for
+`HOST`, presenting a per-run CA that the sandbox trusts, and replaces the
+placeholder with the real value wherever the client placed it among the request
+headers on the way to the real upstream. The credential is bound to `HOST`, so
+it is never attached to any other host the program connects to. `HOST` must be
+an exact hostname — wildcards are rejected, since they cannot identify the single
+destination a credential belongs to. The host is matched case-insensitively and a
+trailing dot is ignored.
 
-`SOURCE` is one of:
+The binding is written variable-first because a credential belongs to its
+variable and may be valid for more than one host; a comma-separated host list is
+a natural future extension. The left side is always an environment variable name
+— there is no literal form, because a literal would have no variable through
+which to deliver the placeholder into the sandbox.
 
-- `@ENV_VAR` — read the token from an environment variable. Preferred: the value
-  is not visible in `/proc/<pid>/cmdline`.
-- `@?ENV_VAR` — optional: inject only if the variable is set; otherwise skip the
-  binding silently (no error). Use when the credential may be absent.
-- a literal token — accepted, but visible in the process arguments (curb warns).
+Injection is **header-agnostic**: curb substitutes the placeholder in whatever
+header the client emits, so it needs no knowledge of the host's auth scheme. The
+same binding works whether the client sends `Authorization: Bearer <token>`,
+`x-api-key: <token>`, or any other header — useful when the wire detail varies
+across tools or changes over time, and so that a binding can be written by
+someone who knows the credential's env var but not the API's header.
+
+Injection is opt-in per credential: if `ENV_VAR` is unset or empty on the host,
+the binding is skipped silently (no error). This is what lets a profile carry an
+injection that simply does nothing when the credential is absent.
 
 ```
-# Token read from $GH_TOKEN, never placed in the sandbox:
-GH_TOKEN=ghp_xxx curb --inject-bearer 'api.github.com=@GH_TOKEN' -- gh api user
+# Real value read from the host's $GH_TOKEN; the sandbox sees only a placeholder,
+# and gh sends it in whatever header it uses:
+GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 ```
 
-For schemes that do not use a bearer token, `--inject-header HOST=HEADER=SOURCE`
-injects an arbitrary request header. It is the general form: `--inject-bearer`
-is the same mechanism with the header fixed to `Authorization` and the value
-prefixed with `Bearer ` (`--inject-header` sets the header value to the resolved
-token verbatim, with no prefix). For example, the Anthropic API authenticates
-with the `x-api-key` header, not `Authorization`:
+The placeholder is constant per variable (e.g. `curb-sealed-placeholder-GH_TOKEN`)
+and carries no secret weight — the proxy overwrites it before the request leaves
+the host. Keeping it stable means a tool that approves a custom credential (such
+as Claude Code prompting to approve a custom API key) approves it once rather
+than on every run.
 
-```
-# api.anthropic.com gets x-api-key from $ANTHROPIC_API_KEY; the sandbox never has it:
-ANTHROPIC_API_KEY=sk-… curb --inject-header 'api.anthropic.com=x-api-key=@ANTHROPIC_API_KEY' -- ...
-```
+The built-in **`claude`** profile does exactly this for Claude Code: it injects
+`ANTHROPIC_API_KEY=api.anthropic.com`, so *when `ANTHROPIC_API_KEY` is set on the
+host* the sandbox sees only the placeholder and the proxy substitutes the real
+key in whichever header Claude Code sends (`x-api-key` or, for OAuth,
+`Authorization`). With no host key set it is a no-op and OAuth/subscription auth
+works unchanged. Linux only; on first run Claude Code may prompt once to approve
+the placeholder as a custom key. A custom `ANTHROPIC_BASE_URL` is not covered
+(the seal targets `api.anthropic.com`).
 
-The built-in **`claude`** profile does exactly this for Claude Code: *when
-`ANTHROPIC_API_KEY` is set on the host* it puts only a placeholder in the
-sandbox and injects the real key as `x-api-key`. It uses the conditional markers
-(`?` on the env value, `@?` on the injection source), so with no host key set it
-is a no-op and OAuth/subscription auth works unchanged. Linux only; on first run
-Claude Code may prompt once to approve the placeholder as a custom key. A custom
-`ANTHROPIC_BASE_URL` is not covered (the seal targets `api.anthropic.com`).
-
-A sandbox env var can be set *conditionally* with a `?` prefix on its value:
-`VAR=?placeholder` applies only when `VAR` is set in the host environment. This
-is how a credential is replaced with a placeholder without introducing one when
-it is absent.
-
-The flag is repeatable (one binding per host) and implies network filtering: the
+The flag is repeatable (bindings accumulate) and implies network filtering: the
 host is added to the allowlist and routed through the proxy. curb generates a
 combined CA bundle (system roots plus the per-run CA) and points the standard CA
 environment variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`,
@@ -249,17 +252,16 @@ setups, for example — may fail against a host with injection enabled. Hosts
 without an injection binding keep the untouched passthrough relay and are
 unaffected.
 
-Both are also settable via environment variables (`CURB_INJECT_BEARER`,
-`CURB_INJECT_HEADER`, comma-separated) and the `inject-bearer:` /
-`inject-header:` config-file/profile keys, merged additively like `domains`. The
-`@ENV_VAR` form is resolved at run time wherever the binding comes from, so
-prefer it in config files and profiles — only the variable name is stored, never
-the token:
+It is also settable via the `CURB_INJECT_HEADER` environment variable
+(comma-separated) and the `inject-header:` config-file/profile key, merged
+additively like `domains`. The value is resolved at run time wherever the
+binding comes from, so prefer config files and profiles — only the variable name
+is stored, never the token:
 
 ```yaml
-# .curb.yaml — the token is read from $GH_TOKEN at run time, not committed.
-inject-bearer:
-  - api.github.com=@GH_TOKEN
+# .curb.yaml — the value is read from the host's $GH_TOKEN at run time, not committed.
+inject-header:
+  - GH_TOKEN=api.github.com
 ```
 
 ## HOME and tilde expansion

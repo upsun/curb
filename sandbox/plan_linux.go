@@ -19,15 +19,10 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 
 	// Parse credential-injection bindings first and ensure their hosts are
 	// allowed, so capability/proxy resolution routes them through the proxy.
-	injects, err := parseInjectBearer(cfg.InjectBearer)
+	injects, err := parseInjectHeader(cfg.InjectHeader)
 	if err != nil {
 		return nil, err
 	}
-	headerInjects, err := parseInjectHeader(cfg.InjectHeader)
-	if err != nil {
-		return nil, err
-	}
-	injects = append(injects, headerInjects...)
 	for _, s := range injects {
 		cfg.AllowedDomains = appendUniq(cfg.AllowedDomains, s.host)
 	}

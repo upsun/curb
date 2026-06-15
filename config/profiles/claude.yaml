@@ -8,11 +8,11 @@
 #
 # Credential sealing (Linux): when ANTHROPIC_API_KEY is set on the host, it is
 # kept out of the sandbox — the process sees only a placeholder, and curb's
-# proxy injects the real key as the x-api-key header on requests to
-# api.anthropic.com. This is conditional (? / @? markers): with no host key set,
-# nothing is injected and OAuth/subscription auth works unchanged. On first run,
-# Claude Code may prompt once to approve the placeholder as a custom API key.
-# Caveat: a custom ANTHROPIC_BASE_URL is not covered (the seal targets
+# proxy replaces that placeholder with the real key in requests to
+# api.anthropic.com (in whatever header Claude Code sends it). With no host key
+# set, nothing is injected and OAuth/subscription auth works unchanged. On first
+# run, Claude Code may prompt once to approve the placeholder as a custom API
+# key. Caveat: a custom ANTHROPIC_BASE_URL is not covered (the seal targets
 # api.anthropic.com).
 commands: [claude]
 # Node.js/Bun use AF_UNIX socketpairs internally for child_process.spawn() stdio.
@@ -53,16 +53,16 @@ exec:
   - /bin
   - /usr/local/bin
   - /opt/homebrew/bin
-# Seal ANTHROPIC_API_KEY: inject the real key (from the host env) as x-api-key,
-# and give the sandbox only a placeholder. Both are conditional on the host
-# having the key set, so OAuth users are unaffected.
+# Seal ANTHROPIC_API_KEY: the sandbox sees only a placeholder, and curb's proxy
+# replaces it with the real key (read from the host env) in requests to
+# api.anthropic.com — whichever header Claude Code sends it in. Skipped when the
+# host key is unset, so OAuth users are unaffected.
 inject-header:
-  - api.anthropic.com=x-api-key=@?ANTHROPIC_API_KEY
+  - ANTHROPIC_API_KEY=api.anthropic.com
 env:
   - HOME
   - SHELL
   - CLAUDE_CODE_TMPDIR=$TMPDIR
-  - ANTHROPIC_API_KEY=?curb-sealed-placeholder
   - ANTHROPIC_BASE_URL
   - CLAUDE_CODE_MAX_TOKENS
   - GIT_AUTHOR_NAME
