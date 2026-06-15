@@ -224,7 +224,7 @@ injection that simply does nothing when the credential is absent.
 GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 ```
 
-The placeholder is constant per variable (e.g. `curb-sealed-placeholder-GH_TOKEN`)
+The placeholder is constant per variable (e.g. `curb-inject-GH_TOKEN-placeholder`)
 and carries no secret weight — the proxy overwrites it before the request leaves
 the host. Keeping it stable means a tool that approves a custom credential (such
 as Claude Code prompting to approve a custom API key) approves it once rather
@@ -237,7 +237,7 @@ key in whichever header Claude Code sends (`x-api-key` or, for OAuth,
 `Authorization`). With no host key set it is a no-op and OAuth/subscription auth
 works unchanged. Linux only; on first run Claude Code may prompt once to approve
 the placeholder as a custom key. A custom `ANTHROPIC_BASE_URL` is not covered
-(the seal targets `api.anthropic.com`).
+(injection targets `api.anthropic.com`).
 
 The flag is repeatable (bindings accumulate) and implies network filtering: the
 host is added to the allowlist and routed through the proxy. curb generates a

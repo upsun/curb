@@ -579,22 +579,17 @@ func appendUniq(s []string, v string) []string {
 	return s
 }
 
-// injectSpec is a parsed injection binding: the credential in env var envVar may
-// be sent to host. The sandbox sees envVar set to a placeholder; the proxy
-// replaces that placeholder with envVar's real (host) value in requests to host,
-// wherever the client placed it among the request headers.
+// injectSpec is a parsed injection binding: the sandbox sees envVar set to a
+// placeholder; the proxy replaces it with envVar's real host value in requests
+// to host, wherever the client placed it among the request headers.
 type injectSpec struct {
 	envVar string
 	host   string
 }
 
-// parseInjectHeader parses --inject-header "ENV_VAR=HOST". The env var both reads
-// the real value on the host and carries the placeholder in the sandbox. The
-// binding is var-first because a credential conceptually belongs to its variable
-// and may be valid for more than one host (a comma-separated host list is a
-// natural future extension). No header name is needed: the client emits the
-// placeholder in whatever header its auth scheme uses, and the proxy substitutes
-// it in place.
+// parseInjectHeader parses --inject-header "ENV_VAR=HOST". The binding is
+// var-first because a credential belongs to its variable and may be valid for
+// more than one host (a comma-separated host list is a natural future extension).
 func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	var specs []injectSpec
 	for _, e := range entries {
@@ -614,20 +609,16 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	return specs, nil
 }
 
-// injectPlaceholder returns the stable, distinctive sentinel the sandbox sees in
-// place of a real credential. It is constant per env var: the same secret keeps
-// the same placeholder across runs, so a tool that approves a custom key (e.g.
-// Claude Code) approves it once. Its value carries no secret weight — the proxy
-// replaces it with the real token before the request leaves the host — so the
-// string being predictable is harmless: an in-sandbox process already holds it
-// (curb set it in the env), and substitution only happens for the bound host.
+// injectPlaceholder returns the sentinel the sandbox sees in place of a real
+// credential. It is constant per env var so a tool that approves a custom key
+// (e.g. Claude Code) approves it once. The value carries no secret weight: the
+// proxy swaps it for the real token before the request leaves the host.
 //
-// The env var is wrapped by a trailing "-placeholder": because a valid env var
-// name (ValidEnvName) cannot contain "-", no placeholder can be a prefix of
-// another (e.g. TOK vs TOK2), so the substring substitution in replaceInHeaders
-// cannot corrupt one credential's placeholder while replacing another's.
+// A valid env var name cannot contain "-", so the surrounding "-" guards ensure
+// no placeholder is a prefix of another (TOK vs TOK2) — the substring
+// substitution in replaceInHeaders cannot corrupt one placeholder via another.
 func injectPlaceholder(envVar string) string {
-	return "curb-sealed-" + envVar + "-placeholder"
+	return "curb-inject-" + envVar + "-placeholder"
 }
 
 // resolveInject generates the per-run CA, resolves each bound token, and
@@ -643,7 +634,7 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 		return nil
 	}
 	bindings := make(map[string][]proxy.Injection, len(specs))
-	seals := make(map[string]string)
+	placeholders := make(map[string]string)
 	for _, s := range specs {
 		token, present := os.LookupEnv(s.envVar)
 		if !present || token == "" {
@@ -651,7 +642,7 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 		}
 		placeholder := injectPlaceholder(s.envVar)
 		bindings[s.host] = append(bindings[s.host], proxy.Injection{Placeholder: placeholder, Value: token})
-		seals[s.envVar] = placeholder
+		placeholders[s.envVar] = placeholder
 	}
 	if len(bindings) == 0 {
 		return nil // nothing to inject (all source vars were absent)
@@ -666,10 +657,10 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	plan.CA = ca
 	plan.InjectBindings = bindings
 
-	// Seal the source vars: the sandbox sees only the placeholder. EnvSet wins
-	// over passthrough in ResolveEnv, so the real value cannot leak in even under
-	// --env '*'.
-	maps.Copy(plan.EnvSet, seals)
+	// Set the source vars to their placeholders: the sandbox sees only those.
+	// EnvSet wins over passthrough in ResolveEnv, so the real value cannot leak
+	// in even under --env '*'.
+	maps.Copy(plan.EnvSet, placeholders)
 
 	// Trust-store delivery: a combined bundle (system roots + per-run CA) the
 	// action trusts for the proxy's leaf certs. The CA validates only inside

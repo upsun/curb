@@ -140,7 +140,7 @@ once rather than every run. Both placeholders carry no secret weight — neither
 the credential. Second, zerobox couples the secret to an env var name
 (`--secret KEY=VALUE`) and the host separately (`--secret-host KEY=hosts`); curb's
 single `ENV_VAR=HOST` does both — the env var both reads the real value on the
-host and carries the placeholder in the sandbox, and curb seals it automatically.
+host and carries the placeholder in the sandbox.
 Both put the variable first, leaving room for a credential to name several hosts.
 
 Both approaches prevent a compromised or malicious process from reading the
@@ -276,7 +276,7 @@ process from ever seeing real credentials. This is valuable for AI agent
 use cases where the agent needs to call authenticated APIs but should not
 be able to read or exfiltrate the actual tokens.
 
-curb now implements the same model: `--inject-header ENV_VAR=HOST` seals the
+curb now implements the same model: `--inject-header ENV_VAR=HOST` sets the
 sandbox's copy of the variable to a placeholder and has the proxy substitute the
 real value in request headers, header-agnostically. Unlike zerobox, TLS
 termination is confined to the named hosts rather than applied to all allowed

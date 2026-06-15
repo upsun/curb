@@ -133,11 +133,11 @@ func TestMergeProfiles_ClaudeSealsApiKey(t *testing.T) {
 
 	assert.Contains(t, cfg.AllowedDomains, "api.anthropic.com")
 
-	// The key is injected to api.anthropic.com from the host env var; curb seals
-	// the sandbox's ANTHROPIC_API_KEY to a placeholder itself, and skips
-	// injection when the host var is unset (OAuth).
+	// The key is injected to api.anthropic.com from the host env var; the
+	// sandbox's ANTHROPIC_API_KEY becomes a placeholder, and injection is
+	// skipped when the host var is unset (OAuth).
 	assert.Contains(t, cfg.InjectHeader, "ANTHROPIC_API_KEY=api.anthropic.com")
-	// The real key is not passed through (it would defeat the seal).
+	// The real key is not passed through (it would defeat the injection).
 	assert.NotContains(t, cfg.EnvPassthrough, "ANTHROPIC_API_KEY")
 }
 

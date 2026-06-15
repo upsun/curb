@@ -169,7 +169,7 @@ GH_TOKEN=ghp_xxx curb --inject-header 'GH_TOKEN=api.github.com' -- gh api user
 |------|---------|-------------|
 | `--domains` | `CURB_DOMAINS` | Allowed domain patterns (comma-separated). `*.example.com` for subdomains, `*` to allow all. |
 | `--ips` | `CURB_IPS` | Allowed IP addresses or CIDR ranges (e.g. `10.0.0.1`, `192.168.0.0/16`, `::1`). |
-| `--inject-header` | `CURB_INJECT_HEADER` | Terminate TLS for a host and replace a placeholder with a real credential in request headers, so the token never enters the sandbox. `ENV_VAR=HOST` reads the real value from the host's env var and seals the sandbox's copy to a placeholder; the proxy substitutes it wherever the client sent it (any header — `Authorization: Bearer`, `x-api-key`, etc.), so no auth-scheme knowledge is needed. Skipped if `ENV_VAR` is unset. Repeatable; also settable via the `inject-header:` config-file/profile key. Linux only. |
+| `--inject-header` | `CURB_INJECT_HEADER` | Keep a credential out of the sandbox: `ENV_VAR=HOST` sets the sandbox's copy of `ENV_VAR` to a placeholder, and the proxy replaces it with the real host value in requests to `HOST` (terminating TLS), wherever the client sent it (any header — `Authorization: Bearer`, `x-api-key`, etc.), so no auth-scheme knowledge is needed. Skipped if `ENV_VAR` is unset. Repeatable; also settable via the `inject-header:` config-file/profile key. Linux only. |
 | `--host-loopback` | `CURB_HOST_LOOPBACK` | Forward localhost/127.0.0.1 traffic to the host loopback. Cannot combine with `--unrestricted-net`. |
 | `--unrestricted-net` | `CURB_UNRESTRICTED_NET` | Skip network filtering entirely. Cannot combine with `--domains`, `--ips`, or `--host-loopback`. |
 

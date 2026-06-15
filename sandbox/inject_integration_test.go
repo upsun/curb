@@ -150,7 +150,7 @@ func TestCurb_Inject_EndToEnd(t *testing.T) {
 	// the Authorization header; the proxy substitutes the real value. Echoing it
 	// lets us confirm the sandbox never holds the real secret.
 	script := fmt.Sprintf(
-		"echo \" seal=$DEMO_TOKEN\"; "+
+		"echo \" ph=$DEMO_TOKEN\"; "+
 			"curl -sf --connect-timeout 10 -H \"Authorization: Bearer $DEMO_TOKEN\" %s; echo \" a=$?\"",
 		url)
 
@@ -167,7 +167,7 @@ func TestCurb_Inject_EndToEnd(t *testing.T) {
 	outStr := filterCurbOutput(string(out))
 	require.NoError(t, err, "sandboxed curl failed: %s", outStr)
 	assert.Contains(t, outStr, "a=0", "request should succeed (sandbox trusts the per-run CA)")
-	assert.Contains(t, outStr, "seal=curb-sealed-DEMO_TOKEN-placeholder", "sandbox sees only the placeholder")
+	assert.Contains(t, outStr, "ph=curb-inject-DEMO_TOKEN-placeholder", "sandbox sees only the placeholder")
 	assert.NotContains(t, outStr, "integration-secret", "real secret must not enter the sandbox")
 
 	seen := rec.got("Authorization")
