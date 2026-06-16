@@ -21,40 +21,48 @@ func ValidateDomains(domains []string) error {
 }
 
 func validateDomain(d string) error {
+	return validateDomainPattern(d, "--domains")
+}
+
+// validateDomainPattern checks that d is a plausible domain pattern, attributing
+// any error to subject (a flag or context name) so the message matches how the
+// value was supplied — `--domains` for the flag, `injection host` for a
+// credential-injection target.
+func validateDomainPattern(d, subject string) error {
 	if d == "*" || d == "localhost" {
 		return nil
 	}
 
 	lower := strings.ToLower(d)
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return fmt.Errorf("--domains %q looks like a URL; use the bare domain instead (e.g. %q)", d, stripScheme(d))
+		return fmt.Errorf("%s %q looks like a URL; use the bare domain instead (e.g. %q)", subject, d, stripScheme(d))
 	}
 
 	if _, err := netip.ParseAddr(d); err == nil {
-		return fmt.Errorf("--domains %q is an IP address; use --ips instead", d)
+		return fmt.Errorf("%s %q is an IP address; use --ips instead", subject, d)
 	}
 	if _, err := netip.ParsePrefix(d); err == nil {
-		return fmt.Errorf("--domains %q is a CIDR range; use --ips instead", d)
+		return fmt.Errorf("%s %q is a CIDR range; use --ips instead", subject, d)
 	}
 
 	for _, r := range d {
 		if unicode.IsControl(r) || unicode.IsSpace(r) {
-			return fmt.Errorf("--domains %q contains invalid character (whitespace or control)", d)
+			return fmt.Errorf("%s %q contains invalid character (whitespace or control)", subject, d)
 		}
 		switch r {
 		case '/', '\\', ':', '@', '#', '?', '=':
-			return fmt.Errorf("--domains %q contains invalid character %q", d, string(r))
+			return fmt.Errorf("%s %q contains invalid character %q", subject, d, string(r))
 		}
 	}
 
 	// Wildcard validation: only "*" (handled above) or "*.suffix".
 	if strings.Contains(d, "*") {
 		if !strings.HasPrefix(d, "*.") {
-			return fmt.Errorf("--domains %q: wildcards must be * (match-all) or *.suffix", d)
+			return fmt.Errorf("%s %q: wildcards must be * (match-all) or *.suffix", subject, d)
 		}
 		suffix := d[2:]
 		if suffix == "" {
-			return fmt.Errorf("--domains %q: wildcard suffix must not be empty", d)
+			return fmt.Errorf("%s %q: wildcard suffix must not be empty", subject, d)
 		}
 	}
 
@@ -119,11 +127,11 @@ func parseInjectTarget(item string) (InjectTarget, error) {
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return InjectTarget{Host: addr.String(), Port: port, IsIP: true}, nil
 	}
-	if err := validateDomain(host); err != nil {
-		return InjectTarget{}, err
-	}
 	if strings.Contains(host, "*") {
-		return InjectTarget{}, fmt.Errorf("host %q must be an exact hostname (no wildcards)", host)
+		return InjectTarget{}, fmt.Errorf("injection host %q must be an exact hostname (no wildcards)", host)
+	}
+	if err := validateDomainPattern(host, "injection host"); err != nil {
+		return InjectTarget{}, err
 	}
 	return InjectTarget{Host: NormalizeHost(host), Port: port, IsIP: false}, nil
 }

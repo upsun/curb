@@ -237,6 +237,10 @@ func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs [
 // SOCKS5 egress routes; the caller has already accepted the connection (written
 // the CONNECT 200 or the SOCKS5 success reply).
 func (in *Injector) Serve(client net.Conn, host, port string, injs []Injection) error {
+	// The binding matched on a normalized host (case-folded, no trailing dot,
+	// canonical IP); mint the leaf and route upstream on the same form so the
+	// cert, SNI, and Host header all agree.
+	host = normalizeHost(host)
 	leaf, err := in.CA.leafFor(host)
 	if err != nil {
 		return fmt.Errorf("leaf: %w", err)
