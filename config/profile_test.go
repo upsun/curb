@@ -123,7 +123,7 @@ func TestMergeProfiles(t *testing.T) {
 	assert.Contains(t, cfg.EnvPassthrough, "SSH_AUTH_SOCK")
 }
 
-func TestMergeProfiles_ClaudeSealsApiKey(t *testing.T) {
+func TestMergeProfiles_ClaudeInjectsApiKey(t *testing.T) {
 	cmd := newTestCmd(nil)
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)

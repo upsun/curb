@@ -28,7 +28,7 @@ type CA struct {
 	key     *ecdsa.PrivateKey
 	certPEM []byte
 
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	leaves map[string]*tls.Certificate
 }
 
@@ -71,13 +71,30 @@ func NewCA() (*CA, error) {
 func (ca *CA) CertPEM() []byte { return ca.certPEM }
 
 // leafFor returns a leaf certificate for host, signed by the CA. Leaves are
-// cached per host for the life of the run.
+// cached per host for the life of the run. Signing happens without the lock
+// held, so a cache hit for one host never blocks behind a sign for another.
 func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-	if c, ok := ca.leaves[host]; ok {
+	ca.mu.RLock()
+	c := ca.leaves[host]
+	ca.mu.RUnlock()
+	if c != nil {
 		return c, nil
 	}
+	leaf, err := ca.signLeaf(host)
+	if err != nil {
+		return nil, err
+	}
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	if existing := ca.leaves[host]; existing != nil {
+		return existing, nil // another goroutine won the race; reuse its leaf
+	}
+	ca.leaves[host] = leaf
+	return leaf, nil
+}
+
+// signLeaf mints a fresh leaf certificate for host. It holds no lock.
+func (ca *CA) signLeaf(host string) (*tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -104,9 +121,7 @@ func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	leaf := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leafCert}
-	ca.leaves[host] = leaf
-	return leaf, nil
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leafCert}, nil
 }
 
 // Injection is a credential bound to a destination host: on requests the proxy
@@ -155,6 +170,9 @@ func (in *Injector) Bind(host string, inj Injection) {
 }
 
 func (in *Injector) binding(host string) ([]Injection, bool) {
+	if in == nil {
+		return nil, false // nil-safe so callers need no separate guard
+	}
 	injs, ok := in.byHost[policy.NormalizeHost(host)]
 	return injs, ok
 }
@@ -179,29 +197,39 @@ func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs [
 		return
 	}
 
-	leaf, err := h.Injector.CA.leafFor(host)
-	if err != nil {
-		h.logEvent("proxy_inject", host, "error", "leaf: "+err.Error())
-		return
+	h.logEvent("proxy_inject", host, "allowed", "")
+	if err := h.Injector.Serve(clientConn, host, port, injs); err != nil {
+		h.logEvent("proxy_inject", host, "error", err.Error())
 	}
-	tlsConn := tls.Server(clientConn, &tls.Config{
+}
+
+// Serve terminates the client's TLS with a per-run leaf for host, then forwards
+// each decrypted request to the real upstream with the bound credential
+// injected. It is the shared injection path for both the HTTP CONNECT and the
+// SOCKS5 egress routes; the caller has already accepted the connection (written
+// the CONNECT 200 or the SOCKS5 success reply).
+func (in *Injector) Serve(client net.Conn, host, port string, injs []Injection) error {
+	leaf, err := in.CA.leafFor(host)
+	if err != nil {
+		return fmt.Errorf("leaf: %w", err)
+	}
+	tlsConn := tls.Server(client, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
 		MinVersion:   tls.VersionTLS12,
 	})
 	if err := tlsConn.Handshake(); err != nil {
-		h.logEvent("proxy_inject", host, "error", "tls handshake: "+err.Error())
-		return
+		return fmt.Errorf("tls handshake: %w", err)
 	}
 	defer func() { _ = tlsConn.Close() }()
 
-	h.logEvent("proxy_inject", host, "allowed", "")
-	h.serveInjected(tlsConn, host, port, injs)
+	in.serveInjected(tlsConn, host, port, injs)
+	return nil
 }
 
 // serveInjected reads requests off the decrypted client stream and forwards
 // each to the upstream with the bound credentials set, relaying the response.
-func (h *Handler) serveInjected(client net.Conn, host, port string, injs []Injection) {
-	rt := h.Injector.Upstream
+func (in *Injector) serveInjected(client net.Conn, host, port string, injs []Injection) {
+	rt := in.Upstream
 	// authority is the upstream the request is bound to. Drop the default
 	// https port so the Host header matches what a direct client would send.
 	authority := host
@@ -250,9 +278,7 @@ func replaceInHeaders(hdr http.Header, injs []Injection) {
 	for _, values := range hdr {
 		for i, v := range values {
 			for _, inj := range injs {
-				if inj.Placeholder != "" {
-					v = strings.ReplaceAll(v, inj.Placeholder, inj.Value)
-				}
+				v = strings.ReplaceAll(v, inj.Placeholder, inj.Value)
 			}
 			values[i] = v
 		}

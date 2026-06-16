@@ -47,11 +47,9 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 
 	// A bound host is TLS-terminated so the credential can be injected;
 	// everything else keeps the passthrough relay below.
-	if h.Injector != nil {
-		if injs, ok := h.Injector.binding(host); ok {
-			h.injectCONNECT(w, host, port, injs)
-			return
-		}
+	if injs, ok := h.Injector.binding(host); ok {
+		h.injectCONNECT(w, host, port, injs)
+		return
 	}
 
 	// Hijack the client connection.
@@ -98,6 +96,15 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.CheckTarget(host) {
 		http.Error(w, "curb: domain not allowed: "+host+" (see $CURB_SKILL_DIR/SKILL.md)", http.StatusForbidden)
 		h.logEvent("proxy_http", r.Host, "blocked", "domain")
+		return
+	}
+
+	// A credential is bound to this host but the request is plain HTTP. Refuse
+	// rather than forward: injecting over cleartext would expose the real
+	// credential, and forwarding the placeholder unchanged fails auth silently.
+	if _, ok := h.Injector.binding(host); ok {
+		http.Error(w, "curb: credential injection requires HTTPS for "+host, http.StatusBadGateway)
+		h.logEvent("proxy_http", r.Host, "blocked", "inject-requires-https")
 		return
 	}
 

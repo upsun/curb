@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -48,12 +49,10 @@ func (r *authRecorder) got(name string) []string {
 	return out
 }
 
-// injectTestProxy starts a curb proxy that allows the given hosts and applies
-// the configured placeholder substitutions, routing upstream to the local
-// recorders.
-func injectTestProxy(t *testing.T, ca *CA, bindings map[string][]Injection, upstreams map[string]*authRecorder) *url.URL {
-	t.Helper()
-
+// newTestInjector builds an injector for the given bindings whose upstream
+// reaches the local recorders instead of the real hosts, plus the set of
+// allowed hosts derived from the upstreams.
+func newTestInjector(ca *CA, bindings map[string][]Injection, upstreams map[string]*authRecorder) (*Injector, map[string]bool) {
 	allowed := map[string]bool{}
 	dialMap := map[string]*authRecorder{}
 	for host, rec := range upstreams {
@@ -89,7 +88,16 @@ func injectTestProxy(t *testing.T, ca *CA, bindings map[string][]Injection, upst
 			return tc, nil
 		},
 	}
+	return injector, allowed
+}
 
+// injectTestProxy starts a curb proxy that allows the given hosts and applies
+// the configured placeholder substitutions, routing upstream to the local
+// recorders.
+func injectTestProxy(t *testing.T, ca *CA, bindings map[string][]Injection, upstreams map[string]*authRecorder) *url.URL {
+	t.Helper()
+
+	injector, allowed := newTestInjector(ca, bindings, upstreams)
 	handler := &Handler{
 		FilterBase: FilterBase{DomainCheck: func(h string) bool { return allowed[h] }},
 		Injector:   injector,
@@ -251,6 +259,105 @@ func TestInjector_BindsCredentialToDestination(t *testing.T) {
 	// unsubstituted — github's real token never reaches another host.
 	assert.Equal(t, "Bearer GH_PH", other.got("Authorization")[0])
 	assert.NotContains(t, other.got("Authorization")[0], "ghs_realtoken")
+}
+
+// TestInjector_RefusesPlainHTTP confirms a bound host reached over plain HTTP
+// is refused, not forwarded: the credential must never go out over cleartext.
+func TestInjector_RefusesPlainHTTP(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	gh := newAuthRecorder(t)
+	injector, allowed := newTestInjector(ca,
+		map[string][]Injection{"api.github.com": {{Placeholder: "GH_PH", Value: "ghs_realtoken"}}},
+		map[string]*authRecorder{"api.github.com": gh},
+	)
+	handler := &Handler{
+		FilterBase: FilterBase{DomainCheck: func(h string) bool { return allowed[h] }},
+		Injector:   injector,
+	}
+	proxySrv := httptest.NewServer(handler)
+	t.Cleanup(proxySrv.Close)
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err)
+
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	resp, err := client.Get("http://api.github.com/user")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "requires HTTPS")
+	// The request never reached an upstream.
+	assert.Equal(t, 0, gh.count())
+}
+
+// TestSOCKS5Server_Injects confirms the SOCKS5 egress path injects credentials
+// for a bound host, matching the HTTP CONNECT path. A socks5h client sends the
+// hostname, so the binding matches and TLS is terminated.
+func TestSOCKS5Server_Injects(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	gh := newAuthRecorder(t)
+	injector, allowed := newTestInjector(ca,
+		map[string][]Injection{"api.github.com": {{Placeholder: "GH_PH", Value: "ghs_realtoken"}}},
+		map[string]*authRecorder{"api.github.com": gh},
+	)
+	srv := &SOCKS5Server{
+		FilterBase: FilterBase{DomainCheck: func(h string) bool { return allowed[h] }},
+		Injector:   injector,
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+	go func() { _ = srv.Serve(ln) }()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	// SOCKS5 no-auth handshake.
+	_, err = conn.Write([]byte{0x05, 0x01, 0x00})
+	require.NoError(t, err)
+	reply := make([]byte, 2)
+	_, err = io.ReadFull(conn, reply)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x05, 0x00}, reply)
+
+	// CONNECT api.github.com:443 by name (socks5h).
+	host := "api.github.com"
+	req := []byte{0x05, 0x01, 0x00, 0x03, byte(len(host))}
+	req = append(req, []byte(host)...)
+	req = append(req, byte(443>>8), byte(443&0xff))
+	_, err = conn.Write(req)
+	require.NoError(t, err)
+	repHeader := make([]byte, 10)
+	_, err = io.ReadFull(conn, repHeader)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x00), repHeader[1], "expected success reply")
+
+	// The proxy now terminates TLS with the per-run CA; send a request carrying
+	// the placeholder and confirm the upstream sees the real credential.
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca.CertPEM())
+	tc := tls.Client(conn, &tls.Config{RootCAs: pool, ServerName: host, MinVersion: tls.VersionTLS12})
+	require.NoError(t, tc.Handshake())
+
+	httpReq, err := http.NewRequest(http.MethodGet, "https://api.github.com/user", nil)
+	require.NoError(t, err)
+	httpReq.Header.Set("Authorization", "Bearer GH_PH")
+	require.NoError(t, httpReq.Write(tc))
+
+	resp, err := http.ReadResponse(bufio.NewReader(tc), httpReq)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Equal(t, 1, gh.count())
+	assert.Equal(t, "Bearer ghs_realtoken", gh.got("Authorization")[0])
 }
 
 // TestInjector_LeavesOtherHeadersUntouched confirms only the placeholder is

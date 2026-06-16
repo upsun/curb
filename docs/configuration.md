@@ -239,8 +239,14 @@ host* the sandbox sees only the placeholder and the proxy substitutes the real
 key in whichever header Claude Code sends (`x-api-key` or, for OAuth,
 `Authorization`). With no host key set it is a no-op and OAuth/subscription auth
 works unchanged. On first run Claude Code may prompt once to approve the
-placeholder as a custom key. A custom `ANTHROPIC_BASE_URL` is not covered
-(injection targets `api.anthropic.com`).
+placeholder as a custom key.
+
+The profile binding targets `api.anthropic.com`, so a custom `ANTHROPIC_BASE_URL`
+(an internal gateway) is not covered: the gateway would receive the placeholder
+and auth would fail. For a gateway, either bind the key to its host as well —
+`--inject-header ANTHROPIC_API_KEY=gateway.example.com` (bindings accumulate, so
+both hosts inject) — or, if the gateway is trusted, pass the key through with
+`--env ANTHROPIC_API_KEY`.
 
 The flag is repeatable (bindings accumulate). For active bindings, curb
 generates a combined CA bundle (system roots plus the per-run CA) and points the
@@ -253,6 +259,13 @@ negotiate HTTP/2 (no `h2` ALPN). An HTTP/2-only client or protocol — some gRPC
 setups, for example — may fail against a host with injection enabled. Hosts
 without an injection binding keep the untouched passthrough relay and are
 unaffected.
+
+Injection requires HTTPS. A request to a bound host over plain HTTP is refused
+(injecting over cleartext would expose the credential), so a binding host should
+be one the client reaches over TLS. Injection applies on both the HTTPS proxy
+and the SOCKS5 path (used by tools that route via `ALL_PROXY`), as long as the
+client sends the hostname (`socks5h`, which curb advertises) rather than a
+pre-resolved IP.
 
 It is also settable via the `CURB_INJECT_HEADER` environment variable
 (comma-separated) and the `inject-header:` config-file/profile key, merged

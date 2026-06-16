@@ -36,6 +36,9 @@ const (
 // SOCKS5Server handles SOCKS5 CONNECT requests with domain/IP filtering.
 type SOCKS5Server struct {
 	FilterBase
+	// Injector, when set, terminates TLS and injects a bound credential for
+	// hosts it has a binding for. Hosts without a binding are relayed as-is.
+	Injector *Injector
 }
 
 // Serve accepts connections from ln and handles each in a goroutine.
@@ -104,8 +107,22 @@ func (s *SOCKS5Server) HandleConn(conn net.Conn) {
 		return
 	}
 
-	// 4. Dial the destination.
+	// 4. A bound host is TLS-terminated so the credential can be injected,
+	// matching the HTTP CONNECT path; everything else is relayed below. The
+	// binding matches on hostname, so this only fires for socks5h clients that
+	// send a name (curb advertises socks5h://). Address resolved to an IP by a
+	// socks5 client falls through to the raw relay.
 	target := net.JoinHostPort(host, port)
+	if injs, ok := s.Injector.binding(host); ok {
+		s.sendReply(conn, socks5RepSuccess)
+		s.logEvent("socks5_inject", target, "allowed", "")
+		if err := s.Injector.Serve(conn, host, port, injs); err != nil {
+			s.logEvent("socks5_inject", target, "error", err.Error())
+		}
+		return
+	}
+
+	// 5. Dial the destination.
 	remote, err := s.getDialer().Dial("tcp", target)
 	if err != nil {
 		s.sendReply(conn, socks5RepHostUnreachable)
@@ -114,11 +131,11 @@ func (s *SOCKS5Server) HandleConn(conn net.Conn) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	// 5. Success reply.
+	// 6. Success reply.
 	s.sendReply(conn, socks5RepSuccess)
 	s.logEvent("socks5_connect", target, "allowed", "")
 
-	// 6. Relay.
+	// 7. Relay.
 	relay(conn, remote)
 }
 

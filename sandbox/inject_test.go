@@ -104,12 +104,12 @@ func TestWriteCABundle(t *testing.T) {
 	if systemCABundle() == "" {
 		// Without system roots, the bundle would override TLS trust with an
 		// incomplete set, so injection fails rather than break other hosts.
-		_, err := writeCABundle(dir, caPEM)
+		_, err := writeCABundle(dir, "", caPEM)
 		require.Error(t, err)
 		return
 	}
 
-	path, err := writeCABundle(dir, caPEM)
+	path, err := writeCABundle(dir, "", caPEM)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, "ca-bundle.pem"), path)
 
@@ -118,4 +118,20 @@ func TestWriteCABundle(t *testing.T) {
 	// The per-run CA is appended after the system roots.
 	assert.Contains(t, string(data), "PERRUNCA")
 	assert.Greater(t, len(data), len(caPEM), "combined bundle should include system roots")
+}
+
+func TestWriteCABundle_ExtendsUserBase(t *testing.T) {
+	dir := t.TempDir()
+	caPEM := []byte("-----BEGIN CERTIFICATE-----\nPERRUNCA\n-----END CERTIFICATE-----\n")
+	base := filepath.Join(dir, "custom-roots.pem")
+	require.NoError(t, os.WriteFile(base, []byte("-----BEGIN CERTIFICATE-----\nCUSTOMROOT\n-----END CERTIFICATE-----\n"), 0o644))
+
+	path, err := writeCABundle(dir, base, caPEM)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	// A user-provided base is extended, not discarded.
+	assert.Contains(t, string(data), "CUSTOMROOT")
+	assert.Contains(t, string(data), "PERRUNCA")
 }

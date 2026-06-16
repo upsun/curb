@@ -84,7 +84,7 @@ func ParseInjectHeader(entry string) (envVar, host string, err error) {
 		return "", "", fmt.Errorf("must be ENV_VAR=HOST, got %q", entry)
 	}
 	if !ValidEnvName(envVar) {
-		return "", "", fmt.Errorf("env var name %q is not a valid environment variable name", envVar)
+		return "", "", fmt.Errorf("%q is not a valid environment variable name", envVar)
 	}
 	host, err = ValidateInjectHost(host)
 	if err != nil {

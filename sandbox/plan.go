@@ -666,8 +666,10 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 
 	// Trust-store delivery: a combined bundle (system roots + per-run CA) the
 	// action trusts for the proxy's leaf certs. The CA validates only inside
-	// this run, so it is not sensitive to the action.
-	bundle, err := writeCABundle(plan.TempDir, ca.CertPEM())
+	// this run, so it is not sensitive to the action. A user-provided
+	// SSL_CERT_FILE is used as the base (extended, not discarded) so a custom
+	// trust store still applies to non-injected hosts.
+	bundle, err := writeCABundle(plan.TempDir, plan.EnvSet["SSL_CERT_FILE"], ca.CertPEM())
 	if err != nil {
 		return err
 	}
@@ -678,19 +680,23 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	return nil
 }
 
-// writeCABundle writes a PEM bundle of the system roots plus the per-run CA to
-// the temp dir and returns its path. It fails if the system roots cannot be
-// located or read: this bundle replaces the sandbox's TLS trust (SSL_CERT_FILE
-// etc.), so a bundle holding only the per-run CA would break trust for every
-// HTTPS destination other than the injected hosts.
-func writeCABundle(tmpDir string, caPEM []byte) (string, error) {
-	sys := systemCABundle()
-	if sys == "" {
+// writeCABundle writes a PEM bundle of the base roots plus the per-run CA to
+// the temp dir and returns its path. base is the trust store to extend (a
+// user-provided SSL_CERT_FILE); when empty it falls back to the system roots.
+// It fails if the base roots cannot be located or read: this bundle replaces
+// the sandbox's TLS trust (SSL_CERT_FILE etc.), so a bundle holding only the
+// per-run CA would break trust for every HTTPS destination other than the
+// injected hosts.
+func writeCABundle(tmpDir, base string, caPEM []byte) (string, error) {
+	if base == "" {
+		base = systemCABundle()
+	}
+	if base == "" {
 		return "", fmt.Errorf("credential injection: no system CA bundle found; cannot deliver TLS trust to the sandbox without overriding it")
 	}
-	buf, err := os.ReadFile(sys)
+	buf, err := os.ReadFile(base)
 	if err != nil {
-		return "", fmt.Errorf("credential injection: reading system CA bundle %s: %w", sys, err)
+		return "", fmt.Errorf("credential injection: reading CA bundle %s: %w", base, err)
 	}
 	if len(buf) > 0 && buf[len(buf)-1] != '\n' {
 		buf = append(buf, '\n')
