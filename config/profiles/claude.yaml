@@ -47,7 +47,7 @@ exec:
 # Keep ANTHROPIC_API_KEY out of the sandbox: the proxy injects it into requests
 # to api.anthropic.com. Skipped when the host key is unset (OAuth users).
 inject-header:
-  - ANTHROPIC_API_KEY=api.anthropic.com
+  - ANTHROPIC_API_KEY:api.anthropic.com
 env:
   - HOME
   - SHELL

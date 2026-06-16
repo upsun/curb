@@ -28,7 +28,7 @@ Use -- before the command when it has its own flags.`,
   curb -p node -w . -- npm install                          # profile + writable cwd
   curb -a cargo build                                       # auto-select profile
   curb --dry-run -p node -- npm install                     # preview sandbox plan
-  curb --domains api.github.com --inject-header GH_TOKEN=api.github.com -- gh pr list  # inject a token, kept out of the sandbox`,
+  curb --domains api.github.com --inject-header GH_TOKEN:api.github.com -- gh pr list  # inject a token, kept out of the sandbox`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -330,7 +330,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("ips", nil, "allowed IP/CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16)")
 	f.Bool("unrestricted-net", false, "skip network restrictions entirely")
 	f.Bool("host-loopback", false, "forward localhost traffic to host loopback")
-	f.StringSlice("inject-header", nil, "inject ENV_VAR's value as a credential to an allowed HOST, kept out of the sandbox (ENV_VAR=HOST; TLS terminated for HOST; skipped if ENV_VAR is unset)")
+	f.StringSlice("inject-header", nil, "inject ENV_VAR's value as a credential to allowed destinations, kept out of the sandbox (ENV_VAR:HOST[:PORT][,HOST...]; HOST is a hostname or IP, PORT defaults to 443; TLS terminated; skipped if ENV_VAR is unset)")
 
 	// Executables.
 	f.StringSlice("exec", nil, "allowed executables (default: invoked command only)")

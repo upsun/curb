@@ -2,7 +2,9 @@ package policy
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -59,38 +61,112 @@ func validateDomain(d string) error {
 	return nil
 }
 
-// ValidateInjectHost validates a credential-injection host and returns it
-// normalized (lowercase, no trailing dot). Unlike a --domains pattern, an
-// injection host must be an exact hostname: a wildcard cannot identify the
-// single destination a credential belongs to, and "*" would broaden the
-// allowlist to every domain while never matching a binding at runtime.
-func ValidateInjectHost(host string) (string, error) {
-	if err := validateDomain(host); err != nil {
-		return "", err
-	}
-	if strings.Contains(host, "*") {
-		return "", fmt.Errorf("host %q must be an exact hostname (no wildcards)", host)
-	}
-	return NormalizeHost(host), nil
+// InjectTarget is one destination a credential is bound to: a hostname or IP
+// literal plus the TLS port (default 443). The proxy injects the credential
+// only for a connection matching both Host and Port, so the credential's
+// destination is exact.
+type InjectTarget struct {
+	Host string // normalized hostname, or canonical IP literal
+	Port string // numeric port, "443" by default
+	IsIP bool   // Host is an IP literal (authorized via --ips, not --domains)
 }
 
-// ParseInjectHeader parses one credential-injection binding "ENV_VAR=HOST",
-// returning the env var name and the normalized host. The binding is var-first
+// ParseInjectHeader parses one credential-injection binding
+// "ENV_VAR:TARGET[,TARGET...]", where each TARGET is HOST[:PORT] and HOST is a
+// hostname or IP literal (PORT defaults to 443). The binding is var-first
 // because a credential belongs to its variable and may be valid for more than
-// one host. Callers wrap the error with their own flag/field prefix.
-func ParseInjectHeader(entry string) (envVar, host string, err error) {
-	envVar, host, ok := strings.Cut(entry, "=")
-	if !ok || envVar == "" || host == "" {
-		return "", "", fmt.Errorf("must be ENV_VAR=HOST, got %q", entry)
+// one destination. Splitting on the first ":" is unambiguous because an env var
+// name can never contain one. Callers wrap the error with their own prefix.
+func ParseInjectHeader(entry string) (envVar string, targets []InjectTarget, err error) {
+	envVar, rest, ok := strings.Cut(entry, ":")
+	if !ok || envVar == "" || rest == "" {
+		return "", nil, fmt.Errorf("must be ENV_VAR:HOST[,HOST...], got %q", entry)
 	}
 	if !ValidEnvName(envVar) {
-		return "", "", fmt.Errorf("%q is not a valid environment variable name", envVar)
+		return "", nil, fmt.Errorf("%q is not a valid environment variable name", envVar)
 	}
-	host, err = ValidateInjectHost(host)
-	if err != nil {
-		return "", "", err
+	for item := range strings.SplitSeq(rest, ",") {
+		t, err := parseInjectTarget(item)
+		if err != nil {
+			return "", nil, err
+		}
+		targets = append(targets, t)
 	}
-	return envVar, host, nil
+	return envVar, targets, nil
+}
+
+// parseInjectTarget parses one HOST[:PORT] target. HOST is a hostname or IP
+// literal; PORT defaults to 443. An IPv6 literal must be bracketed when a port
+// is present (net.SplitHostPort semantics); a bare IPv6 literal needs no
+// brackets. Unlike a --domains pattern, an injection host must be exact: a
+// wildcard cannot identify the single destination a credential belongs to.
+func parseInjectTarget(item string) (InjectTarget, error) {
+	if item == "" {
+		return InjectTarget{}, fmt.Errorf("empty injection target")
+	}
+	// A bare IP literal (no port): ParseAddr accepts an unbracketed IPv6
+	// address, which SplitHostPort below would reject.
+	if addr, err := netip.ParseAddr(item); err == nil {
+		return InjectTarget{Host: addr.String(), Port: "443", IsIP: true}, nil
+	}
+	host, port := item, "443"
+	if h, p, ok := splitInjectPort(item); ok {
+		if err := validatePort(p); err != nil {
+			return InjectTarget{}, fmt.Errorf("injection target %q: %w", item, err)
+		}
+		host, port = h, p
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return InjectTarget{Host: addr.String(), Port: port, IsIP: true}, nil
+	}
+	if err := validateDomain(host); err != nil {
+		return InjectTarget{}, err
+	}
+	if strings.Contains(host, "*") {
+		return InjectTarget{}, fmt.Errorf("host %q must be an exact hostname (no wildcards)", host)
+	}
+	return InjectTarget{Host: NormalizeHost(host), Port: port, IsIP: false}, nil
+}
+
+// splitInjectPort separates a custom port from a target, returning ok=false
+// when none is present so the default applies. A bracketed IPv6 literal uses
+// net.SplitHostPort; otherwise a port is the run of digits after a final colon,
+// so "https://x" or "host:bad" fall through to host validation (which gives a
+// clearer error than a bogus port would).
+func splitInjectPort(item string) (host, port string, ok bool) {
+	if strings.HasPrefix(item, "[") {
+		h, p, err := net.SplitHostPort(item)
+		if err != nil {
+			return "", "", false
+		}
+		return h, p, true
+	}
+	i := strings.LastIndexByte(item, ':')
+	if i < 0 || !isAllDigits(item[i+1:]) {
+		return "", "", false
+	}
+	return item[:i], item[i+1:], true
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// validatePort checks that p is a numeric TCP port in 1..65535.
+func validatePort(p string) error {
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("invalid port %q (want 1-65535)", p)
+	}
+	return nil
 }
 
 // ValidEnvName reports whether name is a valid environment variable name (a C

@@ -126,14 +126,14 @@ func TestMergeEnv_ListsAdditive(t *testing.T) {
 }
 
 func TestMergeEnv_InjectHeaderAdditive(t *testing.T) {
-	cmd := newTestCmd([]string{"--inject-header", "B=b.com"})
+	cmd := newTestCmd([]string{"--inject-header", "B:b.com"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_INJECT_HEADER", "A=a.com")
+	t.Setenv("CURB_INJECT_HEADER", "A:a.com")
 	MergeEnv(cfg, cmd)
 
-	assert.Equal(t, []string{"B=b.com", "A=a.com"}, cfg.InjectHeader)
+	assert.Equal(t, []string{"B:b.com", "A:a.com"}, cfg.InjectHeader)
 }
 
 func TestMergeEnv_CommaSeparatedList(t *testing.T) {

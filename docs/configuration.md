@@ -187,23 +187,36 @@ And passes through: `PATH`, `TERM`, `COLORTERM`, `NO_COLOR`, `LANG`, `LC_ALL`, `
 
 ## Credential injection
 
-`--inject-header ENV_VAR=HOST` keeps a credential out of the sandbox entirely.
-curb generates a stable placeholder for `ENV_VAR`, sets the sandbox's copy of
-`ENV_VAR` to that placeholder (so the process never sees the real value), and
-reads the real value from the *host's* `ENV_VAR`. Its proxy terminates TLS for
-`HOST`, presenting a per-run CA that the sandbox trusts, and replaces the
-placeholder with the real value wherever the client placed it among the request
-headers on the way to the real upstream. The credential is bound to `HOST`, so
-it is never attached to any other host the program connects to. `HOST` must be
-an exact hostname — wildcards are rejected, since they cannot identify the single
-destination a credential belongs to. The host is matched case-insensitively and a
-trailing dot is ignored.
+`--inject-header ENV_VAR:HOST[:PORT][,HOST...]` keeps a credential out of the
+sandbox entirely. curb generates a stable placeholder for `ENV_VAR`, sets the
+sandbox's copy of `ENV_VAR` to that placeholder (so the process never sees the
+real value), and reads the real value from the *host's* `ENV_VAR`. Its proxy
+terminates TLS for each destination, presenting a per-run CA that the sandbox
+trusts, and replaces the placeholder with the real value wherever the client
+placed it among the request headers on the way to the real upstream. The
+credential is bound to those destinations only, so it is never attached to any
+other host the program connects to.
+
+A destination is `HOST[:PORT]`, where `HOST` is a hostname or IP literal and
+`PORT` defaults to 443. The credential is injected only on the exact host:port —
+a connection to the same host on a different port is relayed unchanged, with no
+credential. A hostname must be exact: wildcards are rejected, since they cannot
+identify the single destination a credential belongs to. Hostnames are matched
+case-insensitively and a trailing dot is ignored. List several destinations,
+comma-separated, when one credential is valid for more than one host
+(`GH_TOKEN:api.github.com,uploads.github.com`). An IPv6 literal needs no
+brackets on its own but must be bracketed when a port follows
+(`TOK:[2001:db8::1]:8443`).
 
 The binding is written variable-first because a credential belongs to its
-variable and may be valid for more than one host; a comma-separated host list is
-a natural future extension. The left side is always an environment variable name
-— there is no literal form, because a literal would have no variable through
-which to deliver the placeholder into the sandbox.
+variable and may be valid for more than one destination. The left side is always
+an environment variable name — there is no literal form, because a literal would
+have no variable through which to deliver the placeholder into the sandbox.
+
+In a config file or profile, write a list item without a space after the colon
+(`- GH_TOKEN:api.github.com`): that is a plain YAML string. Writing
+`- GH_TOKEN: api.github.com` (with a space) makes YAML parse it as a mapping, and
+curb rejects it.
 
 Injection is **header-agnostic**: curb substitutes the placeholder in whatever
 header the client emits, so it needs no knowledge of the host's auth scheme. The
@@ -216,15 +229,16 @@ Injection is opt-in per credential: if `ENV_VAR` is unset or empty on the host,
 the binding is skipped silently (no error). This is what lets a profile carry an
 injection that simply does nothing when the credential is absent.
 
-An active injection binding does not grant network access by itself. `HOST` must
-also match the explicit domain allowlist from `--domains`, `CURB_DOMAINS`,
-config, or a profile. If the host credential is present but the host is not
-allowed, curb fails during planning instead of broadening the sandbox policy.
+An active injection binding does not grant network access by itself. Each
+destination must also be allowed: a hostname by `--domains` (`CURB_DOMAINS`,
+config, or a profile), an IP by `--ips`. If the credential is present but the
+destination is not allowed, curb fails during planning instead of broadening the
+sandbox policy.
 
 ```
 # Real value read from the host's $GH_TOKEN; the sandbox sees only a placeholder,
 # and gh sends it in whatever header it uses:
-GH_TOKEN=ghp_xxx curb --domains api.github.com --inject-header 'GH_TOKEN=api.github.com' -- gh api user
+GH_TOKEN=ghp_xxx curb --domains api.github.com --inject-header 'GH_TOKEN:api.github.com' -- gh api user
 ```
 
 The placeholder is constant per variable (e.g. `curb-inject-GH_TOKEN-placeholder`)
@@ -234,7 +248,7 @@ as Claude Code prompting to approve a custom API key) approves it once rather
 than on every run.
 
 The built-in **`claude`** profile does exactly this for Claude Code: it injects
-`ANTHROPIC_API_KEY=api.anthropic.com`, so *when `ANTHROPIC_API_KEY` is set on the
+`ANTHROPIC_API_KEY:api.anthropic.com`, so *when `ANTHROPIC_API_KEY` is set on the
 host* the sandbox sees only the placeholder and the proxy substitutes the real
 key in whichever header Claude Code sends (`x-api-key` or, for OAuth,
 `Authorization`). With no host key set it is a no-op and OAuth/subscription auth
@@ -244,7 +258,7 @@ placeholder as a custom key.
 The profile binding targets `api.anthropic.com`, so a custom `ANTHROPIC_BASE_URL`
 (an internal gateway) is not covered: the gateway would receive the placeholder
 and auth would fail. For a gateway, either bind the key to its host as well —
-`--inject-header ANTHROPIC_API_KEY=gateway.example.com` (bindings accumulate, so
+`--inject-header ANTHROPIC_API_KEY:gateway.example.com` (bindings accumulate, so
 both hosts inject) — or, if the gateway is trusted, pass the key through with
 `--env ANTHROPIC_API_KEY`.
 
@@ -276,7 +290,7 @@ is stored, never the token:
 ```yaml
 # .curb.yaml — the value is read from the host's $GH_TOKEN at run time, not committed.
 inject-header:
-  - GH_TOKEN=api.github.com
+  - GH_TOKEN:api.github.com
 ```
 
 ## HOME and tilde expansion

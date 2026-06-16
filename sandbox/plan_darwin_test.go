@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/upsun/curb/config"
+	"github.com/upsun/curb/policy"
 )
 
 func TestIsCoveredBySubpath(t *testing.T) {
@@ -87,7 +88,7 @@ func TestAddTerminfo_AlreadyCovered(t *testing.T) {
 func TestDarwinBuildPlan_InjectHeaderInactive(t *testing.T) {
 	t.Setenv("DARWIN_INJECT_TOKEN", "")
 	cfg := &config.Config{
-		InjectHeader: []string{"DARWIN_INJECT_TOKEN=api.example.com"},
+		InjectHeader: []string{"DARWIN_INJECT_TOKEN:api.example.com"},
 	}
 
 	plan, err := BuildPlan(cfg, &Capabilities{}, nil)
@@ -102,7 +103,7 @@ func TestDarwinBuildPlan_InjectHeaderInactive(t *testing.T) {
 func TestDarwinBuildPlan_InjectHeaderActiveRequiresAllowedDomain(t *testing.T) {
 	t.Setenv("DARWIN_INJECT_TOKEN", "secret")
 	cfg := &config.Config{
-		InjectHeader: []string{"DARWIN_INJECT_TOKEN=api.example.com"},
+		InjectHeader: []string{"DARWIN_INJECT_TOKEN:api.example.com"},
 	}
 
 	plan, err := BuildPlan(cfg, &Capabilities{}, nil)
@@ -118,7 +119,7 @@ func TestDarwinBuildPlan_InjectHeaderActive(t *testing.T) {
 	t.Setenv("DARWIN_INJECT_TOKEN", "secret")
 	cfg := &config.Config{
 		AllowedDomains: []string{"api.example.com"},
-		InjectHeader:   []string{"DARWIN_INJECT_TOKEN=api.example.com"},
+		InjectHeader:   []string{"DARWIN_INJECT_TOKEN:api.example.com"},
 	}
 
 	plan, err := BuildPlan(cfg, &Capabilities{}, nil)
@@ -128,6 +129,6 @@ func TestDarwinBuildPlan_InjectHeaderActive(t *testing.T) {
 	assert.True(t, plan.UseSeatbelt)
 	assert.True(t, plan.ProxyEnabled)
 	assert.NotNil(t, plan.CA)
-	assert.Contains(t, plan.InjectBindings, "api.example.com")
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
 	assert.Equal(t, injectPlaceholder("DARWIN_INJECT_TOKEN"), plan.EnvSet["DARWIN_INJECT_TOKEN"])
 }

@@ -27,9 +27,9 @@ func buildInjector(plan *SandboxPlan) *proxy.Injector {
 		return nil
 	}
 	inj := proxy.NewInjector(plan.CA)
-	for host, injections := range plan.InjectBindings {
+	for target, injections := range plan.InjectBindings {
 		for _, injection := range injections {
-			inj.Bind(host, injection)
+			inj.Bind(target.Host, target.Port, injection)
 		}
 	}
 	return inj

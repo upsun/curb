@@ -112,7 +112,7 @@ func (cf *ConfigFile) validate() error {
 	}
 	for i, e := range cf.InjectHeader {
 		if _, _, err := policy.ParseInjectHeader(e); err != nil {
-			return fmt.Errorf("inject-header[%d] %w", i, err)
+			return fmt.Errorf("inject-header[%d]: %w", i, err)
 		}
 	}
 	for _, pair := range [...]struct {

@@ -51,29 +51,48 @@ func TestValidateDomains(t *testing.T) {
 	}
 }
 
-func TestValidateInjectHost(t *testing.T) {
+func TestParseInjectHeader(t *testing.T) {
 	tests := []struct {
-		name    string
-		host    string
-		want    string
-		wantErr string
+		name        string
+		entry       string
+		wantEnv     string
+		wantTargets []InjectTarget
+		wantErr     string
 	}{
-		{"exact host", "api.github.com", "api.github.com", ""},
-		{"lowercased", "API.GitHub.COM", "api.github.com", ""},
-		{"trailing dot trimmed", "api.github.com.", "api.github.com", ""},
-		{"both", "API.GitHub.COM.", "api.github.com", ""},
+		{"exact host", "TOK:api.github.com", "TOK",
+			[]InjectTarget{{Host: "api.github.com", Port: "443"}}, ""},
+		{"normalized host", "TOK:API.GitHub.COM.", "TOK",
+			[]InjectTarget{{Host: "api.github.com", Port: "443"}}, ""},
+		{"custom port", "TOK:api.example.com:8443", "TOK",
+			[]InjectTarget{{Host: "api.example.com", Port: "8443"}}, ""},
+		{"host list", "TOK:a.example.com,b.example.com:8443", "TOK",
+			[]InjectTarget{{Host: "a.example.com", Port: "443"}, {Host: "b.example.com", Port: "8443"}}, ""},
+		{"ipv4", "TOK:10.0.0.5", "TOK",
+			[]InjectTarget{{Host: "10.0.0.5", Port: "443", IsIP: true}}, ""},
+		{"ipv4 with port", "TOK:10.0.0.5:8443", "TOK",
+			[]InjectTarget{{Host: "10.0.0.5", Port: "8443", IsIP: true}}, ""},
+		{"bare ipv6", "TOK:2001:db8::1", "TOK",
+			[]InjectTarget{{Host: "2001:db8::1", Port: "443", IsIP: true}}, ""},
+		{"bracketed ipv6 with port", "TOK:[2001:db8::1]:8443", "TOK",
+			[]InjectTarget{{Host: "2001:db8::1", Port: "8443", IsIP: true}}, ""},
 
-		{"reject match-all", "*", "", "exact hostname"},
-		{"reject wildcard", "*.github.com", "", "exact hostname"},
-		{"reject URL", "https://api.github.com", "", "looks like a URL"},
-		{"reject IP", "10.0.0.1", "", "use --ips instead"},
+		{"reject no colon", "TOK", "", nil, "ENV_VAR:HOST"},
+		{"reject empty host", "TOK:", "", nil, "ENV_VAR:HOST"},
+		{"reject bad env name", "TO-K:api.github.com", "", nil, "valid environment variable"},
+		{"reject match-all", "TOK:*", "", nil, "exact hostname"},
+		{"reject wildcard", "TOK:*.github.com", "", nil, "exact hostname"},
+		{"reject URL", "TOK:https://api.github.com", "", nil, "looks like a URL"},
+		{"reject bad port", "TOK:api.example.com:0", "", nil, "invalid port"},
+		{"reject huge port", "TOK:api.example.com:99999", "", nil, "invalid port"},
+		{"reject empty target in list", "TOK:a.example.com,", "", nil, "empty injection target"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ValidateInjectHost(tt.host)
+			env, targets, err := ParseInjectHeader(tt.entry)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
-				assert.Equal(t, tt.want, got)
+				assert.Equal(t, tt.wantEnv, env)
+				assert.Equal(t, tt.wantTargets, targets)
 			} else {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)

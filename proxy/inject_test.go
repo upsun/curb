@@ -63,7 +63,7 @@ func newTestInjector(ca *CA, bindings map[string][]Injection, upstreams map[stri
 	injector := NewInjector(ca)
 	for host, injs := range bindings {
 		for _, inj := range injs {
-			injector.Bind(host, inj)
+			injector.Bind(host, "443", inj)
 		}
 	}
 	// Reach the local recorders instead of the real hosts, trusting each
@@ -151,19 +151,25 @@ func getWithHeader(t *testing.T, client *http.Client, rawURL, name, value string
 }
 
 // TestInjector_BindingNormalizesHost confirms bindings match CONNECT targets
-// regardless of case or a trailing dot.
+// regardless of case or a trailing dot, and only on the bound port.
 func TestInjector_BindingNormalizesHost(t *testing.T) {
-	in := &Injector{byHost: map[string][]Injection{}}
-	in.Bind("API.GitHub.COM.", Injection{Placeholder: "PH", Value: "real"})
+	in := NewInjector(nil)
+	in.Bind("API.GitHub.COM.", "443", Injection{Placeholder: "PH", Value: "real"})
 
 	for _, host := range []string{"api.github.com", "API.GITHUB.COM", "api.github.com.", "Api.GitHub.Com."} {
-		injs, ok := in.binding(host)
+		injs, ok := in.binding(host, "443")
 		require.True(t, ok, "expected binding to match %q", host)
 		assert.Equal(t, "real", injs[0].Value)
+		assert.True(t, in.hasHost(host), "hasHost should match %q", host)
 	}
 
-	_, ok := in.binding("other.com")
+	// A credential bound to :443 must not match a different port.
+	_, ok := in.binding("api.github.com", "8443")
+	assert.False(t, ok, "binding must not match a non-bound port")
+
+	_, ok = in.binding("other.com", "443")
 	assert.False(t, ok)
+	assert.False(t, in.hasHost("other.com"))
 }
 
 // TestInjector_SetsHostHeader confirms the upstream request's Host header is

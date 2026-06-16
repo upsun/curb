@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -133,10 +134,11 @@ type Injection struct {
 	Value       string
 }
 
-// Injector terminates TLS for bound hosts and injects their credentials. A host
-// without a binding is not terminated — the Handler relays it as passthrough,
-// so a credential is never stapled to a destination it was not provisioned for
-// (the central correctness property).
+// Injector terminates TLS for bound destinations and injects their credentials.
+// A destination without a binding is not terminated — the Handler relays it as
+// passthrough, so a credential is never stapled to a destination it was not
+// provisioned for (the central correctness property). Bindings are keyed by
+// host:port: the credential is injected only when both match.
 type Injector struct {
 	CA *CA
 	// Upstream round-trips the decrypted, credential-injected request to the
@@ -144,7 +146,8 @@ type Injector struct {
 	// tests override it to reach local servers.
 	Upstream http.RoundTripper
 
-	byHost map[string][]Injection
+	byTarget   map[string][]Injection // key: net.JoinHostPort(host, port)
+	boundHosts map[string]struct{}    // host only, for the plain-HTTP refusal
 }
 
 // NewInjector creates an injector backed by the per-run CA. Its upstream
@@ -158,23 +161,48 @@ func NewInjector(ca *CA) *Injector {
 			TLSHandshakeTimeout: dialTimeout,
 			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 		},
-		byHost: map[string][]Injection{},
+		byTarget:   map[string][]Injection{},
+		boundHosts: map[string]struct{}{},
 	}
 }
 
-// Bind adds a header injection for a destination host. Multiple headers may be
-// bound to the same host.
-func (in *Injector) Bind(host string, inj Injection) {
-	host = policy.NormalizeHost(host)
-	in.byHost[host] = append(in.byHost[host], inj)
+// Bind adds a header injection for a destination host:port. Multiple headers
+// may be bound to the same target.
+func (in *Injector) Bind(host, port string, inj Injection) {
+	host = normalizeHost(host)
+	key := net.JoinHostPort(host, port)
+	in.byTarget[key] = append(in.byTarget[key], inj)
+	in.boundHosts[host] = struct{}{}
 }
 
-func (in *Injector) binding(host string) ([]Injection, bool) {
+// binding returns the injections bound to host:port, if any.
+func (in *Injector) binding(host, port string) ([]Injection, bool) {
 	if in == nil {
 		return nil, false // nil-safe so callers need no separate guard
 	}
-	injs, ok := in.byHost[policy.NormalizeHost(host)]
+	injs, ok := in.byTarget[net.JoinHostPort(normalizeHost(host), port)]
 	return injs, ok
+}
+
+// hasHost reports whether any binding exists for host on any port. The
+// plain-HTTP path uses it to refuse cleartext to a host that holds a
+// credential, regardless of the bound port.
+func (in *Injector) hasHost(host string) bool {
+	if in == nil {
+		return false
+	}
+	_, ok := in.boundHosts[normalizeHost(host)]
+	return ok
+}
+
+// normalizeHost canonicalizes a host for binding keys: an IP literal to its
+// canonical form, otherwise a lowercased hostname. The binding side and the
+// proxy lookup must agree, including when a client addresses an IP directly.
+func normalizeHost(host string) string {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.String()
+	}
+	return policy.NormalizeHost(host)
 }
 
 // injectCONNECT terminates the client's TLS with a per-run leaf for host,

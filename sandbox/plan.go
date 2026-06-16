@@ -5,6 +5,8 @@ import (
 	"io"
 	"maps"
 	"math/rand/v2"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,10 +111,10 @@ type SandboxPlan struct {
 	Logger           *clog.Logger
 
 	// Credential injection (parent-only; never serialized to the child).
-	// CA mints leaf certs for injected hosts; InjectBindings maps a host to
-	// the credential headers the proxy attaches to it.
+	// CA mints leaf certs for injected destinations; InjectBindings maps a
+	// destination to the credential headers the proxy attaches to it.
 	CA             *proxy.CA
-	InjectBindings map[string][]proxy.Injection
+	InjectBindings map[policy.InjectTarget][]proxy.Injection
 }
 
 // LandlockPaths returns the path sets for Landlock rule construction.
@@ -580,24 +582,51 @@ func appendUniq(s []string, v string) []string {
 }
 
 // injectSpec is a parsed injection binding: the sandbox sees envVar set to a
-// placeholder; the proxy replaces it with envVar's real host value in requests
-// to host, wherever the client placed it among the request headers.
+// placeholder; the proxy replaces it with envVar's real value in requests to
+// any of targets, wherever the client placed it among the request headers.
 type injectSpec struct {
-	envVar string
-	host   string
+	envVar  string
+	targets []policy.InjectTarget
 }
 
-// parseInjectHeader parses --inject-header "ENV_VAR=HOST" entries.
+// parseInjectHeader parses --inject-header "ENV_VAR:HOST[,HOST...]" entries.
 func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	var specs []injectSpec
 	for _, e := range entries {
-		envVar, host, err := policy.ParseInjectHeader(e)
+		envVar, targets, err := policy.ParseInjectHeader(e)
 		if err != nil {
 			return nil, fmt.Errorf("--inject-header %w", err)
 		}
-		specs = append(specs, injectSpec{envVar: envVar, host: host})
+		specs = append(specs, injectSpec{envVar: envVar, targets: targets})
 	}
 	return specs, nil
+}
+
+// displayInjectTarget formats an injection target for human output, dropping
+// the default :443 so the common case reads as a bare host.
+func displayInjectTarget(t policy.InjectTarget) string {
+	if t.Port == "443" {
+		return t.Host
+	}
+	return net.JoinHostPort(t.Host, t.Port)
+}
+
+// authorizeInjectTarget checks that an injection target is reachable under the
+// network policy: an IP target against --ips, a hostname target against
+// --domains. A credential must never be provisioned for a destination the
+// sandbox cannot otherwise reach.
+func authorizeInjectTarget(t policy.InjectTarget, domains *policy.DomainMatcher, ips *policy.IPMatcher) error {
+	if t.IsIP {
+		addr, err := netip.ParseAddr(t.Host)
+		if err == nil && ips.Match(addr) {
+			return nil
+		}
+		return fmt.Errorf("credential injection IP %q is not allowed; add --ips %s", t.Host, t.Host)
+	}
+	if domains.Match(t.Host) {
+		return nil
+	}
+	return fmt.Errorf("credential injection host %q is not allowed; add --domains %s", t.Host, t.Host)
 }
 
 // injectPlaceholder returns the sentinel the sandbox sees in place of a real
@@ -624,7 +653,9 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	if len(specs) == 0 {
 		return nil
 	}
-	bindings := make(map[string][]proxy.Injection, len(specs))
+	domainMatcher := policy.NewDomainMatcher(plan.AllowedDomains)
+	ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
+	bindings := make(map[policy.InjectTarget][]proxy.Injection, len(specs))
 	placeholders := make(map[string]string)
 	for _, s := range specs {
 		token, present := os.LookupEnv(s.envVar)
@@ -632,25 +663,19 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 			continue // source var absent — nothing to inject for this binding
 		}
 		placeholder := injectPlaceholder(s.envVar)
-		bindings[s.host] = append(bindings[s.host], proxy.Injection{Placeholder: placeholder, Value: token})
+		for _, t := range s.targets {
+			if err := authorizeInjectTarget(t, domainMatcher, ipMatcher); err != nil {
+				return err
+			}
+			bindings[t] = append(bindings[t], proxy.Injection{Placeholder: placeholder, Value: token})
+		}
 		placeholders[s.envVar] = placeholder
 	}
 	if len(bindings) == 0 {
 		return nil // nothing to inject (all source vars were absent)
 	}
-	matcher := policy.NewDomainMatcher(plan.AllowedDomains)
-	hosts := make([]string, 0, len(bindings))
-	for host := range bindings {
-		hosts = append(hosts, host)
-	}
-	sort.Strings(hosts)
-	for _, host := range hosts {
-		if !matcher.Match(host) {
-			return fmt.Errorf("credential injection host %q is not allowed; add --domains %s", host, host)
-		}
-	}
 	if !plan.ProxyEnabled {
-		return fmt.Errorf("credential injection requires the network proxy; allow the host with --domains and do not use --unrestricted-net")
+		return fmt.Errorf("credential injection requires the network proxy; allow the destination with --domains/--ips and do not use --unrestricted-net")
 	}
 	ca, err := proxy.NewCA()
 	if err != nil {
@@ -928,14 +953,14 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		}
 		ln("    blocked:    everything else")
 		if len(p.InjectBindings) > 0 {
-			hosts := make([]string, 0, len(p.InjectBindings))
-			for h := range p.InjectBindings {
-				hosts = append(hosts, h)
+			dests := make([]string, 0, len(p.InjectBindings))
+			for t := range p.InjectBindings {
+				dests = append(dests, displayInjectTarget(t))
 			}
-			sort.Strings(hosts)
+			sort.Strings(dests)
 			ln("    inject:     TLS terminated; the proxy replaces a placeholder with the real credential in request headers (the real token never enters the sandbox)")
-			for _, h := range hosts {
-				pr("      %s\n", h)
+			for _, d := range dests {
+				pr("      %s\n", d)
 			}
 			ln("    ca-trust:   per-run CA bundle in env (SSL_CERT_FILE, CURL_CA_BUNDLE, GIT_SSL_CAINFO, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS)")
 		}

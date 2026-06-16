@@ -47,7 +47,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 
 	// A bound host is TLS-terminated so the credential can be injected;
 	// everything else keeps the passthrough relay below.
-	if injs, ok := h.Injector.binding(host); ok {
+	if injs, ok := h.Injector.binding(host, port); ok {
 		h.injectCONNECT(w, host, port, injs)
 		return
 	}
@@ -102,7 +102,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// A credential is bound to this host but the request is plain HTTP. Refuse
 	// rather than forward: injecting over cleartext would expose the real
 	// credential, and forwarding the placeholder unchanged fails auth silently.
-	if _, ok := h.Injector.binding(host); ok {
+	if h.Injector.hasHost(host) {
 		http.Error(w, "curb: credential injection requires HTTPS for "+host, http.StatusBadGateway)
 		h.logEvent("proxy_http", r.Host, "blocked", "inject-requires-https")
 		return

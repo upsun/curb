@@ -113,7 +113,7 @@ only for approved hosts. The placeholder is 32 random bytes so it is long
 and unique enough not to collide with legitimate request content during
 that scan.
 
-**curb** has opt-in credential injection via `--inject-header ENV_VAR=HOST`.
+**curb** has opt-in credential injection via `--inject-header ENV_VAR:HOST`.
 The two tools' mechanisms have converged: the sandbox sees only a
 placeholder in `ENV_VAR`, never the real value; the proxy terminates TLS for
 `HOST` (presenting a per-run CA the sandbox trusts) and substitutes the
@@ -140,9 +140,10 @@ letting a tool that approves a custom credential (e.g. Claude Code) approve it
 once rather than every run. Both placeholders carry no secret weight — neither is
 the credential. Second, zerobox couples the secret to an env var name
 (`--secret KEY=VALUE`) and the host separately (`--secret-host KEY=hosts`); curb's
-single `ENV_VAR=HOST` does both — the env var both reads the real value on the
+single `ENV_VAR:HOST` does both — the env var both reads the real value on the
 host and carries the placeholder in the sandbox.
-Both put the variable first, leaving room for a credential to name several hosts.
+Both put the variable first; curb's right side is a comma-separated list of
+`HOST[:PORT]` destinations, so one credential can name several hosts.
 
 Both approaches prevent a compromised or malicious process from reading the
 real secret and exfiltrating it. The shared cost is TLS termination and CA
@@ -277,7 +278,7 @@ process from ever seeing real credentials. This is valuable for AI agent
 use cases where the agent needs to call authenticated APIs but should not
 be able to read or exfiltrate the actual tokens.
 
-curb now implements the same model: `--inject-header ENV_VAR=HOST` sets the
+curb now implements the same model: `--inject-header ENV_VAR:HOST` sets the
 sandbox's copy of the variable to a placeholder and has the proxy substitute the
 real value in request headers, header-agnostically. Unlike zerobox, TLS
 termination is confined to the named hosts rather than applied to all allowed

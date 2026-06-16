@@ -8,31 +8,39 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/upsun/curb/policy"
 )
 
 func TestParseInjectHeader(t *testing.T) {
-	specs, err := parseInjectHeader([]string{"ANTHROPIC_API_KEY=api.anthropic.com"})
+	specs, err := parseInjectHeader([]string{"ANTHROPIC_API_KEY:api.anthropic.com"})
 	require.NoError(t, err)
 	require.Len(t, specs, 1)
 	assert.Equal(t, "ANTHROPIC_API_KEY", specs[0].envVar)
-	assert.Equal(t, "api.anthropic.com", specs[0].host)
+	require.Len(t, specs[0].targets, 1)
+	assert.Equal(t, "api.anthropic.com", specs[0].targets[0].Host)
+	assert.Equal(t, "443", specs[0].targets[0].Port)
 
 	for _, bad := range []string{
-		"", "ANTHROPIC_API_KEY", "=h.com", "TOK=", // missing var or host
-		"1BAD=h.com",       // invalid env var name (leading digit)
-		"bad-var=h.com",    // invalid env var name (dash)
-		"T=*", "T=*.h.com", // wildcard hosts rejected
-		"TOK=not a host", // invalid host
-		"A=b.com=x",      // '=' in host (would bind a never-matching host)
+		"", "ANTHROPIC_API_KEY", ":h.com", "TOK:", // missing var or host
+		"1BAD:h.com",       // invalid env var name (leading digit)
+		"bad-var:h.com",    // invalid env var name (dash)
+		"T:*", "T:*.h.com", // wildcard hosts rejected
+		"TOK:not a host",          // invalid host
+		"TOK:h.com:0",             // invalid port
+		"TOK:h.com,",              // empty target in list
 	} {
 		_, err := parseInjectHeader([]string{bad})
 		assert.Error(t, err, "expected error for %q", bad)
 	}
 
-	// Hosts are normalized to lowercase with no trailing dot.
-	specs, err = parseInjectHeader([]string{"T=API.Anthropic.COM."})
+	// A list of targets with a mix of default and custom ports.
+	specs, err = parseInjectHeader([]string{"T:API.Anthropic.COM.,b.example.com:8443"})
 	require.NoError(t, err)
-	assert.Equal(t, "api.anthropic.com", specs[0].host)
+	require.Len(t, specs[0].targets, 2)
+	assert.Equal(t, "api.anthropic.com", specs[0].targets[0].Host)
+	assert.Equal(t, "b.example.com", specs[0].targets[1].Host)
+	assert.Equal(t, "8443", specs[0].targets[1].Port)
 }
 
 func TestInjectPlaceholder(t *testing.T) {
@@ -54,7 +62,7 @@ func TestResolveInjectSkippedDoesNotRequireAllowedDomain(t *testing.T) {
 		TempDir: t.TempDir(),
 		EnvSet:  map[string]string{},
 	}
-	specs := []injectSpec{{envVar: "SKIPPED_TOKEN", host: "api.example.com"}}
+	specs := []injectSpec{{envVar: "SKIPPED_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
 	require.NoError(t, resolveInject(plan, specs))
 	assert.Empty(t, plan.AllowedDomains)
@@ -69,7 +77,7 @@ func TestResolveInjectRequiresAllowedDomain(t *testing.T) {
 		EnvSet:       map[string]string{},
 		ProxyEnabled: true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", host: "api.example.com"}}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
 	err := resolveInject(plan, specs)
 	require.Error(t, err)
@@ -89,12 +97,41 @@ func TestResolveInjectAllowsWildcardDomain(t *testing.T) {
 		AllowedDomains: []string{"*.example.com"},
 		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", host: "api.example.com"}}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
 	require.NoError(t, resolveInject(plan, specs))
 	assert.NotNil(t, plan.CA)
-	assert.Contains(t, plan.InjectBindings, "api.example.com")
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
 	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
+}
+
+func TestResolveInjectIPTarget(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("ACTIVE_TOKEN", "secret")
+
+	// An IP target must be authorized via --ips, not --domains.
+	notAllowed := &SandboxPlan{
+		TempDir:      t.TempDir(),
+		EnvSet:       map[string]string{},
+		ProxyEnabled: true,
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "10.0.0.5", Port: "8443", IsIP: true}}}}
+	err := resolveInject(notAllowed, specs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `credential injection IP "10.0.0.5" is not allowed`)
+
+	// Allowed by --ips (CIDR), bound under host:port.
+	plan := &SandboxPlan{
+		TempDir:      t.TempDir(),
+		EnvSet:       map[string]string{},
+		AllowedIPs:   []string{"10.0.0.0/24"},
+		ProxyEnabled: true,
+	}
+	require.NoError(t, resolveInject(plan, specs))
+	assert.NotNil(t, plan.CA)
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "10.0.0.5", Port: "8443", IsIP: true})
 }
 
 func TestWriteCABundle(t *testing.T) {

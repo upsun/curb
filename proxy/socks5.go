@@ -107,13 +107,12 @@ func (s *SOCKS5Server) HandleConn(conn net.Conn) {
 		return
 	}
 
-	// 4. A bound host is TLS-terminated so the credential can be injected,
-	// matching the HTTP CONNECT path; everything else is relayed below. The
-	// binding matches on hostname, so this only fires for socks5h clients that
-	// send a name (curb advertises socks5h://). Address resolved to an IP by a
-	// socks5 client falls through to the raw relay.
+	// 4. A bound destination is TLS-terminated so the credential can be
+	// injected, matching the HTTP CONNECT path; everything else is relayed
+	// below. The binding matches on host:port — a name from a socks5h client
+	// (curb advertises socks5h://) or an IP literal when the target is an IP.
 	target := net.JoinHostPort(host, port)
-	if injs, ok := s.Injector.binding(host); ok {
+	if injs, ok := s.Injector.binding(host, port); ok {
 		s.sendReply(conn, socks5RepSuccess)
 		s.logEvent("socks5_inject", target, "allowed", "")
 		if err := s.Injector.Serve(conn, host, port, injs); err != nil {
