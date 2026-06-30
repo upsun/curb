@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,6 +149,37 @@ func getWithHeader(t *testing.T, client *http.Client, rawURL, name, value string
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return string(body)
+}
+
+func TestCA_CertificatesSupportLongSessions(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	now := time.Now()
+	assert.Greater(t, ca.cert.NotAfter.Sub(now), 7*24*time.Hour)
+
+	leaf, err := ca.leafFor("api.github.com")
+	require.NoError(t, err)
+	require.NotNil(t, leaf.Leaf)
+	assert.Greater(t, leaf.Leaf.NotAfter.Sub(now), 7*24*time.Hour)
+	assert.False(t, leaf.Leaf.NotAfter.After(ca.cert.NotAfter), "leaf must not outlive the CA")
+}
+
+func TestCA_LeafForRenewsExpiringCachedLeaf(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	first, err := ca.leafFor("api.github.com")
+	require.NoError(t, err)
+	require.NotNil(t, first.Leaf)
+
+	first.Leaf.NotAfter = time.Now().Add(leafRenewBefore / 2)
+	renewed, err := ca.leafFor("api.github.com")
+	require.NoError(t, err)
+
+	assert.NotSame(t, first, renewed)
+	assert.NotEqual(t, first.Certificate[0], renewed.Certificate[0])
+	assert.Greater(t, time.Until(renewed.Leaf.NotAfter), leafRenewBefore)
 }
 
 // TestInjector_BindingNormalizesHost confirms bindings match CONNECT targets

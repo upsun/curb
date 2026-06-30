@@ -21,6 +21,12 @@ import (
 	"github.com/upsun/curb/policy"
 )
 
+const (
+	caValidity      = 365 * 24 * time.Hour
+	leafValidity    = 30 * 24 * time.Hour
+	leafRenewBefore = 24 * time.Hour
+)
+
 // CA is a per-run certificate authority used to mint leaf certificates for the
 // hosts whose TLS the injecting proxy terminates. It is trusted only inside one
 // sandbox: even if the action reads the key, all it can do is MITM itself.
@@ -45,7 +51,7 @@ func NewCA() (*CA, error) {
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "curb per-run CA"},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(24 * time.Hour),
+		NotAfter:              now.Add(caValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -75,10 +81,11 @@ func (ca *CA) CertPEM() []byte { return ca.certPEM }
 // cached per host for the life of the run. Signing happens without the lock
 // held, so a cache hit for one host never blocks behind a sign for another.
 func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
+	now := time.Now()
 	ca.mu.RLock()
 	c := ca.leaves[host]
 	ca.mu.RUnlock()
-	if c != nil {
+	if c != nil && !leafNeedsRenewal(c, now) {
 		return c, nil
 	}
 	leaf, err := ca.signLeaf(host)
@@ -87,7 +94,7 @@ func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
 	}
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
-	if existing := ca.leaves[host]; existing != nil {
+	if existing := ca.leaves[host]; existing != nil && !leafNeedsRenewal(existing, now) {
 		return existing, nil // another goroutine won the race; reuse its leaf
 	}
 	ca.leaves[host] = leaf
@@ -101,11 +108,15 @@ func (ca *CA) signLeaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	now := time.Now()
+	notAfter := now.Add(leafValidity)
+	if notAfter.After(ca.cert.NotAfter) {
+		notAfter = ca.cert.NotAfter
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),
 		Subject:      pkix.Name{CommonName: host},
 		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(24 * time.Hour),
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -123,6 +134,10 @@ func (ca *CA) signLeaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leafCert}, nil
+}
+
+func leafNeedsRenewal(cert *tls.Certificate, now time.Time) bool {
+	return cert.Leaf == nil || !cert.Leaf.NotAfter.After(now.Add(leafRenewBefore))
 }
 
 // Injection is a credential bound to a destination host: on requests the proxy
