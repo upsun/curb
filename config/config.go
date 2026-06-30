@@ -69,7 +69,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	injectHeader, err := flags.GetStringSlice("inject-header")
+	injectHeader, err := flags.GetStringArray("inject-header")
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	// List values: always additive, with wildcard detection.
 	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_DOMAINS")
 	cfg.AllowedIPs = appendEnvList(cfg.AllowedIPs, "CURB_IPS")
-	cfg.InjectHeader = appendEnvList(cfg.InjectHeader, "CURB_INJECT_HEADER")
+	cfg.InjectHeader = appendEnvValue(cfg.InjectHeader, "CURB_INJECT_HEADER")
 
 	roEnv := appendEnvList(nil, "CURB_READ")
 	if containsStar(roEnv) {
@@ -253,6 +253,14 @@ func appendEnvList(existing []string, envKey string) []string {
 		return existing
 	}
 	return append(existing, SplitComma(val)...)
+}
+
+func appendEnvValue(existing []string, envKey string) []string {
+	val, ok := os.LookupEnv(envKey)
+	if !ok || val == "" {
+		return existing
+	}
+	return append(existing, val)
 }
 
 // SplitComma splits a comma-separated string, trimming whitespace and dropping empties.

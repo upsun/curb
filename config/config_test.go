@@ -22,7 +22,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("exec", nil, "")
 	f.StringSlice("env", nil, "")
 	f.StringSlice("ips", nil, "")
-	f.StringSlice("inject-header", nil, "")
+	f.StringArray("inject-header", nil, "")
 	f.Bool("unrestricted-net", false, "")
 	f.Bool("allow-unix-sockets", false, "")
 	f.Bool("host-loopback", false, "")
@@ -130,10 +130,18 @@ func TestMergeEnv_InjectHeaderAdditive(t *testing.T) {
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
-	t.Setenv("CURB_INJECT_HEADER", "A:a.com")
+	t.Setenv("CURB_INJECT_HEADER", "A:a.com,c.com")
 	MergeEnv(cfg, cmd)
 
-	assert.Equal(t, []string{"B:b.com", "A:a.com"}, cfg.InjectHeader)
+	assert.Equal(t, []string{"B:b.com", "A:a.com,c.com"}, cfg.InjectHeader)
+}
+
+func TestFromFlags_InjectHeaderPreservesTargetCommaList(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-header", "TOK:a.com,b.com"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"TOK:a.com,b.com"}, cfg.InjectHeader)
 }
 
 func TestMergeEnv_CommaSeparatedList(t *testing.T) {

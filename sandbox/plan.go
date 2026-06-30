@@ -602,6 +602,36 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	return specs, nil
 }
 
+func activeInjectSpecs(specs []injectSpec, exactPassthrough func(string) bool) []injectSpec {
+	active := make([]injectSpec, 0, len(specs))
+	for _, s := range specs {
+		token, present := os.LookupEnv(s.envVar)
+		if !present || token == "" {
+			continue
+		}
+		if exactPassthrough != nil && exactPassthrough(s.envVar) {
+			continue
+		}
+		active = append(active, s)
+	}
+	return active
+}
+
+func (p *SandboxPlan) hasExactEnvPassthrough(name string) bool {
+	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
+		return false
+	}
+	return slices.Contains(p.EnvPassthrough, name)
+}
+
+func configHasExactEnvPassthrough(cfg *config.Config, name string) bool {
+	if cfg.EnvPassthroughAll {
+		return false
+	}
+	adds, _, _ := config.ParseExclusions(cfg.EnvPassthrough)
+	return slices.Contains(adds, name)
+}
+
 // displayInjectTarget formats an injection target for human output, dropping
 // the default :443 so the common case reads as a bare host.
 func displayInjectTarget(t policy.InjectTarget) string {
@@ -653,15 +683,16 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	if len(specs) == 0 {
 		return nil
 	}
+	specs = activeInjectSpecs(specs, plan.hasExactEnvPassthrough)
+	if len(specs) == 0 {
+		return nil
+	}
 	domainMatcher := policy.NewDomainMatcher(plan.AllowedDomains)
 	ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
 	bindings := make(map[policy.InjectTarget][]proxy.Injection, len(specs))
 	placeholders := make(map[string]string)
 	for _, s := range specs {
-		token, present := os.LookupEnv(s.envVar)
-		if !present || token == "" {
-			continue // source var absent — nothing to inject for this binding
-		}
+		token, _ := os.LookupEnv(s.envVar)
 		placeholder := injectPlaceholder(s.envVar)
 		for _, t := range s.targets {
 			if err := authorizeInjectTarget(t, domainMatcher, ipMatcher); err != nil {
@@ -689,35 +720,51 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	// in even under --env '*'.
 	maps.Copy(plan.EnvSet, placeholders)
 
-	caBase := plan.EnvSet["SSL_CERT_FILE"]
-	if _, set := plan.EnvSet["SSL_CERT_FILE"]; !set {
-		caBase, _ = plan.passthroughEnvValue("SSL_CERT_FILE")
-	}
-
-	// Trust-store delivery: a combined bundle (system roots + per-run CA) the
-	// action trusts for the proxy's leaf certs. The CA validates only inside
-	// this run, so it is not sensitive to the action. A user-provided
-	// SSL_CERT_FILE is used as the base (extended, not discarded) so a custom
-	// trust store still applies to non-injected hosts.
-	bundle, err := writeCABundle(plan.TempDir, caBase, ca.CertPEM())
-	if err != nil {
-		return err
-	}
-	plan.ROFiles = appendUniq(plan.ROFiles, bundle)
-	for _, k := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+	// Trust-store delivery: each standard CA env var receives a bundle that
+	// extends its existing value, or system roots when unset. The CA validates
+	// only inside this run, so it is not sensitive to the action.
+	for _, k := range caBundleEnvKeys {
+		bundle, err := writeCABundleFile(plan.TempDir, caBundleFilename(k), plan.caBundleBase(k), ca.CertPEM())
+		if err != nil {
+			return err
+		}
+		plan.ROFiles = appendUniq(plan.ROFiles, bundle)
 		plan.EnvSet[k] = bundle
 	}
 	return nil
 }
 
+var caBundleEnvKeys = []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"}
+
+func (p *SandboxPlan) caBundleBase(name string) string {
+	if base := p.EnvSet[name]; base != "" {
+		return base
+	}
+	if base, _ := p.passthroughEnvValue(name); base != "" {
+		return base
+	}
+	return ""
+}
+
+func caBundleFilename(name string) string {
+	if name == "SSL_CERT_FILE" {
+		return "ca-bundle.pem"
+	}
+	return "ca-bundle-" + strings.ToLower(name) + ".pem"
+}
+
 // writeCABundle writes a PEM bundle of the base roots plus the per-run CA to
-// the temp dir and returns its path. base is the trust store to extend (a
-// user-provided SSL_CERT_FILE); when empty it falls back to the system roots.
+// the temp dir and returns its path. Base is the trust store to extend; when
+// empty it falls back to the system roots.
 // It fails if the base roots cannot be located or read: this bundle replaces
 // the sandbox's TLS trust (SSL_CERT_FILE etc.), so a bundle holding only the
 // per-run CA would break trust for every HTTPS destination other than the
 // injected hosts.
 func writeCABundle(tmpDir, base string, caPEM []byte) (string, error) {
+	return writeCABundleFile(tmpDir, "ca-bundle.pem", base, caPEM)
+}
+
+func writeCABundleFile(tmpDir, filename, base string, caPEM []byte) (string, error) {
 	if base == "" {
 		base = systemCABundle()
 	}
@@ -732,7 +779,7 @@ func writeCABundle(tmpDir, base string, caPEM []byte) (string, error) {
 		buf = append(buf, '\n')
 	}
 	buf = append(buf, caPEM...)
-	path := filepath.Join(tmpDir, "ca-bundle.pem")
+	path := filepath.Join(tmpDir, filename)
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		return "", fmt.Errorf("writing CA bundle: %w", err)
 	}
@@ -1441,7 +1488,13 @@ func resolveSymlinks(paths []string) []string {
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan := &SandboxPlan{Caps: caps}
 
-	if len(cfg.InjectHeader) > 0 {
+	injects, err := parseInjectHeader(cfg.InjectHeader)
+	if err != nil {
+		return nil, err
+	}
+	if len(activeInjectSpecs(injects, func(name string) bool {
+		return configHasExactEnvPassthrough(cfg, name)
+	})) > 0 {
 		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS")
 	}
 

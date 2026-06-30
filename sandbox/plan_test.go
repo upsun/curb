@@ -170,6 +170,32 @@ func TestBuildDegradedPlan_NoISandboxEnv(t *testing.T) {
 	assert.False(t, ok, "IS_SANDBOX should not be set for non-isolated platforms")
 }
 
+func TestBuildDegradedPlan_InactiveInjectHeaderAllowed(t *testing.T) {
+	t.Setenv("INACTIVE_TOKEN", "")
+	cfg := &config.Config{
+		InjectHeader:   []string{"INACTIVE_TOKEN:api.example.com"},
+		NoFSRestrict:   true,
+		NoExecRestrict: true,
+	}
+	plan, err := buildDegradedPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Empty(t, plan.InjectBindings)
+}
+
+func TestBuildDegradedPlan_ActiveInjectHeaderUnsupported(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	cfg := &config.Config{
+		InjectHeader:   []string{"ACTIVE_TOKEN:api.example.com"},
+		NoFSRestrict:   true,
+		NoExecRestrict: true,
+	}
+	_, err := buildDegradedPlan(cfg, minCaps())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credential injection (--inject-header) is only supported")
+}
+
 // --- BuildPlan ---
 
 func TestBuildPlan_NoLandlock_WithMountNS(t *testing.T) {

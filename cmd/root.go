@@ -330,7 +330,7 @@ func registerFlags(cmd *cobra.Command) {
 	f.StringSlice("ips", nil, "allowed IP/CIDR ranges (e.g. 10.0.0.1, 192.168.0.0/16)")
 	f.Bool("unrestricted-net", false, "skip network restrictions entirely")
 	f.Bool("host-loopback", false, "forward localhost traffic to host loopback")
-	f.StringSlice("inject-header", nil, "inject ENV_VAR's value as a credential to allowed destinations, kept out of the sandbox (ENV_VAR:HOST[:PORT][,HOST...]; HOST is a hostname or IP, PORT defaults to 443; TLS terminated; skipped if ENV_VAR is unset)")
+	f.StringArray("inject-header", nil, "inject ENV_VAR's value as a credential to allowed destinations, kept out of the sandbox (ENV_VAR:HOST[:PORT][,HOST...]; HOST is a hostname or IP, PORT defaults to 443; TLS terminated; skipped if ENV_VAR is unset)")
 
 	// Executables.
 	f.StringSlice("exec", nil, "allowed executables (default: invoked command only)")

@@ -259,14 +259,18 @@ The profile binding targets `api.anthropic.com`, so a custom `ANTHROPIC_BASE_URL
 (an internal gateway) is not covered: the gateway would receive the placeholder
 and auth would fail. For a gateway, either bind the key to its host as well —
 `--inject-header ANTHROPIC_API_KEY:gateway.example.com` (bindings accumulate, so
-both hosts inject) — or, if the gateway is trusted, pass the key through with
-`--env ANTHROPIC_API_KEY`.
+both hosts inject) — or, if the gateway is trusted, pass the key through with an
+exact `--env ANTHROPIC_API_KEY`. Exact passthrough is treated as an explicit
+trust decision and disables injection for that variable; wildcard passthrough
+such as `--env 'ANTHROPIC_*'` or `--env '*'` does not.
 
 The flag is repeatable (bindings accumulate). For active bindings, curb
-generates a combined CA bundle (system roots plus the per-run CA) and points the
-standard CA environment variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
-`GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) at it, so common
-tools trust the terminated connection while still reaching other hosts normally.
+extends each existing CA bundle from the standard CA environment variables
+(`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`,
+`NODE_EXTRA_CA_CERTS`) with the per-run CA and points that variable at the
+extended bundle. If a variable is unset, curb uses the system roots as its base.
+This lets common tools trust the terminated connection while preserving custom
+trust for other hosts.
 
 After terminating TLS, curb parses the decrypted stream as HTTP/1.1 and does not
 negotiate HTTP/2 (no `h2` ALPN). An HTTP/2-only client or protocol — some gRPC
@@ -281,8 +285,9 @@ and the SOCKS5 path (used by tools that route via `ALL_PROXY`), as long as the
 client sends the hostname (`socks5h`, which curb advertises) rather than a
 pre-resolved IP.
 
-It is also settable via the `CURB_INJECT_HEADER` environment variable
-(comma-separated) and the `inject-header:` config-file/profile key, merged
+It is also settable via the `CURB_INJECT_HEADER` environment variable, which
+holds one full `ENV_VAR:HOST[,HOST...]` binding. For multiple bindings, repeat
+the flag or use the `inject-header:` config-file/profile key. Values are merged
 additively like `domains`. The value is resolved at run time wherever the
 binding comes from, so prefer config files and profiles — only the variable name
 is stored, never the token:

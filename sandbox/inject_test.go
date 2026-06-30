@@ -105,6 +105,42 @@ func TestResolveInjectAllowsWildcardDomain(t *testing.T) {
 	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
 }
 
+func TestResolveInjectExactPassthroughSkipsInjection(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{"ACTIVE_TOKEN"},
+		ProxyEnabled:   true,
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+	require.NoError(t, resolveInject(plan, specs))
+	assert.Empty(t, plan.InjectBindings)
+	assert.Nil(t, plan.CA)
+	_, set := plan.EnvSet["ACTIVE_TOKEN"]
+	assert.False(t, set)
+}
+
+func TestResolveInjectWildcardPassthroughStillInjects(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{"ACTIVE_*"},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+	require.NoError(t, resolveInject(plan, specs))
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
+	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
+}
+
 func TestResolveInjectExtendsPassthroughSSL_CERT_FILE(t *testing.T) {
 	t.Setenv("ACTIVE_TOKEN", "secret")
 	dir := t.TempDir()
@@ -136,6 +172,37 @@ func TestResolveInjectExtendsPassthroughSSL_CERT_FILE(t *testing.T) {
 			assert.Contains(t, string(data), "CUSTOMROOT")
 		})
 	}
+}
+
+func TestResolveInjectExtendsEachExistingCABundleEnv(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	dir := t.TempDir()
+	curlBase := filepath.Join(dir, "curl-roots.pem")
+	requestsBase := filepath.Join(dir, "requests-roots.pem")
+	require.NoError(t, os.WriteFile(curlBase, []byte("-----BEGIN CERTIFICATE-----\nCURLROOT\n-----END CERTIFICATE-----\n"), 0o644))
+	require.NoError(t, os.WriteFile(requestsBase, []byte("-----BEGIN CERTIFICATE-----\nREQUESTSROOT\n-----END CERTIFICATE-----\n"), 0o644))
+	t.Setenv("REQUESTS_CA_BUNDLE", requestsBase)
+
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{"CURL_CA_BUNDLE": curlBase},
+		EnvPassthrough: []string{"REQUESTS_CA_BUNDLE"},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+	require.NoError(t, resolveInject(plan, specs))
+	curlData, err := os.ReadFile(plan.EnvSet["CURL_CA_BUNDLE"])
+	require.NoError(t, err)
+	assert.Contains(t, string(curlData), "CURLROOT")
+
+	requestsData, err := os.ReadFile(plan.EnvSet["REQUESTS_CA_BUNDLE"])
+	require.NoError(t, err)
+	assert.Contains(t, string(requestsData), "REQUESTSROOT")
+
+	_, err = os.Stat(plan.EnvSet["SSL_CERT_FILE"])
+	assert.NoError(t, err)
 }
 
 func TestResolveInjectIPTarget(t *testing.T) {
