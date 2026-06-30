@@ -215,6 +215,16 @@ func TestBuildPlan_AllProxyDefaultAndOverride(t *testing.T) {
 	assert.Empty(t, allProxy, "user-provided empty ALL_PROXY must be preserved")
 	assert.Empty(t, plan.EnvSet["all_proxy"])
 	assert.NotEmpty(t, plan.EnvSet[SOCKSAddrEnvKey], "curb's SOCKS address var is unaffected")
+
+	cfg = &config.Config{
+		AllowedDomains: []string{"example.com"},
+		EnvSet:         []string{"ALL_PROXY="},
+	}
+	plan, err = BuildPlan(cfg, minCaps(), nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	assert.Empty(t, plan.EnvSet["ALL_PROXY"], "user-provided ALL_PROXY must be preserved")
+	assert.Empty(t, plan.EnvSet["all_proxy"], "ALL_PROXY suppression must apply to both casings")
 }
 
 func TestBuildPlan_NoExecRestrict(t *testing.T) {

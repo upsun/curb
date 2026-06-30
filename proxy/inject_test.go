@@ -190,6 +190,12 @@ func TestInjector_SetsHostHeader(t *testing.T) {
 	assert.Equal(t, "api.github.com", gh.hosts[0])
 }
 
+func TestInjectedAuthorityBracketsDefaultPortIPv6(t *testing.T) {
+	assert.Equal(t, "[2001:db8::1]", injectedAuthority("2001:db8::1", "443"))
+	assert.Equal(t, "[2001:db8::1]:8443", injectedAuthority("2001:db8::1", "8443"))
+	assert.Equal(t, "api.github.com", injectedAuthority("api.github.com", "443"))
+}
+
 // TestInjector_ReplacesPlaceholder verifies the placeholder the sandbox sends is
 // replaced with the real credential, wherever the client placed it.
 func TestInjector_ReplacesPlaceholder(t *testing.T) {

@@ -264,10 +264,7 @@ func (in *Injector) serveInjected(client net.Conn, host, port string, injs []Inj
 	rt := in.Upstream
 	// authority is the upstream the request is bound to. Drop the default
 	// https port so the Host header matches what a direct client would send.
-	authority := host
-	if port != "443" {
-		authority = net.JoinHostPort(host, port)
-	}
+	authority := injectedAuthority(host, port)
 	br := bufio.NewReader(client)
 	for {
 		req, err := http.ReadRequest(br)
@@ -300,6 +297,16 @@ func (in *Injector) serveInjected(client net.Conn, host, port string, injs []Inj
 			return
 		}
 	}
+}
+
+func injectedAuthority(host, port string) string {
+	if port != "443" {
+		return net.JoinHostPort(host, port)
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // replaceInHeaders substitutes each binding's placeholder with its real value in

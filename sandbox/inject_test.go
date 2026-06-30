@@ -26,9 +26,9 @@ func TestParseInjectHeader(t *testing.T) {
 		"1BAD:h.com",       // invalid env var name (leading digit)
 		"bad-var:h.com",    // invalid env var name (dash)
 		"T:*", "T:*.h.com", // wildcard hosts rejected
-		"TOK:not a host",          // invalid host
-		"TOK:h.com:0",             // invalid port
-		"TOK:h.com,",              // empty target in list
+		"TOK:not a host", // invalid host
+		"TOK:h.com:0",    // invalid port
+		"TOK:h.com,",     // empty target in list
 	} {
 		_, err := parseInjectHeader([]string{bad})
 		assert.Error(t, err, "expected error for %q", bad)
@@ -103,6 +103,39 @@ func TestResolveInjectAllowsWildcardDomain(t *testing.T) {
 	assert.NotNil(t, plan.CA)
 	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
 	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
+}
+
+func TestResolveInjectExtendsPassthroughSSL_CERT_FILE(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	dir := t.TempDir()
+	base := filepath.Join(dir, "custom-roots.pem")
+	require.NoError(t, os.WriteFile(base, []byte("-----BEGIN CERTIFICATE-----\nCUSTOMROOT\n-----END CERTIFICATE-----\n"), 0o644))
+
+	for _, tc := range []struct {
+		name        string
+		passthrough []string
+	}{
+		{name: "named", passthrough: []string{"SSL_CERT_FILE"}},
+		{name: "all", passthrough: []string{envPassthroughAll}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SSL_CERT_FILE", base)
+			plan := &SandboxPlan{
+				TempDir:        t.TempDir(),
+				EnvSet:         map[string]string{},
+				EnvPassthrough: tc.passthrough,
+				AllowedDomains: []string{"api.example.com"},
+				ProxyEnabled:   true,
+			}
+			specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+			require.NoError(t, resolveInject(plan, specs))
+			bundle := plan.EnvSet["SSL_CERT_FILE"]
+			data, err := os.ReadFile(bundle)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), "CUSTOMROOT")
+		})
+	}
 }
 
 func TestResolveInjectIPTarget(t *testing.T) {

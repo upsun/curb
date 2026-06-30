@@ -689,12 +689,17 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 	// in even under --env '*'.
 	maps.Copy(plan.EnvSet, placeholders)
 
+	caBase := plan.EnvSet["SSL_CERT_FILE"]
+	if _, set := plan.EnvSet["SSL_CERT_FILE"]; !set {
+		caBase, _ = plan.passthroughEnvValue("SSL_CERT_FILE")
+	}
+
 	// Trust-store delivery: a combined bundle (system roots + per-run CA) the
 	// action trusts for the proxy's leaf certs. The CA validates only inside
 	// this run, so it is not sensitive to the action. A user-provided
 	// SSL_CERT_FILE is used as the base (extended, not discarded) so a custom
 	// trust store still applies to non-injected hosts.
-	bundle, err := writeCABundle(plan.TempDir, plan.EnvSet["SSL_CERT_FILE"], ca.CertPEM())
+	bundle, err := writeCABundle(plan.TempDir, caBase, ca.CertPEM())
 	if err != nil {
 		return err
 	}
@@ -732,6 +737,21 @@ func writeCABundle(tmpDir, base string, caPEM []byte) (string, error) {
 		return "", fmt.Errorf("writing CA bundle: %w", err)
 	}
 	return path, nil
+}
+
+func (p *SandboxPlan) passthroughEnvValue(name string) (string, bool) {
+	if isInternalEnvVar(name) {
+		return "", false
+	}
+	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
+		return os.LookupEnv(name)
+	}
+	for _, pat := range p.EnvPassthrough {
+		if matched, _ := filepath.Match(pat, name); matched {
+			return os.LookupEnv(name)
+		}
+	}
+	return "", false
 }
 
 // systemCABundle returns the first system CA bundle found, or "".
@@ -1094,10 +1114,16 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 		if plan.SOCKSPort > 0 {
 			socksAddr := fmt.Sprintf("127.0.0.1:%d", plan.SOCKSPort)
 			socksURL := fmt.Sprintf("socks5h://%s", socksAddr)
-			if _, ok := plan.EnvSet["ALL_PROXY"]; !ok {
+			allProxy, allProxySet := plan.EnvSet["ALL_PROXY"]
+			lowerAllProxy, lowerAllProxySet := plan.EnvSet["all_proxy"]
+			switch {
+			case allProxySet && lowerAllProxySet:
+			case allProxySet:
+				plan.EnvSet["all_proxy"] = allProxy
+			case lowerAllProxySet:
+				plan.EnvSet["ALL_PROXY"] = lowerAllProxy
+			default:
 				plan.EnvSet["ALL_PROXY"] = socksURL
-			}
-			if _, ok := plan.EnvSet["all_proxy"]; !ok {
 				plan.EnvSet["all_proxy"] = socksURL
 			}
 			plan.EnvSet[SOCKSAddrEnvKey] = socksAddr
