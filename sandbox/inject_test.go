@@ -162,6 +162,18 @@ func TestResolveInjectWithoutProxySuggestsPassthrough(t *testing.T) {
 	assert.Contains(t, err.Error(), "--env ACTIVE_TOKEN")
 }
 
+// TestCABundleBaseExplicitEmptyOverridesPassthrough confirms an explicitly
+// cleared CA var (--env SSL_CERT_FILE=) does not fall back to the host value
+// via passthrough: EnvSet wins over passthrough, as in ResolveEnv.
+func TestCABundleBaseExplicitEmptyOverridesPassthrough(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", "/host/roots.pem")
+	plan := &SandboxPlan{
+		EnvSet:         map[string]string{"SSL_CERT_FILE": ""},
+		EnvPassthrough: []string{envPassthroughAll},
+	}
+	assert.Empty(t, plan.caBundleBase("SSL_CERT_FILE"))
+}
+
 // TestCABundleBaseDirectoryFallsBack confirms a CA env var pointing at a
 // directory (accepted by e.g. python-requests) does not abort the run: the
 // system bundle is used as the base instead.

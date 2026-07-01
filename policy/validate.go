@@ -50,7 +50,7 @@ func validateDomainPattern(d, subject string) error {
 			return fmt.Errorf("%s %q contains invalid character (whitespace or control)", subject, d)
 		}
 		switch r {
-		case '/', '\\', ':', '@', '#', '?', '=':
+		case '/', '\\', ':', '@', '#', '?', '=', '[', ']':
 			return fmt.Errorf("%s %q contains invalid character %q", subject, d, string(r))
 		}
 	}
@@ -114,9 +114,17 @@ func parseInjectTarget(item string) (InjectTarget, error) {
 		return InjectTarget{}, fmt.Errorf("empty injection target")
 	}
 	// A bare IP literal (no port): ParseAddr accepts an unbracketed IPv6
-	// address, which SplitHostPort below would reject.
+	// address, which SplitHostPort below would reject. Brackets without a
+	// port ("[2001:db8::1]") are legal address syntax too.
 	if _, err := netip.ParseAddr(item); err == nil {
 		return InjectTarget{Host: CanonicalHost(item), Port: "443"}, nil
+	}
+	if inner, ok := strings.CutPrefix(item, "["); ok {
+		if inner, ok := strings.CutSuffix(inner, "]"); ok {
+			if _, err := netip.ParseAddr(inner); err == nil {
+				return InjectTarget{Host: CanonicalHost(inner), Port: "443"}, nil
+			}
+		}
 	}
 	host, port := item, "443"
 	if h, p, ok := splitInjectPort(item); ok {

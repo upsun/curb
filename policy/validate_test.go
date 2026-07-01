@@ -75,6 +75,9 @@ func TestParseInjectHeader(t *testing.T) {
 			[]InjectTarget{{Host: "2001:db8::1", Port: "443"}}, ""},
 		{"bracketed ipv6 with port", "TOK:[2001:db8::1]:8443", "TOK",
 			[]InjectTarget{{Host: "2001:db8::1", Port: "8443"}}, ""},
+		{"bracketed ipv6 no port", "TOK:[2001:db8::1]", "TOK",
+			[]InjectTarget{{Host: "2001:db8::1", Port: "443"}}, ""},
+		{"reject bracketed non-IP", "TOK:[example.com]", "", nil, "invalid character"},
 		// A port with leading zeros is canonicalized, or the binding key would
 		// never match a real connection's port.
 		{"leading-zero port", "TOK:api.example.com:0443", "TOK",

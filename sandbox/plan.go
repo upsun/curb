@@ -778,8 +778,11 @@ func resolveInject(plan *SandboxPlan, cfg *config.Config) error {
 var caBundleEnvKeys = []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"}
 
 func (p *SandboxPlan) caBundleBase(name string) string {
-	base := p.EnvSet[name]
-	if base == "" {
+	// An explicitly set value wins over passthrough, as in ResolveEnv — an
+	// explicit empty (--env SSL_CERT_FILE=) means system roots, not the host
+	// value.
+	base, explicit := p.EnvSet[name]
+	if !explicit {
 		base, _ = p.passthroughEnvValue(name)
 	}
 	if base == "" {
