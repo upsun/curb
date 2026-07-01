@@ -100,7 +100,6 @@ type SandboxPlan struct {
 	UserPaths        []string    // Paths explicitly requested by the user (--read/--write/--exec adds).
 	EnvSet           map[string]string
 	EnvPassthrough   []string
-	explicitEnvVars  map[string]bool // Vars set via --env NAME=value (disables injection for them).
 	DegradedLayers   []DegradedLayer
 	TempDir          string
 	SandboxHome      string // Resolved HOME for the sandbox (used for tilde expansion and env fallback).
@@ -193,9 +192,15 @@ func BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*Sa
 	return newPlanBuilder().BuildPlan(cfg, caps, logger)
 }
 
+// proxyFilteringEnabled reports whether the run filters network egress through
+// the proxy. Shared by resolveCapabilities and the darwin plan builder.
+func proxyFilteringEnabled(cfg *config.Config) bool {
+	return (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0 || cfg.HostLoopback) && !cfg.UnrestrictedNet
+}
+
 // resolveCapabilities validates system capabilities and selects enforcement layers.
 func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
-	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0 || cfg.HostLoopback) && !cfg.UnrestrictedNet
+	hasFiltering := proxyFilteringEnabled(cfg)
 
 	if caps.UserNS != nil {
 		aaHint := ""
@@ -588,6 +593,7 @@ func appendUniq(s []string, v string) []string {
 type injectSpec struct {
 	envVar  string
 	targets []policy.InjectTarget
+	token   string // real host-env value, resolved by activeInjectSpecs
 }
 
 // parseInjectHeader parses --inject-header "ENV_VAR:HOST[,HOST...]" entries.
@@ -603,16 +609,19 @@ func parseInjectHeader(entries []string) ([]injectSpec, error) {
 	return specs, nil
 }
 
-func activeInjectSpecs(specs []injectSpec, optOut func(string) bool) []injectSpec {
+// activeInjectSpecs filters specs to those whose source var is set, non-empty,
+// and not opted out, resolving each spec's token on the way.
+func activeInjectSpecs(specs []injectSpec, cfg *config.Config) []injectSpec {
 	active := make([]injectSpec, 0, len(specs))
 	for _, s := range specs {
 		token, present := os.LookupEnv(s.envVar)
 		if !present || token == "" {
 			continue
 		}
-		if optOut != nil && optOut(s.envVar) {
+		if injectOptOut(cfg, s.envVar) {
 			continue
 		}
+		s.token = token
 		active = append(active, s)
 	}
 	return active
@@ -622,20 +631,7 @@ func activeInjectSpecs(specs []injectSpec, optOut func(string) bool) []injectSpe
 // value — exact passthrough (--env NAME) or an explicit value (--env
 // NAME=value). Either is a trust decision that disables credential injection
 // for that variable; wildcard passthrough does not.
-func (p *SandboxPlan) injectOptOut(name string) bool {
-	return p.explicitEnvVars[name] || p.hasExactEnvPassthrough(name)
-}
-
-func (p *SandboxPlan) hasExactEnvPassthrough(name string) bool {
-	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
-		return false
-	}
-	return slices.Contains(p.EnvPassthrough, name)
-}
-
-// configInjectOptOut is injectOptOut at the config level, for the degraded
-// builder which checks bindings before env resolution.
-func configInjectOptOut(cfg *config.Config, name string) bool {
+func injectOptOut(cfg *config.Config, name string) bool {
 	for _, pair := range cfg.EnvSet {
 		if k, _, _ := strings.Cut(pair, "="); k == name {
 			return true
@@ -648,6 +644,10 @@ func configInjectOptOut(cfg *config.Config, name string) bool {
 	return slices.Contains(adds, name)
 }
 
+// injectEnvHint is the shared error suffix suggesting the injection-free
+// alternative; takes the variable name as a format argument.
+const injectEnvHint = "; or pass the credential into the sandbox instead (an explicit trust decision) with --env %s"
+
 // displayInjectTarget formats an injection target for human output, dropping
 // the default :443 so the common case reads as a bare host.
 func displayInjectTarget(t policy.InjectTarget) string {
@@ -657,14 +657,24 @@ func displayInjectTarget(t policy.InjectTarget) string {
 	return net.JoinHostPort(t.Host, t.Port)
 }
 
+// injectDestinations returns the bound destinations in display form, sorted.
+// Shared by the dry-run output and the skill file.
+func (p *SandboxPlan) injectDestinations() []string {
+	dests := make([]string, 0, len(p.InjectBindings))
+	for t := range p.InjectBindings {
+		dests = append(dests, displayInjectTarget(t))
+	}
+	sort.Strings(dests)
+	return dests
+}
+
 // authorizeInjectTarget checks that an injection target is reachable under the
 // network policy: an IP target against --ips, a hostname target against
 // --domains. A credential must never be provisioned for a destination the
 // sandbox cannot otherwise reach.
 func authorizeInjectTarget(t policy.InjectTarget, domains *policy.DomainMatcher, ips *policy.IPMatcher) error {
-	if t.IsIP {
-		addr, err := netip.ParseAddr(t.Host)
-		if err == nil && ips.Match(addr) {
+	if addr, err := netip.ParseAddr(t.Host); err == nil {
+		if ips.Match(addr) {
 			return nil
 		}
 		return fmt.Errorf("credential injection IP %q is not allowed; add --ips %s", t.Host, t.Host)
@@ -696,37 +706,38 @@ func injectPlaceholder(envVar string) string {
 	return "curb-inject-" + envVar + "-placeholder"
 }
 
-// resolveInject generates the per-run CA, resolves each bound token, and
-// delivers the CA to the sandbox trust store. It runs after proxy and env
-// resolution. The CA key and tokens stay in the parent; only the public CA
-// (in a combined bundle) and the placeholder-free env reach the child.
+// resolveInject parses the configured bindings, generates the per-run CA,
+// resolves each bound token, and delivers the CA to the sandbox trust store.
+// It runs after proxy and env resolution. The CA key and tokens stay in the
+// parent; only the public CA (in a combined bundle) and the placeholder-free
+// env reach the child.
 //
 // A source var that is unset or empty is skipped silently: injection is opt-in
 // per credential, and the common case (e.g. the claude profile for an OAuth
 // user) is that the key is simply not present.
-func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
-	if len(specs) == 0 {
-		return nil
+func resolveInject(plan *SandboxPlan, cfg *config.Config) error {
+	specs, err := parseInjectHeader(cfg.InjectHeader)
+	if err != nil {
+		return err
 	}
-	specs = activeInjectSpecs(specs, plan.injectOptOut)
+	specs = activeInjectSpecs(specs, cfg)
 	if len(specs) == 0 {
 		return nil
 	}
 	if !plan.ProxyEnabled {
-		return fmt.Errorf("credential injection for %s requires the network proxy: allow the destination with --domains/--ips and do not use --unrestricted-net; or pass the credential into the sandbox instead (an explicit trust decision) with --env %s", injectVarNames(specs), specs[0].envVar)
+		return fmt.Errorf("credential injection for %s requires the network proxy: allow the destination with --domains/--ips and do not use --unrestricted-net"+injectEnvHint, injectVarNames(specs), specs[0].envVar)
 	}
 	domainMatcher := policy.NewDomainMatcher(plan.AllowedDomains)
 	ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
 	bindings := make(map[policy.InjectTarget][]proxy.Injection, len(specs))
 	placeholders := make(map[string]string)
 	for _, s := range specs {
-		token, _ := os.LookupEnv(s.envVar)
 		placeholder := injectPlaceholder(s.envVar)
 		for _, t := range s.targets {
 			if err := authorizeInjectTarget(t, domainMatcher, ipMatcher); err != nil {
 				return err
 			}
-			bindings[t] = append(bindings[t], proxy.Injection{Placeholder: placeholder, Value: token})
+			bindings[t] = append(bindings[t], proxy.Injection{Placeholder: placeholder, Value: s.token})
 		}
 		placeholders[s.envVar] = placeholder
 	}
@@ -744,13 +755,21 @@ func resolveInject(plan *SandboxPlan, specs []injectSpec) error {
 
 	// Trust-store delivery: each standard CA env var receives a bundle that
 	// extends its existing value, or system roots when unset. The CA validates
-	// only inside this run, so it is not sensitive to the action.
+	// only inside this run, so it is not sensitive to the action. Vars sharing
+	// a base (usually all of them, unset and falling back to system roots)
+	// share one written bundle.
+	bundles := map[string]string{} // base -> written bundle path
 	for _, k := range caBundleEnvKeys {
-		bundle, err := writeCABundleFile(plan.TempDir, caBundleFilename(k), plan.caBundleBase(k), ca.CertPEM())
-		if err != nil {
-			return err
+		base := plan.caBundleBase(k)
+		bundle, ok := bundles[base]
+		if !ok {
+			bundle, err = writeCABundleFile(plan.TempDir, caBundleFilename(k), base, ca.CertPEM())
+			if err != nil {
+				return err
+			}
+			bundles[base] = bundle
+			plan.ROFiles = appendUniq(plan.ROFiles, bundle)
 		}
-		plan.ROFiles = appendUniq(plan.ROFiles, bundle)
 		plan.EnvSet[k] = bundle
 	}
 	return nil
@@ -812,18 +831,29 @@ func writeCABundleFile(tmpDir, filename, base string, caPEM []byte) (string, err
 }
 
 func (p *SandboxPlan) passthroughEnvValue(name string) (string, bool) {
-	if isInternalEnvVar(name) {
+	if !p.envPassesThrough(name) {
 		return "", false
 	}
+	return os.LookupEnv(name)
+}
+
+// envPassesThrough reports whether the passthrough policy admits name. The
+// single matching rule (internal-var guard, '*' sentinel, glob patterns) is
+// shared by ResolveEnv, the dry-run output, and the CA-bundle base lookup so
+// they cannot drift.
+func (p *SandboxPlan) envPassesThrough(name string) bool {
+	if isInternalEnvVar(name) {
+		return false
+	}
 	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
-		return os.LookupEnv(name)
+		return true
 	}
 	for _, pat := range p.EnvPassthrough {
 		if matched, _ := filepath.Match(pat, name); matched {
-			return os.LookupEnv(name)
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 // systemCABundle returns the first system CA bundle found, or "".
@@ -918,31 +948,13 @@ func isInternalEnvVar(name string) bool {
 func (p *SandboxPlan) ResolveEnv() []string {
 	env := make(map[string]string, len(p.EnvSet))
 	maps.Copy(env, p.EnvSet)
-	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
-		for _, e := range os.Environ() {
-			k, v, _ := strings.Cut(e, "=")
-			if isInternalEnvVar(k) {
-				continue
-			}
-			if _, ok := env[k]; !ok {
-				env[k] = v
-			}
+	for _, e := range os.Environ() {
+		k, v, _ := strings.Cut(e, "=")
+		if _, set := env[k]; set {
+			continue
 		}
-	} else {
-		for _, e := range os.Environ() {
-			k, v, _ := strings.Cut(e, "=")
-			if isInternalEnvVar(k) {
-				continue
-			}
-			if _, set := env[k]; set {
-				continue
-			}
-			for _, pat := range p.EnvPassthrough {
-				if matched, _ := filepath.Match(pat, k); matched {
-					env[k] = v
-					break
-				}
-			}
+		if p.envPassesThrough(k) {
+			env[k] = v
 		}
 	}
 	// HOME fallback: use the pre-resolved SandboxHome so tilde expansion
@@ -1045,16 +1057,11 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		}
 		ln("    blocked:    everything else")
 		if len(p.InjectBindings) > 0 {
-			dests := make([]string, 0, len(p.InjectBindings))
-			for t := range p.InjectBindings {
-				dests = append(dests, displayInjectTarget(t))
-			}
-			sort.Strings(dests)
 			ln("    inject:     TLS terminated; the proxy replaces a placeholder with the real credential in request headers (the real token never enters the sandbox)")
-			for _, d := range dests {
+			for _, d := range p.injectDestinations() {
 				pr("      %s\n", d)
 			}
-			ln("    ca-trust:   per-run CA bundle in env (SSL_CERT_FILE, CURL_CA_BUNDLE, GIT_SSL_CAINFO, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS)")
+			pr("    ca-trust:   per-run CA bundle in env (%s)\n", strings.Join(caBundleEnvKeys, ", "))
 		}
 	}
 
@@ -1076,11 +1083,8 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		var resolved []string
 		for _, e := range os.Environ() {
 			k, _, _ := strings.Cut(e, "=")
-			for _, pat := range p.EnvPassthrough {
-				if matched, _ := filepath.Match(pat, k); matched {
-					resolved = append(resolved, k)
-					break
-				}
+			if p.envPassesThrough(k) {
+				resolved = append(resolved, k)
 			}
 		}
 		sort.Strings(resolved)
@@ -1148,7 +1152,6 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 			delete(plan.EnvSet, r)
 		}
 	}
-	plan.explicitEnvVars = make(map[string]bool, len(cfg.EnvSet))
 	for _, pair := range cfg.EnvSet {
 		k, v, _ := strings.Cut(pair, "=")
 		// Expand $VAR references against the sandbox env built so far.
@@ -1159,7 +1162,6 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 			return ""
 		})
 		plan.EnvSet[k] = v
-		plan.explicitEnvVars[k] = true
 	}
 	if cfg.EnvPassthroughAll {
 		plan.EnvPassthrough = []string{envPassthroughAll}
@@ -1519,10 +1521,8 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 	if err != nil {
 		return nil, err
 	}
-	if active := activeInjectSpecs(injects, func(name string) bool {
-		return configInjectOptOut(cfg, name)
-	}); len(active) > 0 {
-		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS; or pass the credential into the sandbox instead (an explicit trust decision) with --env %s", active[0].envVar)
+	if active := activeInjectSpecs(injects, cfg); len(active) > 0 {
+		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS"+injectEnvHint, active[0].envVar)
 	}
 
 	if len(cfg.AllowedDomains) > 0 {

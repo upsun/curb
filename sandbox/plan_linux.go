@@ -17,13 +17,6 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet, Logger: logger}
 	var removals planRemovals
 
-	// Parse credential-injection bindings early so invalid config fails before
-	// other plan work. Active bindings are resolved after network and env setup.
-	injects, err := parseInjectHeader(cfg.InjectHeader)
-	if err != nil {
-		return nil, err
-	}
-
 	// Create tmpDir first — needed for sandbox HOME fallback.
 	tmpDir, err := createTempDir()
 	if err != nil {
@@ -58,7 +51,7 @@ func (linuxPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logger
 	if err := resolveEnv(plan, cfg); err != nil {
 		return nil, err
 	}
-	if err := resolveInject(plan, injects); err != nil {
+	if err := resolveInject(plan, cfg); err != nil {
 		return nil, err
 	}
 	resolveDenials(plan, &removals)

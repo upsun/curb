@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/upsun/curb/config"
 	"github.com/upsun/curb/policy"
 )
 
@@ -56,15 +57,19 @@ func TestInjectPlaceholder(t *testing.T) {
 	assert.False(t, strings.HasPrefix(tok2, tok), "%q must not be a prefix of %q", tok, tok2)
 }
 
+// injectCfg builds a config with one binding entry, for resolveInject tests.
+func injectCfg(entries ...string) *config.Config {
+	return &config.Config{InjectHeader: entries}
+}
+
 func TestResolveInjectSkippedDoesNotRequireAllowedDomain(t *testing.T) {
 	t.Setenv("SKIPPED_TOKEN", "")
 	plan := &SandboxPlan{
 		TempDir: t.TempDir(),
 		EnvSet:  map[string]string{},
 	}
-	specs := []injectSpec{{envVar: "SKIPPED_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, injectCfg("SKIPPED_TOKEN:api.example.com")))
 	assert.Empty(t, plan.AllowedDomains)
 	assert.Empty(t, plan.InjectBindings)
 	assert.Nil(t, plan.CA)
@@ -77,9 +82,8 @@ func TestResolveInjectRequiresAllowedDomain(t *testing.T) {
 		EnvSet:       map[string]string{},
 		ProxyEnabled: true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-	err := resolveInject(plan, specs)
+	err := resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `credential injection host "api.example.com" is not allowed`)
 	assert.Nil(t, plan.CA)
@@ -97,9 +101,8 @@ func TestResolveInjectAllowsWildcardDomain(t *testing.T) {
 		AllowedDomains: []string{"*.example.com"},
 		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com")))
 	assert.NotNil(t, plan.CA)
 	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
 	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
@@ -113,9 +116,10 @@ func TestResolveInjectExactPassthroughSkipsInjection(t *testing.T) {
 		EnvPassthrough: []string{"ACTIVE_TOKEN"},
 		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+	cfg := injectCfg("ACTIVE_TOKEN:api.example.com")
+	cfg.EnvPassthrough = []string{"ACTIVE_TOKEN"}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, cfg))
 	assert.Empty(t, plan.InjectBindings)
 	assert.Nil(t, plan.CA)
 	_, set := plan.EnvSet["ACTIVE_TOKEN"]
@@ -128,15 +132,15 @@ func TestResolveInjectExactPassthroughSkipsInjection(t *testing.T) {
 func TestResolveInjectExplicitEnvValueSkipsInjection(t *testing.T) {
 	t.Setenv("ACTIVE_TOKEN", "host-secret")
 	plan := &SandboxPlan{
-		TempDir:         t.TempDir(),
-		EnvSet:          map[string]string{"ACTIVE_TOKEN": "user-value"},
-		explicitEnvVars: map[string]bool{"ACTIVE_TOKEN": true},
-		AllowedDomains:  []string{"api.example.com"},
-		ProxyEnabled:    true,
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{"ACTIVE_TOKEN": "user-value"},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+	cfg := injectCfg("ACTIVE_TOKEN:api.example.com")
+	cfg.EnvSet = []string{"ACTIVE_TOKEN=user-value"}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, cfg))
 	assert.Empty(t, plan.InjectBindings)
 	assert.Nil(t, plan.CA)
 	assert.Equal(t, "user-value", plan.EnvSet["ACTIVE_TOKEN"])
@@ -151,9 +155,8 @@ func TestResolveInjectWithoutProxySuggestsPassthrough(t *testing.T) {
 		TempDir: t.TempDir(),
 		EnvSet:  map[string]string{},
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-	err := resolveInject(plan, specs)
+	err := resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ACTIVE_TOKEN")
 	assert.Contains(t, err.Error(), "--env ACTIVE_TOKEN")
@@ -175,9 +178,8 @@ func TestCABundleBaseDirectoryFallsBack(t *testing.T) {
 		AllowedDomains: []string{"api.example.com"},
 		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com")))
 	data, err := os.ReadFile(plan.EnvSet["REQUESTS_CA_BUNDLE"])
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "CERTIFICATE")
@@ -195,9 +197,10 @@ func TestResolveInjectWildcardPassthroughStillInjects(t *testing.T) {
 		AllowedDomains: []string{"api.example.com"},
 		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+	cfg := injectCfg("ACTIVE_TOKEN:api.example.com")
+	cfg.EnvPassthrough = []string{"ACTIVE_*"}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, cfg))
 	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
 	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
 }
@@ -224,9 +227,8 @@ func TestResolveInjectExtendsPassthroughSSL_CERT_FILE(t *testing.T) {
 				AllowedDomains: []string{"api.example.com"},
 				ProxyEnabled:   true,
 			}
-			specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-			require.NoError(t, resolveInject(plan, specs))
+			require.NoError(t, resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com")))
 			bundle := plan.EnvSet["SSL_CERT_FILE"]
 			data, err := os.ReadFile(bundle)
 			require.NoError(t, err)
@@ -251,9 +253,8 @@ func TestResolveInjectExtendsEachExistingCABundleEnv(t *testing.T) {
 		AllowedDomains: []string{"api.example.com"},
 		ProxyEnabled:   true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
 
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com")))
 	curlData, err := os.ReadFile(plan.EnvSet["CURL_CA_BUNDLE"])
 	require.NoError(t, err)
 	assert.Contains(t, string(curlData), "CURLROOT")
@@ -278,8 +279,8 @@ func TestResolveInjectIPTarget(t *testing.T) {
 		EnvSet:       map[string]string{},
 		ProxyEnabled: true,
 	}
-	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "10.0.0.5", Port: "8443", IsIP: true}}}}
-	err := resolveInject(notAllowed, specs)
+	cfg := injectCfg("ACTIVE_TOKEN:10.0.0.5:8443")
+	err := resolveInject(notAllowed, cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `credential injection IP "10.0.0.5" is not allowed`)
 
@@ -290,9 +291,9 @@ func TestResolveInjectIPTarget(t *testing.T) {
 		AllowedIPs:   []string{"10.0.0.0/24"},
 		ProxyEnabled: true,
 	}
-	require.NoError(t, resolveInject(plan, specs))
+	require.NoError(t, resolveInject(plan, cfg))
 	assert.NotNil(t, plan.CA)
-	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "10.0.0.5", Port: "8443", IsIP: true})
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "10.0.0.5", Port: "8443"})
 }
 
 func TestWriteCABundle(t *testing.T) {

@@ -182,9 +182,11 @@ func NewInjector(ca *CA) *Injector {
 }
 
 // Bind adds a header injection for a destination host:port. Multiple headers
-// may be bound to the same target.
+// may be bound to the same target. Keys use policy.CanonicalHost so the
+// binding side and the lookup for a live connection agree, including when a
+// client addresses an IP directly.
 func (in *Injector) Bind(host, port string, inj Injection) {
-	key := net.JoinHostPort(normalizeHost(host), port)
+	key := net.JoinHostPort(policy.CanonicalHost(host), port)
 	in.byTarget[key] = append(in.byTarget[key], inj)
 }
 
@@ -193,18 +195,8 @@ func (in *Injector) binding(host, port string) ([]Injection, bool) {
 	if in == nil {
 		return nil, false // nil-safe so callers need no separate guard
 	}
-	injs, ok := in.byTarget[net.JoinHostPort(normalizeHost(host), port)]
+	injs, ok := in.byTarget[net.JoinHostPort(policy.CanonicalHost(host), port)]
 	return injs, ok
-}
-
-// normalizeHost canonicalizes a host for binding keys: an IP literal to its
-// canonical form, otherwise a lowercased hostname. The binding side and the
-// proxy lookup must agree, including when a client addresses an IP directly.
-func normalizeHost(host string) string {
-	if addr, err := netip.ParseAddr(host); err == nil {
-		return addr.String()
-	}
-	return policy.NormalizeHost(host)
 }
 
 // injectCONNECT terminates the client's TLS with a per-run leaf for host,
@@ -239,10 +231,10 @@ func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs [
 // SOCKS5 egress routes; the caller has already accepted the connection (written
 // the CONNECT 200 or the SOCKS5 success reply).
 func (in *Injector) Serve(client net.Conn, host, port string, injs []Injection) error {
-	// The binding matched on a normalized host (case-folded, no trailing dot,
+	// The binding matched on a canonical host (case-folded, no trailing dot,
 	// canonical IP); mint the leaf and route upstream on the same form so the
 	// cert, SNI, and Host header all agree.
-	host = normalizeHost(host)
+	host = policy.CanonicalHost(host)
 	leaf, err := in.CA.leafFor(host)
 	if err != nil {
 		return fmt.Errorf("leaf: %w", err)
@@ -291,54 +283,36 @@ func (in *Injector) serveInjected(client net.Conn, host, port string, injs []Inj
 		// Flush each write immediately: API responses are often streamed (SSE)
 		// and the old direct relay never buffered.
 		FlushInterval: -1,
-		ErrorLog:      log.New(io.Discard, "", 0),
+		ErrorLog:      discardLog,
 	}
-	done := make(chan struct{})
-	conn := &signalOnCloseConn{Conn: client, done: done}
-	srv := &http.Server{Handler: rp, ErrorLog: log.New(io.Discard, "", 0)}
-	// Serve returns when the connection closes: the listener yields the one
-	// connection, then blocks until it is closed — by the server loop after the
-	// final request, or by the ReverseProxy at the end of an Upgrade relay.
-	_ = srv.Serve(&singleConnListener{conn: conn, addr: client.LocalAddr(), done: done})
+	// Serve returns when the connection closes: the listener holds only this
+	// one connection, and closing the connection closes the listener — by the
+	// server loop after the final request, or by the ReverseProxy at the end
+	// of an Upgrade relay.
+	cl := NewConnListener(client.LocalAddr())
+	_ = cl.Enqueue(&signalOnCloseConn{Conn: client, onClose: func() { _ = cl.Close() }})
+	srv := &http.Server{Handler: rp, ErrorLog: discardLog}
+	_ = srv.Serve(cl)
 }
 
-// signalOnCloseConn closes done when the connection is closed, whichever code
-// path closes it.
+// discardLog silences per-request logging from the injection server and
+// reverse proxy; errors surface to the client as 502s, matching the
+// passthrough paths.
+var discardLog = log.New(io.Discard, "", 0)
+
+// signalOnCloseConn runs onClose once when the connection is closed, whichever
+// code path closes it.
 type signalOnCloseConn struct {
 	net.Conn
-	once sync.Once
-	done chan struct{}
+	once    sync.Once
+	onClose func()
 }
 
 func (c *signalOnCloseConn) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(func() { close(c.done) })
+	c.once.Do(c.onClose)
 	return err
 }
-
-// singleConnListener yields one already-accepted connection, then blocks until
-// that connection is closed before reporting the listener as closed.
-type singleConnListener struct {
-	mu   sync.Mutex
-	conn net.Conn
-	addr net.Addr
-	done <-chan struct{}
-}
-
-func (l *singleConnListener) Accept() (net.Conn, error) {
-	l.mu.Lock()
-	c := l.conn
-	l.conn = nil
-	l.mu.Unlock()
-	if c != nil {
-		return c, nil
-	}
-	<-l.done
-	return nil, net.ErrClosed
-}
-
-func (l *singleConnListener) Close() error   { return nil }
-func (l *singleConnListener) Addr() net.Addr { return l.addr }
 
 func injectedAuthority(host, port string) string {
 	if port != "443" {

@@ -25,13 +25,6 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 		return nil, fmt.Errorf("fatal: sandbox-exec is required on macOS: %w", caps.Seatbelt)
 	}
 
-	// Parse credential-injection bindings early so invalid config fails before
-	// other plan work. Active bindings are resolved after network and env setup.
-	injects, err := parseInjectHeader(cfg.InjectHeader)
-	if err != nil {
-		return nil, err
-	}
-
 	plan := &SandboxPlan{Caps: caps, Quiet: cfg.Quiet, Logger: logger}
 	var removals planRemovals
 
@@ -53,8 +46,7 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 	}
 	warnHostHomePathMismatch(cfg, sandboxHome, hostHome)
 
-	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0 || cfg.HostLoopback) && !cfg.UnrestrictedNet
-	plan.ProxyEnabled = hasFiltering
+	plan.ProxyEnabled = proxyFilteringEnabled(cfg)
 
 	// Seatbelt enforcement.
 	plan.UseSeatbelt = true
@@ -73,7 +65,7 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 	if err := resolveEnv(plan, cfg); err != nil {
 		return nil, err
 	}
-	if err := resolveInject(plan, injects); err != nil {
+	if err := resolveInject(plan, cfg); err != nil {
 		return nil, err
 	}
 	resolveDenials(plan, &removals)

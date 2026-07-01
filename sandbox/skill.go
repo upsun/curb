@@ -69,12 +69,7 @@ description: Active sandbox constraints for this environment. Check when encount
 			b.WriteString("- Localhost: sandbox-internal\n")
 		}
 		if len(plan.InjectBindings) > 0 {
-			dests := make([]string, 0, len(plan.InjectBindings))
-			for t := range plan.InjectBindings {
-				dests = append(dests, displayInjectTarget(t))
-			}
-			sort.Strings(dests)
-			fmt.Fprintf(&b, "- Credential injection: requests to %s have their credential substituted in transit. The relevant environment variable holds a placeholder, so use it normally; the real value is never present in this sandbox, so do not expect or look for one.\n", strings.Join(dests, ", "))
+			fmt.Fprintf(&b, "- Credential injection: requests to %s have their credential substituted in transit. The relevant environment variable holds a placeholder, so use it normally; the real value is never present in this sandbox, so do not expect or look for one.\n", strings.Join(plan.injectDestinations(), ", "))
 		}
 		if !plan.ProxyEnabled && len(plan.AllowedDomains) == 0 && len(plan.AllowedIPs) == 0 {
 			b.WriteString("- Allowed: none\n")

@@ -83,6 +83,11 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 			return nil, err
 		}
 	}
+	for _, e := range injectHeader {
+		if _, _, err := policy.ParseInjectHeader(e); err != nil {
+			return nil, fmt.Errorf("--inject-header %w", err)
+		}
+	}
 	hostLoopback, err := flags.GetBool("host-loopback")
 	if err != nil {
 		return nil, err

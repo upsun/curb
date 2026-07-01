@@ -72,11 +72,12 @@ func validateDomainPattern(d, subject string) error {
 // InjectTarget is one destination a credential is bound to: a hostname or IP
 // literal plus the TLS port (default 443). The proxy injects the credential
 // only for a connection matching both Host and Port, so the credential's
-// destination is exact.
+// destination is exact. Whether Host is an IP literal (authorized via --ips,
+// not --domains) is unambiguous from its canonical form: a hostname can never
+// parse as an IP.
 type InjectTarget struct {
-	Host string // normalized hostname, or canonical IP literal
+	Host string // canonical host (CanonicalHost form)
 	Port string // numeric port, "443" by default
-	IsIP bool   // Host is an IP literal (authorized via --ips, not --domains)
 }
 
 // ParseInjectHeader parses one credential-injection binding
@@ -90,7 +91,7 @@ func ParseInjectHeader(entry string) (envVar string, targets []InjectTarget, err
 	if !ok || envVar == "" || rest == "" {
 		return "", nil, fmt.Errorf("must be ENV_VAR:HOST[,HOST...], got %q", entry)
 	}
-	if !ValidEnvName(envVar) {
+	if !validEnvName(envVar) {
 		return "", nil, fmt.Errorf("%q is not a valid environment variable name", envVar)
 	}
 	for item := range strings.SplitSeq(rest, ",") {
@@ -114,8 +115,8 @@ func parseInjectTarget(item string) (InjectTarget, error) {
 	}
 	// A bare IP literal (no port): ParseAddr accepts an unbracketed IPv6
 	// address, which SplitHostPort below would reject.
-	if addr, err := netip.ParseAddr(item); err == nil {
-		return InjectTarget{Host: addr.String(), Port: "443", IsIP: true}, nil
+	if _, err := netip.ParseAddr(item); err == nil {
+		return InjectTarget{Host: CanonicalHost(item), Port: "443"}, nil
 	}
 	host, port := item, "443"
 	if h, p, ok := splitInjectPort(item); ok {
@@ -125,16 +126,15 @@ func parseInjectTarget(item string) (InjectTarget, error) {
 		}
 		host, port = h, canonical
 	}
-	if addr, err := netip.ParseAddr(host); err == nil {
-		return InjectTarget{Host: addr.String(), Port: port, IsIP: true}, nil
+	if _, err := netip.ParseAddr(host); err != nil {
+		if strings.Contains(host, "*") {
+			return InjectTarget{}, fmt.Errorf("injection host %q must be an exact hostname (no wildcards)", host)
+		}
+		if err := validateDomainPattern(host, "injection host"); err != nil {
+			return InjectTarget{}, err
+		}
 	}
-	if strings.Contains(host, "*") {
-		return InjectTarget{}, fmt.Errorf("injection host %q must be an exact hostname (no wildcards)", host)
-	}
-	if err := validateDomainPattern(host, "injection host"); err != nil {
-		return InjectTarget{}, err
-	}
-	return InjectTarget{Host: NormalizeHost(host), Port: port, IsIP: false}, nil
+	return InjectTarget{Host: CanonicalHost(host), Port: port}, nil
 }
 
 // splitInjectPort separates a custom port from a target, returning ok=false
@@ -181,11 +181,11 @@ func canonicalPort(p string) (string, error) {
 	return strconv.Itoa(n), nil
 }
 
-// ValidEnvName reports whether name is a valid environment variable name (a C
+// validEnvName reports whether name is a valid environment variable name (a C
 // identifier: a letter or underscore, then letters, digits, or underscores).
 // Credential-injection sources name the carrier var this way, so a typo is
 // caught at parse time instead of silently matching nothing.
-func ValidEnvName(name string) bool {
+func validEnvName(name string) bool {
 	if name == "" {
 		return false
 	}

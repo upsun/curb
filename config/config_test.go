@@ -352,6 +352,14 @@ func TestFromFlags_DomainIsIP(t *testing.T) {
 	assert.Contains(t, err.Error(), "use --ips instead")
 }
 
+func TestFromFlags_InvalidInjectHeader(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-header", "TOK:*.example.com"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inject-header")
+	assert.Contains(t, err.Error(), "exact hostname")
+}
+
 func TestMergeEnv_IPsAdditive(t *testing.T) {
 	cmd := newTestCmd([]string{"--ips", "10.0.0.1"})
 	cfg, err := FromFlags(cmd)
