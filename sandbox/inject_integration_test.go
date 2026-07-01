@@ -176,6 +176,89 @@ func TestCurb_Inject_EndToEnd(t *testing.T) {
 	assert.Equal(t, "Bearer integration-secret", seen[0], "real credential injected on the wire")
 }
 
+// TestCurb_Inject_BoundDestinationOnly is the central correctness property,
+// end to end: the credential is substituted only at the bound host:port. A
+// second upstream on the same host but a different port receives the literal
+// placeholder — never the real credential — over the passthrough relay. The
+// script also sweeps /proc from inside the sandbox to confirm the parent-held
+// secret is not reachable.
+func TestCurb_Inject_BoundDestinationOnly(t *testing.T) {
+	requireProxyNS(t)
+
+	bound := &headerRecorder{}
+	other := &headerRecorder{}
+	cert, caPEM := upstreamTLS(t, []string{"localhost"})
+	boundPort := startTLSServer(t, cert, bound.handler())
+	otherPort := startTLSServer(t, cert, other.handler())
+
+	caFile := filepath.Join(t.TempDir(), "upstream-ca.pem")
+	require.NoError(t, os.WriteFile(caFile, caPEM, 0o644))
+
+	// The first curl hits the bound port (TLS terminated, credential
+	// injected); the second hits the unbound port (passthrough relay, its
+	// leaf verified against the extended bundle's test CA). The grep hunts
+	// the real secret in every environ/cmdline visible inside the sandbox.
+	script := fmt.Sprintf(
+		"curl -sf --connect-timeout 10 -H \"Authorization: Bearer $DEMO_TOKEN\" https://localhost:%s/; echo \" a=$?\"; "+
+			"curl -sf --connect-timeout 10 -H \"Authorization: Bearer $DEMO_TOKEN\" https://localhost:%s/; echo \" b=$?\"; "+
+			"grep -rs integration-secret /proc/*/environ /proc/*/cmdline >/dev/null 2>&1; echo \" leak=$?\"",
+		boundPort, otherPort)
+
+	// The parent proxy verifies the terminated bound upstream against
+	// SSL_CERT_FILE (Go). curl in the sandbox verifies the relayed unbound
+	// upstream against CURL_CA_BUNDLE; pass it through so injection extends the
+	// test CA with the per-run CA, letting the sandbox trust both ports.
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--host-loopback",
+		"--domains", "localhost",
+		"--inject-header", "DEMO_TOKEN:localhost:"+boundPort,
+		"--env", "CURL_CA_BUNDLE",
+		"--", "sh", "-c", script)
+	cmd.Env = append(envWithout("DEMO_TOKEN", "SSL_CERT_FILE", "CURL_CA_BUNDLE"),
+		"DEMO_TOKEN=integration-secret",
+		"SSL_CERT_FILE="+caFile,
+		"CURL_CA_BUNDLE="+caFile,
+	)
+
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "sandboxed curl failed: %s", outStr)
+	assert.Contains(t, outStr, "a=0", "request to the bound port should succeed")
+	assert.Contains(t, outStr, "b=0", "request to the unbound port should be relayed")
+	assert.NotContains(t, outStr, "leak=0", "real secret must not be findable in /proc from inside the sandbox")
+	assert.NotContains(t, outStr, "integration-secret")
+
+	seenBound := bound.got("Authorization")
+	require.Len(t, seenBound, 1)
+	assert.Equal(t, "Bearer integration-secret", seenBound[0], "bound destination receives the real credential")
+
+	seenOther := other.got("Authorization")
+	require.Len(t, seenOther, 1)
+	assert.Equal(t, "Bearer curb-inject-DEMO_TOKEN-placeholder", seenOther[0],
+		"unbound destination receives the literal placeholder, never the credential")
+}
+
+// TestCurb_Inject_EnvValueOptOut confirms an explicit --env VAR=value disables
+// injection for that variable at the binary level: the sandbox sees the
+// user-supplied value, not the placeholder, and the inactive binding does not
+// demand the proxy or an allowed domain.
+func TestCurb_Inject_EnvValueOptOut(t *testing.T) {
+	requireUserNS(t)
+
+	cmd := exec.Command(curbBin, "--write", "*", "--exec", "*",
+		"--inject-header", "DEMO_TOKEN:localhost",
+		"--env", "DEMO_TOKEN=my-own-value",
+		"--", "sh", "-c", "echo \" tok=$DEMO_TOKEN\"")
+	cmd.Env = append(envWithout("DEMO_TOKEN"), "DEMO_TOKEN=host-secret")
+
+	out, err := cmd.CombinedOutput()
+	outStr := filterCurbOutput(string(out))
+	require.NoError(t, err, "curb failed: %s", outStr)
+	assert.Contains(t, outStr, "tok=my-own-value", "explicit --env value reaches the sandbox")
+	assert.NotContains(t, outStr, "placeholder", "no placeholder when injection is opted out")
+	assert.NotContains(t, outStr, "host-secret")
+}
+
 // TestCurb_Inject_HeaderAgnostic confirms the same binding works for a different
 // auth header (x-api-key, as Anthropic uses) with no header configured.
 func TestCurb_Inject_HeaderAgnostic(t *testing.T) {
