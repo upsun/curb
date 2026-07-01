@@ -724,9 +724,6 @@ func resolveInject(plan *SandboxPlan, cfg *config.Config) error {
 	if len(specs) == 0 {
 		return nil
 	}
-	if !plan.ProxyEnabled {
-		return fmt.Errorf("credential injection for %s requires the network proxy: allow the destination with --domains/--ips and do not use --unrestricted-net"+injectEnvHint, injectVarNames(specs), specs[0].envVar)
-	}
 	domainMatcher := policy.NewDomainMatcher(plan.AllowedDomains)
 	ipMatcher := policy.NewIPMatcher(plan.AllowedIPs)
 	bindings := make(map[policy.InjectTarget][]proxy.Injection, len(specs))
@@ -740,6 +737,12 @@ func resolveInject(plan *SandboxPlan, cfg *config.Config) error {
 			bindings[t] = append(bindings[t], proxy.Injection{Placeholder: placeholder, Value: s.token})
 		}
 		placeholders[s.envVar] = placeholder
+	}
+	// Authorization above already produced the specific "add --domains/--ips"
+	// error for an unlisted destination; reaching here without the proxy means
+	// the destinations are allowed but unfiltered (e.g. --unrestricted-net).
+	if !plan.ProxyEnabled {
+		return fmt.Errorf("credential injection for %s requires the network proxy: allow the destination with --domains/--ips and do not use --unrestricted-net"+injectEnvHint, injectVarNames(specs), specs[0].envVar)
 	}
 	ca, err := proxy.NewCA()
 	if err != nil {

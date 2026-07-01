@@ -147,13 +147,16 @@ func TestResolveInjectExplicitEnvValueSkipsInjection(t *testing.T) {
 }
 
 // TestResolveInjectWithoutProxySuggestsPassthrough confirms the planning error
-// for an active binding without the proxy (e.g. --unrestricted-net) names the
-// variable and the --env escape hatch.
+// for an active binding whose destination is allowed but unfiltered (profile
+// domains + --unrestricted-net) names the variable and the --env escape hatch.
+// An unlisted destination keeps the more specific "add --domains" error, which
+// authorization raises first.
 func TestResolveInjectWithoutProxySuggestsPassthrough(t *testing.T) {
 	t.Setenv("ACTIVE_TOKEN", "secret")
 	plan := &SandboxPlan{
-		TempDir: t.TempDir(),
-		EnvSet:  map[string]string{},
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		AllowedDomains: []string{"api.example.com"},
 	}
 
 	err := resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com"))
