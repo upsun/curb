@@ -119,10 +119,11 @@ func parseInjectTarget(item string) (InjectTarget, error) {
 	}
 	host, port := item, "443"
 	if h, p, ok := splitInjectPort(item); ok {
-		if err := validatePort(p); err != nil {
+		canonical, err := canonicalPort(p)
+		if err != nil {
 			return InjectTarget{}, fmt.Errorf("injection target %q: %w", item, err)
 		}
-		host, port = h, p
+		host, port = h, canonical
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return InjectTarget{Host: addr.String(), Port: port, IsIP: true}, nil
@@ -168,13 +169,16 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// validatePort checks that p is a numeric TCP port in 1..65535.
-func validatePort(p string) error {
+// canonicalPort checks that p is a numeric TCP port in 1..65535 and returns
+// its canonical decimal form. Binding keys are built from it, so a
+// non-canonical spelling ("0443") must not produce a key that never matches a
+// real connection's port.
+func canonicalPort(p string) (string, error) {
 	n, err := strconv.Atoi(p)
 	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("invalid port %q (want 1-65535)", p)
+		return "", fmt.Errorf("invalid port %q (want 1-65535)", p)
 	}
-	return nil
+	return strconv.Itoa(n), nil
 }
 
 // ValidEnvName reports whether name is a valid environment variable name (a C

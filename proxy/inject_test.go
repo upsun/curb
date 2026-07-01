@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,7 +194,6 @@ func TestInjector_BindingNormalizesHost(t *testing.T) {
 		injs, ok := in.binding(host, "443")
 		require.True(t, ok, "expected binding to match %q", host)
 		assert.Equal(t, "real", injs[0].Value)
-		assert.True(t, in.hasHost(host), "hasHost should match %q", host)
 	}
 
 	// A credential bound to :443 must not match a different port.
@@ -201,7 +202,6 @@ func TestInjector_BindingNormalizesHost(t *testing.T) {
 
 	_, ok = in.binding("other.com", "443")
 	assert.False(t, ok)
-	assert.False(t, in.hasHost("other.com"))
 }
 
 // TestInjector_SetsHostHeader confirms the upstream request's Host header is
@@ -305,37 +305,50 @@ func TestInjector_BindsCredentialToDestination(t *testing.T) {
 	assert.NotContains(t, other.got("Authorization")[0], "ghs_realtoken")
 }
 
-// TestInjector_RefusesPlainHTTP confirms a bound host reached over plain HTTP
-// is refused, not forwarded: the credential must never go out over cleartext.
+// TestInjector_RefusesPlainHTTP confirms a bound host:port reached over plain
+// HTTP is refused, not forwarded: the credential must never go out over
+// cleartext. The refusal is port-exact — plain HTTP to the same host on a port
+// without a binding is relayed unchanged, per the documented contract.
 func TestInjector_RefusesPlainHTTP(t *testing.T) {
 	ca, err := NewCA()
 	require.NoError(t, err)
 
-	gh := newAuthRecorder(t)
-	injector, allowed := newTestInjector(ca,
-		map[string][]Injection{"api.github.com": {{Placeholder: "GH_PH", Value: "ghs_realtoken"}}},
-		map[string]*authRecorder{"api.github.com": gh},
-	)
+	// A loopback port with nothing listening: the unbound-port request should
+	// get a dial failure, not the injection refusal.
+	closedLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	closedPort := closedLn.Addr().(*net.TCPAddr).Port
+	require.NoError(t, closedLn.Close())
+
+	injector := NewInjector(ca)
+	injector.Bind("localhost", strconv.Itoa(closedPort), Injection{Placeholder: "PH", Value: "real"})
 	handler := &Handler{
-		FilterBase: FilterBase{DomainCheck: func(h string) bool { return allowed[h] }},
+		FilterBase: FilterBase{DomainCheck: func(h string) bool { return h == "localhost" }},
 		Injector:   injector,
 	}
 	proxySrv := httptest.NewServer(handler)
 	t.Cleanup(proxySrv.Close)
 	proxyURL, err := url.Parse(proxySrv.URL)
 	require.NoError(t, err)
-
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
-	resp, err := client.Get("http://api.github.com/user")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
 
-	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	// Plain HTTP to the bound host:port is refused before dialing.
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/user", closedPort))
+	require.NoError(t, err)
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	assert.Contains(t, string(body), "requires HTTPS")
-	// The request never reached an upstream.
-	assert.Equal(t, 0, gh.count())
+
+	// Plain HTTP to the same host on an unbound port is relayed (and fails only
+	// at dial time, since nothing is listening).
+	resp, err = client.Get(fmt.Sprintf("http://localhost:%d/user", closedPort+1))
+	require.NoError(t, err)
+	body, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.NotContains(t, string(body), "requires HTTPS")
 }
 
 // TestSOCKS5Server_Injects confirms the SOCKS5 egress path injects credentials
@@ -402,6 +415,159 @@ func TestSOCKS5Server_Injects(t *testing.T) {
 
 	require.Equal(t, 1, gh.count())
 	assert.Equal(t, "Bearer ghs_realtoken", gh.got("Authorization")[0])
+}
+
+// dialInjectTLS dials the proxy, issues a CONNECT for host:443, and completes
+// a TLS handshake trusted via the per-run CA. It returns the decrypted stream
+// and a reader for responses on it.
+func dialInjectTLS(t *testing.T, proxyURL *url.URL, ca *CA, host string) (*tls.Conn, *bufio.Reader) {
+	t.Helper()
+	raw, err := net.Dial("tcp", proxyURL.Host)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	require.NoError(t, raw.SetDeadline(time.Now().Add(10*time.Second)))
+
+	_, err = fmt.Fprintf(raw, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", host, host)
+	require.NoError(t, err)
+	resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: http.MethodConnect})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca.CertPEM())
+	tc := tls.Client(raw, &tls.Config{RootCAs: pool, ServerName: host, MinVersion: tls.VersionTLS12})
+	require.NoError(t, tc.Handshake())
+	return tc, bufio.NewReader(tc)
+}
+
+// TestInjector_UpgradeWebSocket confirms an HTTP/1.1 Upgrade flow (WebSocket
+// handshake and bidirectional stream) works on a bound host, with the
+// credential injected into the handshake request.
+func TestInjector_UpgradeWebSocket(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	rec := &authRecorder{}
+	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.headers = append(rec.headers, r.Header.Clone())
+		rec.hosts = append(rec.hosts, r.Host)
+		if r.Header.Get("Upgrade") != "websocket" {
+			http.Error(w, "expected upgrade", http.StatusBadRequest)
+			return
+		}
+		conn, brw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		_ = brw.Flush()
+		line, err := brw.ReadString('\n')
+		if err != nil {
+			return
+		}
+		_, _ = brw.WriteString("echo:" + line)
+		_ = brw.Flush()
+	}))
+	t.Cleanup(rec.srv.Close)
+
+	proxyURL := injectTestProxy(t, ca,
+		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
+		map[string]*authRecorder{"api.example.com": rec},
+	)
+	tc, br := dialInjectTLS(t, proxyURL, ca, "api.example.com")
+
+	_, err = fmt.Fprintf(tc, "GET /ws HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nAuthorization: Bearer EX_PH\r\n\r\n")
+	require.NoError(t, err)
+	resp, err := http.ReadResponse(br, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+
+	_, err = io.WriteString(tc, "hello\n")
+	require.NoError(t, err)
+	line, err := br.ReadString('\n')
+	require.NoError(t, err)
+	assert.Equal(t, "echo:hello\n", line)
+
+	require.Equal(t, 1, rec.count())
+	assert.Equal(t, "Bearer real_token", rec.got("Authorization")[0])
+}
+
+// TestInjector_KeepAliveAfterUnreadBody confirms the connection stays usable
+// when the upstream responds without consuming the request body: the next
+// request on the same connection must not be corrupted by leftover body bytes.
+func TestInjector_KeepAliveAfterUnreadBody(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	rec := &authRecorder{}
+	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.headers = append(rec.headers, r.Header.Clone())
+		rec.hosts = append(rec.hosts, r.Host)
+		if r.Method == http.MethodPost {
+			// Reply without reading the body.
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(rec.srv.Close)
+
+	proxyURL := injectTestProxy(t, ca,
+		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
+		map[string]*authRecorder{"api.example.com": rec},
+	)
+	tc, br := dialInjectTLS(t, proxyURL, ca, "api.example.com")
+
+	body := strings.Repeat("x", 128<<10)
+	_, err = fmt.Fprintf(tc, "POST /upload HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	require.NoError(t, err)
+	resp, err := http.ReadResponse(br, nil)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+
+	_, err = io.WriteString(tc, "GET /after HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer EX_PH\r\n\r\n")
+	require.NoError(t, err)
+	resp, err = http.ReadResponse(br, nil)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Equal(t, 2, rec.count())
+	assert.Equal(t, "Bearer real_token", rec.got("Authorization")[1])
+}
+
+// TestInjector_ExpectContinue confirms a client using Expect: 100-continue
+// receives an interim 100 response instead of stalling until timeout.
+func TestInjector_ExpectContinue(t *testing.T) {
+	ca, err := NewCA()
+	require.NoError(t, err)
+
+	rec := newAuthRecorder(t)
+	proxyURL := injectTestProxy(t, ca,
+		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
+		map[string]*authRecorder{"api.example.com": rec},
+	)
+	tc, br := dialInjectTLS(t, proxyURL, ca, "api.example.com")
+
+	_, err = io.WriteString(tc, "POST /upload HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n")
+	require.NoError(t, err)
+	require.NoError(t, tc.SetReadDeadline(time.Now().Add(5*time.Second)))
+	resp, err := http.ReadResponse(br, nil)
+	require.NoError(t, err, "expected an interim 100 Continue")
+	require.Equal(t, http.StatusContinue, resp.StatusCode)
+
+	_, err = io.WriteString(tc, "hello")
+	require.NoError(t, err)
+	resp, err = http.ReadResponse(br, nil)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, 1, rec.count())
 }
 
 // TestInjector_LeavesOtherHeadersUntouched confirms only the placeholder is

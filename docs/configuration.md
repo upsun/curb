@@ -225,6 +225,14 @@ same binding works whether the client sends `Authorization: Bearer <token>`,
 across tools or changes over time, and so that a binding can be written by
 someone who knows the credential's env var but not the API's header.
 
+Injection is one-way: requests are rewritten, responses are relayed untouched.
+If an endpoint on a bound host reflects request headers back — a debug or echo
+endpoint, or an error response quoting the `Authorization` header — the
+response carries the real credential into the sandbox. APIs do not normally do
+this, but it means the binding protects the credential from the sandboxed
+program, not from the bound host: bind a credential only to destinations it was
+issued for.
+
 Injection is opt-in per credential: if `ENV_VAR` is unset or empty on the host,
 the binding is skipped silently (no error). This is what lets a profile carry an
 injection that simply does nothing when the credential is absent.
@@ -234,6 +242,11 @@ destination must also be allowed: a hostname by `--domains` (`CURB_DOMAINS`,
 config, or a profile), an IP by `--ips`. If the credential is present but the
 destination is not allowed, curb fails during planning instead of broadening the
 sandbox policy.
+
+Injection also requires the network proxy, so it cannot be combined with
+`--unrestricted-net` (or run on a platform without network filtering): curb
+fails during planning and suggests the alternative, an exact `--env ENV_VAR`
+passthrough that puts the real credential in the sandbox instead.
 
 ```
 # Real value read from the host's $GH_TOKEN; the sandbox sees only a placeholder,
@@ -260,9 +273,10 @@ The profile binding targets `api.anthropic.com`, so a custom `ANTHROPIC_BASE_URL
 and auth would fail. For a gateway, either bind the key to its host as well —
 `--inject-header ANTHROPIC_API_KEY:gateway.example.com` (bindings accumulate, so
 both hosts inject) — or, if the gateway is trusted, pass the key through with an
-exact `--env ANTHROPIC_API_KEY`. Exact passthrough is treated as an explicit
-trust decision and disables injection for that variable; wildcard passthrough
-such as `--env 'ANTHROPIC_*'` or `--env '*'` does not.
+exact `--env ANTHROPIC_API_KEY`. Exact passthrough (`--env ENV_VAR`) and an
+explicit value (`--env ENV_VAR=value`) are treated as explicit trust decisions
+and disable injection for that variable; wildcard passthrough such as
+`--env 'ANTHROPIC_*'` or `--env '*'` does not.
 
 The flag is repeatable (bindings accumulate). For active bindings, curb
 extends each existing CA bundle from the standard CA environment variables
@@ -270,20 +284,24 @@ extends each existing CA bundle from the standard CA environment variables
 `NODE_EXTRA_CA_CERTS`) with the per-run CA and points that variable at the
 extended bundle. If a variable is unset, curb uses the system roots as its base.
 This lets common tools trust the terminated connection while preserving custom
-trust for other hosts.
+trust for other hosts. A variable pointing at a *directory* of certificates
+cannot be extended by concatenation; curb warns and uses the system roots as
+that variable's base instead.
 
-After terminating TLS, curb parses the decrypted stream as HTTP/1.1 and does not
+After terminating TLS, curb serves the decrypted stream as HTTP/1.1 — including
+`Upgrade` flows such as WebSocket and `Expect: 100-continue` — and does not
 negotiate HTTP/2 (no `h2` ALPN). An HTTP/2-only client or protocol — some gRPC
 setups, for example — may fail against a host with injection enabled. Hosts
 without an injection binding keep the untouched passthrough relay and are
 unaffected.
 
-Injection requires HTTPS. A request to a bound host over plain HTTP is refused
+Injection requires HTTPS. A plain-HTTP request to a bound host:port is refused
 (injecting over cleartext would expose the credential), so a binding host should
-be one the client reaches over TLS. Injection applies on both the HTTPS proxy
-and the SOCKS5 path (used by tools that route via `ALL_PROXY`), as long as the
-client sends the hostname (`socks5h`, which curb advertises) rather than a
-pre-resolved IP.
+be one the client reaches over TLS. The refusal is port-exact, like the binding:
+plain HTTP to the same host on a port without a binding is relayed unchanged.
+Injection applies on both the HTTPS proxy and the SOCKS5 path (used by tools
+that route via `ALL_PROXY`), as long as the client sends the hostname
+(`socks5h`, which curb advertises) rather than a pre-resolved IP.
 
 It is also settable via the `CURB_INJECT_HEADER` environment variable, which
 holds one full `ENV_VAR:HOST[,HOST...]` binding. For multiple bindings, repeat

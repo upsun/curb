@@ -122,6 +122,67 @@ func TestResolveInjectExactPassthroughSkipsInjection(t *testing.T) {
 	assert.False(t, set)
 }
 
+// TestResolveInjectExplicitEnvValueSkipsInjection confirms --env VAR=value is
+// an injection opt-out like exact passthrough: the user-supplied value reaches
+// the sandbox instead of being clobbered by the placeholder.
+func TestResolveInjectExplicitEnvValueSkipsInjection(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "host-secret")
+	plan := &SandboxPlan{
+		TempDir:         t.TempDir(),
+		EnvSet:          map[string]string{"ACTIVE_TOKEN": "user-value"},
+		explicitEnvVars: map[string]bool{"ACTIVE_TOKEN": true},
+		AllowedDomains:  []string{"api.example.com"},
+		ProxyEnabled:    true,
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+	require.NoError(t, resolveInject(plan, specs))
+	assert.Empty(t, plan.InjectBindings)
+	assert.Nil(t, plan.CA)
+	assert.Equal(t, "user-value", plan.EnvSet["ACTIVE_TOKEN"])
+}
+
+// TestResolveInjectWithoutProxySuggestsPassthrough confirms the planning error
+// for an active binding without the proxy (e.g. --unrestricted-net) names the
+// variable and the --env escape hatch.
+func TestResolveInjectWithoutProxySuggestsPassthrough(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	plan := &SandboxPlan{
+		TempDir: t.TempDir(),
+		EnvSet:  map[string]string{},
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+	err := resolveInject(plan, specs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ACTIVE_TOKEN")
+	assert.Contains(t, err.Error(), "--env ACTIVE_TOKEN")
+}
+
+// TestCABundleBaseDirectoryFallsBack confirms a CA env var pointing at a
+// directory (accepted by e.g. python-requests) does not abort the run: the
+// system bundle is used as the base instead.
+func TestCABundleBaseDirectoryFallsBack(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	t.Setenv("REQUESTS_CA_BUNDLE", t.TempDir())
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{"REQUESTS_CA_BUNDLE"},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
+	}
+	specs := []injectSpec{{envVar: "ACTIVE_TOKEN", targets: []policy.InjectTarget{{Host: "api.example.com", Port: "443"}}}}
+
+	require.NoError(t, resolveInject(plan, specs))
+	data, err := os.ReadFile(plan.EnvSet["REQUESTS_CA_BUNDLE"])
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "CERTIFICATE")
+}
+
 func TestResolveInjectWildcardPassthroughStillInjects(t *testing.T) {
 	if systemCABundle() == "" {
 		t.Skip("system CA bundle unavailable")
@@ -241,12 +302,12 @@ func TestWriteCABundle(t *testing.T) {
 	if systemCABundle() == "" {
 		// Without system roots, the bundle would override TLS trust with an
 		// incomplete set, so injection fails rather than break other hosts.
-		_, err := writeCABundle(dir, "", caPEM)
+		_, err := writeCABundleFile(dir, "ca-bundle.pem", "", caPEM)
 		require.Error(t, err)
 		return
 	}
 
-	path, err := writeCABundle(dir, "", caPEM)
+	path, err := writeCABundleFile(dir, "ca-bundle.pem", "", caPEM)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, "ca-bundle.pem"), path)
 
@@ -263,7 +324,7 @@ func TestWriteCABundle_ExtendsUserBase(t *testing.T) {
 	base := filepath.Join(dir, "custom-roots.pem")
 	require.NoError(t, os.WriteFile(base, []byte("-----BEGIN CERTIFICATE-----\nCUSTOMROOT\n-----END CERTIFICATE-----\n"), 0o644))
 
-	path, err := writeCABundle(dir, base, caPEM)
+	path, err := writeCABundleFile(dir, "ca-bundle.pem", base, caPEM)
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)

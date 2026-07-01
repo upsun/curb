@@ -35,15 +35,17 @@ func buildInjector(plan *SandboxPlan) *proxy.Injector {
 	return inj
 }
 
-// buildProxyHandler creates the HTTP proxy handler from the sandbox plan.
-func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
-	return &proxy.Handler{FilterBase: buildFilterBase(plan), Injector: buildInjector(plan)}
+// buildProxyHandler creates the HTTP proxy handler from the sandbox plan. The
+// injector is shared with the SOCKS5 server so both egress paths use one
+// upstream transport (one connection pool).
+func buildProxyHandler(plan *SandboxPlan, injector *proxy.Injector) *proxy.Handler {
+	return &proxy.Handler{FilterBase: buildFilterBase(plan), Injector: injector}
 }
 
 // buildSOCKS5Server creates the SOCKS5 proxy server from the sandbox plan.
-func buildSOCKS5Server(plan *SandboxPlan) *proxy.SOCKS5Server {
+func buildSOCKS5Server(plan *SandboxPlan, injector *proxy.Injector) *proxy.SOCKS5Server {
 	return &proxy.SOCKS5Server{
 		FilterBase: buildFilterBase(plan),
-		Injector:   buildInjector(plan),
+		Injector:   injector,
 	}
 }

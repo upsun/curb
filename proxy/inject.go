@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,9 +9,12 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
 	"strings"
 	"sync"
@@ -161,8 +163,7 @@ type Injector struct {
 	// tests override it to reach local servers.
 	Upstream http.RoundTripper
 
-	byTarget   map[string][]Injection // key: net.JoinHostPort(host, port)
-	boundHosts map[string]struct{}    // host only, for the plain-HTTP refusal
+	byTarget map[string][]Injection // key: net.JoinHostPort(host, port)
 }
 
 // NewInjector creates an injector backed by the per-run CA. Its upstream
@@ -176,18 +177,15 @@ func NewInjector(ca *CA) *Injector {
 			TLSHandshakeTimeout: dialTimeout,
 			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 		},
-		byTarget:   map[string][]Injection{},
-		boundHosts: map[string]struct{}{},
+		byTarget: map[string][]Injection{},
 	}
 }
 
 // Bind adds a header injection for a destination host:port. Multiple headers
 // may be bound to the same target.
 func (in *Injector) Bind(host, port string, inj Injection) {
-	host = normalizeHost(host)
-	key := net.JoinHostPort(host, port)
+	key := net.JoinHostPort(normalizeHost(host), port)
 	in.byTarget[key] = append(in.byTarget[key], inj)
-	in.boundHosts[host] = struct{}{}
 }
 
 // binding returns the injections bound to host:port, if any.
@@ -197,17 +195,6 @@ func (in *Injector) binding(host, port string) ([]Injection, bool) {
 	}
 	injs, ok := in.byTarget[net.JoinHostPort(normalizeHost(host), port)]
 	return injs, ok
-}
-
-// hasHost reports whether any binding exists for host on any port. The
-// plain-HTTP path uses it to refuse cleartext to a host that holds a
-// credential, regardless of the bound port.
-func (in *Injector) hasHost(host string) bool {
-	if in == nil {
-		return false
-	}
-	_, ok := in.boundHosts[normalizeHost(host)]
-	return ok
 }
 
 // normalizeHost canonicalizes a host for binding keys: an IP literal to its
@@ -273,46 +260,85 @@ func (in *Injector) Serve(client net.Conn, host, port string, injs []Injection) 
 	return nil
 }
 
-// serveInjected reads requests off the decrypted client stream and forwards
-// each to the upstream with the bound credentials set, relaying the response.
+// serveInjected serves HTTP on the decrypted client stream and forwards each
+// request to the upstream with the bound credentials set. A single-connection
+// http.Server drives a ReverseProxy: the server side owns HTTP/1.1 framing —
+// draining request bodies between keep-alive requests and answering Expect:
+// 100-continue — and the ReverseProxy relays Upgrade (WebSocket) streams.
+// Responses are relayed as-is, without scrubbing the real credential out of
+// reflected headers or bodies (see docs/configuration.md).
 func (in *Injector) serveInjected(client net.Conn, host, port string, injs []Injection) {
-	rt := in.Upstream
 	// authority is the upstream the request is bound to. Drop the default
 	// https port so the Host header matches what a direct client would send.
 	authority := injectedAuthority(host, port)
-	br := bufio.NewReader(client)
-	for {
-		req, err := http.ReadRequest(br)
-		if err != nil {
-			return
-		}
-		// Strip hop-by-hop headers first so the client cannot smuggle a
-		// placeholder past substitution by naming a header in Connection.
-		stripHopByHop(req.Header)
-		// Replace the placeholder with the real credential wherever the client
-		// placed it among the request headers. The sandbox never holds the real
-		// value, so this is where the credential is first introduced. Header
-		// values only: bodies and the request URI are left untouched.
-		replaceInHeaders(req.Header, injs)
-		req.URL.Scheme = "https"
-		req.URL.Host = authority
-		// Align the Host header with the upstream we dial; the client may have
-		// sent a placeholder or an incorrect port.
-		req.Host = authority
-		req.RequestURI = ""
-
-		resp, err := rt.RoundTrip(req)
-		if err != nil {
-			writeGatewayError(client)
-			return
-		}
-		werr := resp.Write(client)
-		_ = resp.Body.Close()
-		if werr != nil {
-			return
-		}
+	rp := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			// Hop-by-hop headers are already removed from the outbound request,
+			// so the client cannot smuggle a placeholder past substitution by
+			// naming a header in Connection. Replace the placeholder with the
+			// real credential wherever the client placed it among the request
+			// headers. The sandbox never holds the real value, so this is where
+			// the credential is first introduced. Header values only: bodies
+			// and the request URI are left untouched.
+			replaceInHeaders(pr.Out.Header, injs)
+			pr.Out.URL.Scheme = "https"
+			pr.Out.URL.Host = authority
+			// Align the Host header with the upstream we dial; the client may
+			// have sent a placeholder or an incorrect port.
+			pr.Out.Host = authority
+		},
+		Transport: in.Upstream,
+		// Flush each write immediately: API responses are often streamed (SSE)
+		// and the old direct relay never buffered.
+		FlushInterval: -1,
+		ErrorLog:      log.New(io.Discard, "", 0),
 	}
+	done := make(chan struct{})
+	conn := &signalOnCloseConn{Conn: client, done: done}
+	srv := &http.Server{Handler: rp, ErrorLog: log.New(io.Discard, "", 0)}
+	// Serve returns when the connection closes: the listener yields the one
+	// connection, then blocks until it is closed — by the server loop after the
+	// final request, or by the ReverseProxy at the end of an Upgrade relay.
+	_ = srv.Serve(&singleConnListener{conn: conn, addr: client.LocalAddr(), done: done})
 }
+
+// signalOnCloseConn closes done when the connection is closed, whichever code
+// path closes it.
+type signalOnCloseConn struct {
+	net.Conn
+	once sync.Once
+	done chan struct{}
+}
+
+func (c *signalOnCloseConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.done) })
+	return err
+}
+
+// singleConnListener yields one already-accepted connection, then blocks until
+// that connection is closed before reporting the listener as closed.
+type singleConnListener struct {
+	mu   sync.Mutex
+	conn net.Conn
+	addr net.Addr
+	done <-chan struct{}
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	c := l.conn
+	l.conn = nil
+	l.mu.Unlock()
+	if c != nil {
+		return c, nil
+	}
+	<-l.done
+	return nil, net.ErrClosed
+}
+
+func (l *singleConnListener) Close() error   { return nil }
+func (l *singleConnListener) Addr() net.Addr { return l.addr }
 
 func injectedAuthority(host, port string) string {
 	if port != "443" {
@@ -337,8 +363,4 @@ func replaceInHeaders(hdr http.Header, injs []Injection) {
 			values[i] = v
 		}
 	}
-}
-
-func writeGatewayError(c net.Conn) {
-	_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
 }

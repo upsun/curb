@@ -122,7 +122,8 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 	// Start proxy if enabled.
 	var proxySrv *http.Server
 	if plan.ProxyEnabled {
-		handler := buildProxyHandler(plan)
+		injector := buildInjector(plan)
+		handler := buildProxyHandler(plan, injector)
 
 		// ConnListeners fed by recvFDLoop (child relays accepted fds to parent).
 		httpAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.ProxyPort}
@@ -136,7 +137,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 			socksAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: plan.SOCKSPort}
 			socksCL = proxy.NewConnListener(socksAddr)
 			res.push(func() { _ = socksCL.Close() })
-			socksSrv := buildSOCKS5Server(plan)
+			socksSrv := buildSOCKS5Server(plan, injector)
 			go func() { _ = socksSrv.Serve(socksCL) }()
 		}
 

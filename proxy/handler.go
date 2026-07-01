@@ -99,10 +99,11 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A credential is bound to this host but the request is plain HTTP. Refuse
-	// rather than forward: injecting over cleartext would expose the real
-	// credential, and forwarding the placeholder unchanged fails auth silently.
-	if h.Injector.hasHost(host) {
+	// A credential is bound to this exact host:port but the request is plain
+	// HTTP. Refuse rather than forward: injecting over cleartext would expose
+	// the real credential. Other ports of the same host are relayed unchanged,
+	// per the port-exact binding contract.
+	if _, bound := h.Injector.binding(host, port); bound {
 		http.Error(w, "curb: credential injection requires HTTPS for "+host, http.StatusBadGateway)
 		h.logEvent("proxy_http", r.Host, "blocked", "inject-requires-https")
 		return
