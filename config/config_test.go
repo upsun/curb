@@ -107,6 +107,15 @@ func TestFromFlags_WildcardEnv(t *testing.T) {
 	assert.Empty(t, cfg.EnvPassthrough)
 }
 
+func TestFromFlags_WildcardEnvKeepsExplicitNames(t *testing.T) {
+	cmd := newTestCmd([]string{"--env", "FOO", "--env", "*", "--env", "BAR=baz"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+	assert.True(t, cfg.EnvPassthroughAll)
+	assert.Equal(t, []string{"FOO"}, cfg.EnvPassthrough)
+	assert.Equal(t, []string{"BAR=baz"}, cfg.EnvSet)
+}
+
 func TestFromFlags_WildcardRead(t *testing.T) {
 	cmd := newTestCmd([]string{"--read", "*"})
 	cfg, err := FromFlags(cmd)
@@ -223,6 +232,19 @@ func TestMergeEnv_WildcardEnv(t *testing.T) {
 
 	assert.True(t, cfg.EnvPassthroughAll)
 	assert.Empty(t, cfg.EnvPassthrough)
+}
+
+func TestMergeEnv_WildcardEnvKeepsExplicitEntries(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_ENV", "FOO,*,BAR=baz")
+	MergeEnv(cfg, cmd)
+
+	assert.True(t, cfg.EnvPassthroughAll)
+	assert.Equal(t, []string{"FOO"}, cfg.EnvPassthrough)
+	assert.Equal(t, []string{"BAR=baz"}, cfg.EnvSet)
 }
 
 func TestMergeEnv_WildcardEnvValueNotPassthrough(t *testing.T) {

@@ -162,7 +162,9 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	}
 	if containsStar(passNames) {
 		cfg.EnvPassthroughAll = true
-		cfg.EnvPassthrough = nil
+		// Keep explicit names: --env NAME alongside '*' is still a per-variable
+		// trust decision (it opts NAME out of credential injection).
+		cfg.EnvPassthrough = removeStar(passNames)
 	}
 	if containsStar(cfg.ROPaths) {
 		cfg.ROPaths = []string{"/"}
@@ -210,11 +212,10 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 		envPass, envSet := classifyEnvArgs(SplitComma(val))
 		if containsStar(envPass) {
 			cfg.EnvPassthroughAll = true
-			cfg.EnvPassthrough = nil
-		} else {
-			cfg.EnvPassthrough = append(cfg.EnvPassthrough, envPass...)
-			cfg.EnvSet = append(cfg.EnvSet, envSet...)
+			envPass = removeStar(envPass)
 		}
+		cfg.EnvPassthrough = append(cfg.EnvPassthrough, envPass...)
+		cfg.EnvSet = append(cfg.EnvSet, envSet...)
 	}
 
 	// String values: env only if flag not explicitly set.
@@ -250,6 +251,11 @@ func classifyEnvArgs(args []string) (passNames, setPairs []string) {
 // containsStar reports whether the slice contains a literal "*" element.
 func containsStar(ss []string) bool {
 	return slices.Contains(ss, "*")
+}
+
+// removeStar returns ss without its literal "*" elements.
+func removeStar(ss []string) []string {
+	return slices.DeleteFunc(slices.Clone(ss), func(s string) bool { return s == "*" })
 }
 
 func appendEnvList(existing []string, envKey string) []string {

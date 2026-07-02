@@ -630,23 +630,31 @@ func activeInjectSpecs(specs []injectSpec, cfg *config.Config) []injectSpec {
 // injectOptOut reports whether the user explicitly provided name's sandbox
 // value — exact passthrough (--env NAME) or an explicit value (--env
 // NAME=value). Either is a trust decision that disables credential injection
-// for that variable; wildcard passthrough does not.
+// for that variable; wildcard passthrough does not, but an explicit name
+// alongside --env '*' still counts (config keeps the names in EnvPassthrough).
 func injectOptOut(cfg *config.Config, name string) bool {
 	for _, pair := range cfg.EnvSet {
 		if k, _, _ := strings.Cut(pair, "="); k == name {
 			return true
 		}
 	}
-	if cfg.EnvPassthroughAll {
-		return false
-	}
 	adds, _, _ := config.ParseExclusions(cfg.EnvPassthrough)
 	return slices.Contains(adds, name)
 }
 
 // injectEnvHint is the shared error suffix suggesting the injection-free
-// alternative; takes the variable name as a format argument.
-const injectEnvHint = "; or pass the credential into the sandbox instead (an explicit trust decision) with --env %s"
+// alternative; takes the injectEnvFlags of the active specs as a format
+// argument.
+const injectEnvHint = "; or pass the credential into the sandbox instead (an explicit trust decision) with %s"
+
+// injectEnvFlags renders an --env flag per spec for error-message hints.
+func injectEnvFlags(specs []injectSpec) string {
+	flags := make([]string, len(specs))
+	for i, s := range specs {
+		flags[i] = "--env " + s.envVar
+	}
+	return strings.Join(flags, " ")
+}
 
 // displayInjectTarget formats an injection target for human output, dropping
 // the default :443 so the common case reads as a bare host.
@@ -742,7 +750,7 @@ func resolveInject(plan *SandboxPlan, cfg *config.Config) error {
 	// error for an unlisted destination; reaching here without the proxy means
 	// the destinations are allowed but unfiltered (e.g. --unrestricted-net).
 	if !plan.ProxyEnabled {
-		return fmt.Errorf("credential injection for %s requires the network proxy: allow the destination with --domains/--ips and do not use --unrestricted-net"+injectEnvHint, injectVarNames(specs), specs[0].envVar)
+		return fmt.Errorf("credential injection for %s requires the network proxy: allow the destination with --domains/--ips and do not use --unrestricted-net"+injectEnvHint, injectVarNames(specs), injectEnvFlags(specs))
 	}
 	ca, err := proxy.NewCA()
 	if err != nil {
@@ -1528,7 +1536,7 @@ func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, er
 		return nil, err
 	}
 	if active := activeInjectSpecs(injects, cfg); len(active) > 0 {
-		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS"+injectEnvHint, active[0].envVar)
+		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS"+injectEnvHint, injectEnvFlags(active))
 	}
 
 	if len(cfg.AllowedDomains) > 0 {

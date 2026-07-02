@@ -126,6 +126,26 @@ func TestResolveInjectExactPassthroughSkipsInjection(t *testing.T) {
 	assert.False(t, set)
 }
 
+// TestResolveInjectExactPassthroughWithWildcardSkipsInjection confirms an
+// explicit --env VAR remains an opt-out when combined with --env '*': the
+// explicit name is preserved alongside EnvPassthroughAll.
+func TestResolveInjectExactPassthroughWithWildcardSkipsInjection(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{envPassthroughAll},
+		ProxyEnabled:   true,
+	}
+	cfg := injectCfg("ACTIVE_TOKEN:api.example.com")
+	cfg.EnvPassthroughAll = true
+	cfg.EnvPassthrough = []string{"ACTIVE_TOKEN"}
+
+	require.NoError(t, resolveInject(plan, cfg))
+	assert.Empty(t, plan.InjectBindings)
+	assert.Nil(t, plan.CA)
+}
+
 // TestResolveInjectExplicitEnvValueSkipsInjection confirms --env VAR=value is
 // an injection opt-out like exact passthrough: the user-supplied value reaches
 // the sandbox instead of being clobbered by the placeholder.
@@ -163,6 +183,23 @@ func TestResolveInjectWithoutProxySuggestsPassthrough(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ACTIVE_TOKEN")
 	assert.Contains(t, err.Error(), "--env ACTIVE_TOKEN")
+}
+
+// TestResolveInjectWithoutProxyHintNamesEachVariable confirms the --env hint
+// covers every active binding, not just the first.
+func TestResolveInjectWithoutProxyHintNamesEachVariable(t *testing.T) {
+	t.Setenv("TOKEN_A", "secret-a")
+	t.Setenv("TOKEN_B", "secret-b")
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		AllowedDomains: []string{"a.example.com", "b.example.com"},
+	}
+
+	err := resolveInject(plan, injectCfg("TOKEN_A:a.example.com", "TOKEN_B:b.example.com"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--env TOKEN_A")
+	assert.Contains(t, err.Error(), "--env TOKEN_B")
 }
 
 // TestCABundleBaseExplicitEmptyOverridesPassthrough confirms an explicitly
@@ -214,6 +251,26 @@ func TestResolveInjectWildcardPassthroughStillInjects(t *testing.T) {
 	}
 	cfg := injectCfg("ACTIVE_TOKEN:api.example.com")
 	cfg.EnvPassthrough = []string{"ACTIVE_*"}
+
+	require.NoError(t, resolveInject(plan, cfg))
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
+	assert.Equal(t, injectPlaceholder("ACTIVE_TOKEN"), plan.EnvSet["ACTIVE_TOKEN"])
+}
+
+func TestResolveInjectPassthroughAllStillInjects(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{envPassthroughAll},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
+	}
+	cfg := injectCfg("ACTIVE_TOKEN:api.example.com")
+	cfg.EnvPassthroughAll = true
 
 	require.NoError(t, resolveInject(plan, cfg))
 	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
