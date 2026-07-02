@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -23,11 +22,7 @@ import (
 	"github.com/upsun/curb/policy"
 )
 
-const (
-	caValidity      = 365 * 24 * time.Hour
-	leafValidity    = 30 * 24 * time.Hour
-	leafRenewBefore = 24 * time.Hour
-)
+const caValidity = 365 * 24 * time.Hour
 
 // CA is a per-run certificate authority used to mint leaf certificates for the
 // hosts whose TLS the injecting proxy terminates. It is trusted only inside one
@@ -37,7 +32,7 @@ type CA struct {
 	key     *ecdsa.PrivateKey
 	certPEM []byte
 
-	mu     sync.RWMutex
+	mu     sync.Mutex
 	leaves map[string]*tls.Certificate
 }
 
@@ -79,46 +74,35 @@ func NewCA() (*CA, error) {
 // action's trust store (SSL_CERT_FILE / GIT_SSL_CAINFO / ...).
 func (ca *CA) CertPEM() []byte { return ca.certPEM }
 
-// leafFor returns a leaf certificate for host, signed by the CA. Leaves are
-// cached per host for the life of the run. Signing happens without the lock
-// held, so a cache hit for one host never blocks behind a sign for another.
+// leafFor returns a leaf certificate for host, signed by the CA. Leaves share
+// the CA's expiry and are cached per host for the life of the run; signing is
+// sub-millisecond, so holding the lock across a sign is fine.
 func (ca *CA) leafFor(host string) (*tls.Certificate, error) {
-	now := time.Now()
-	ca.mu.RLock()
-	c := ca.leaves[host]
-	ca.mu.RUnlock()
-	if c != nil && !leafNeedsRenewal(c, now) {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	if c := ca.leaves[host]; c != nil {
 		return c, nil
 	}
 	leaf, err := ca.signLeaf(host)
 	if err != nil {
 		return nil, err
 	}
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-	if existing := ca.leaves[host]; existing != nil && !leafNeedsRenewal(existing, now) {
-		return existing, nil // another goroutine won the race; reuse its leaf
-	}
 	ca.leaves[host] = leaf
 	return leaf, nil
 }
 
-// signLeaf mints a fresh leaf certificate for host. It holds no lock.
+// signLeaf mints a fresh leaf certificate for host.
 func (ca *CA) signLeaf(host string) (*tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	notAfter := now.Add(leafValidity)
-	if notAfter.After(ca.cert.NotAfter) {
-		notAfter = ca.cert.NotAfter
-	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),
 		Subject:      pkix.Name{CommonName: host},
 		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     notAfter,
+		NotAfter:     ca.cert.NotAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -136,10 +120,6 @@ func (ca *CA) signLeaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leafCert}, nil
-}
-
-func leafNeedsRenewal(cert *tls.Certificate, now time.Time) bool {
-	return cert.Leaf == nil || !cert.Leaf.NotAfter.After(now.Add(leafRenewBefore))
 }
 
 // Injection is a credential bound to a destination host: on requests the proxy
@@ -203,19 +183,13 @@ func (in *Injector) binding(host, port string) ([]Injection, bool) {
 // then forwards each decrypted request to the real upstream with the bound
 // credential injected.
 func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs []Injection) {
-	hj, ok := w.(http.Hijacker)
+	clientConn, ok := h.hijack(w, "proxy_inject", host)
 	if !ok {
-		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
-		return
-	}
-	clientConn, _, err := hj.Hijack()
-	if err != nil {
-		h.logEvent("proxy_inject", host, "error", err.Error())
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
 
-	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+	if _, err := clientConn.Write([]byte(connEstablished)); err != nil {
 		return
 	}
 
@@ -262,7 +236,7 @@ func (in *Injector) Serve(client net.Conn, host, port string, injs []Injection) 
 func (in *Injector) serveInjected(client net.Conn, host, port string, injs []Injection) {
 	// authority is the upstream the request is bound to. Drop the default
 	// https port so the Host header matches what a direct client would send.
-	authority := injectedAuthority(host, port)
+	authority := policy.InjectTarget{Host: host, Port: port}.String()
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Hop-by-hop headers are already removed from the outbound request,
@@ -312,16 +286,6 @@ func (c *signalOnCloseConn) Close() error {
 	err := c.Conn.Close()
 	c.once.Do(c.onClose)
 	return err
-}
-
-func injectedAuthority(host, port string) string {
-	if port != "443" {
-		return net.JoinHostPort(host, port)
-	}
-	if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() {
-		return "[" + host + "]"
-	}
-	return host
 }
 
 // replaceInHeaders substitutes each binding's placeholder with its real value in

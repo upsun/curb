@@ -108,6 +108,13 @@ func TestParseInjectHeader(t *testing.T) {
 	}
 }
 
+func TestInjectTargetString(t *testing.T) {
+	assert.Equal(t, "api.github.com", InjectTarget{Host: "api.github.com", Port: "443"}.String())
+	assert.Equal(t, "api.github.com:8443", InjectTarget{Host: "api.github.com", Port: "8443"}.String())
+	assert.Equal(t, "[2001:db8::1]", InjectTarget{Host: "2001:db8::1", Port: "443"}.String())
+	assert.Equal(t, "[2001:db8::1]:8443", InjectTarget{Host: "2001:db8::1", Port: "8443"}.String())
+}
+
 func TestValidateIPs(t *testing.T) {
 	tests := []struct {
 		name    string

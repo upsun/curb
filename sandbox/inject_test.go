@@ -13,35 +13,20 @@ import (
 	"github.com/upsun/curb/policy"
 )
 
+// TestParseInjectHeader covers what the wrapper adds over
+// policy.ParseInjectHeader (which owns the validation rule matrix, see
+// policy/validate_test.go): multi-entry parsing and the flag-name error prefix.
 func TestParseInjectHeader(t *testing.T) {
-	specs, err := parseInjectHeader([]string{"ANTHROPIC_API_KEY:api.anthropic.com"})
+	specs, err := parseInjectHeader([]string{"ANTHROPIC_API_KEY:api.anthropic.com", "T:b.example.com:8443"})
 	require.NoError(t, err)
-	require.Len(t, specs, 1)
+	require.Len(t, specs, 2)
 	assert.Equal(t, "ANTHROPIC_API_KEY", specs[0].envVar)
-	require.Len(t, specs[0].targets, 1)
-	assert.Equal(t, "api.anthropic.com", specs[0].targets[0].Host)
-	assert.Equal(t, "443", specs[0].targets[0].Port)
+	assert.Equal(t, []policy.InjectTarget{{Host: "api.anthropic.com", Port: "443"}}, specs[0].targets)
+	assert.Equal(t, []policy.InjectTarget{{Host: "b.example.com", Port: "8443"}}, specs[1].targets)
 
-	for _, bad := range []string{
-		"", "ANTHROPIC_API_KEY", ":h.com", "TOK:", // missing var or host
-		"1BAD:h.com",       // invalid env var name (leading digit)
-		"bad-var:h.com",    // invalid env var name (dash)
-		"T:*", "T:*.h.com", // wildcard hosts rejected
-		"TOK:not a host", // invalid host
-		"TOK:h.com:0",    // invalid port
-		"TOK:h.com,",     // empty target in list
-	} {
-		_, err := parseInjectHeader([]string{bad})
-		assert.Error(t, err, "expected error for %q", bad)
-	}
-
-	// A list of targets with a mix of default and custom ports.
-	specs, err = parseInjectHeader([]string{"T:API.Anthropic.COM.,b.example.com:8443"})
-	require.NoError(t, err)
-	require.Len(t, specs[0].targets, 2)
-	assert.Equal(t, "api.anthropic.com", specs[0].targets[0].Host)
-	assert.Equal(t, "b.example.com", specs[0].targets[1].Host)
-	assert.Equal(t, "8443", specs[0].targets[1].Port)
+	_, err = parseInjectHeader([]string{"bad-var:h.com"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inject-header ")
 }
 
 func TestInjectPlaceholder(t *testing.T) {

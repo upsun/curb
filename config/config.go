@@ -249,6 +249,22 @@ func (cfg *Config) applyEnvArgs(args []string) {
 	cfg.EnvSet = append(cfg.EnvSet, setPairs...)
 }
 
+// EnvExplicitlyProvided reports whether the user named the variable in an
+// --env argument — exact passthrough (--env NAME) or an explicit value (--env
+// NAME=value). Either is a per-variable trust decision (it opts NAME out of
+// credential injection); wildcard or glob passthrough is not. Explicit names
+// are kept even alongside '*' (see applyEnvArgs), so the wildcard does not
+// mask them.
+func (cfg *Config) EnvExplicitlyProvided(name string) bool {
+	for _, pair := range cfg.EnvSet {
+		if k, _, _ := strings.Cut(pair, "="); k == name {
+			return true
+		}
+	}
+	adds, _, _ := ParseExclusions(cfg.EnvPassthrough)
+	return slices.Contains(adds, name)
+}
+
 // containsStar reports whether the slice contains a literal "*" element.
 func containsStar(ss []string) bool {
 	return slices.Contains(ss, "*")

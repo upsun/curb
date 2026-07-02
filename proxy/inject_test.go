@@ -30,11 +30,20 @@ type authRecorder struct {
 
 func newAuthRecorder(t *testing.T) *authRecorder {
 	t.Helper()
+	return newAuthRecorderWith(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})
+}
+
+// newAuthRecorderWith starts a recording TLS upstream with a custom handler;
+// each request is recorded before the handler runs.
+func newAuthRecorderWith(t *testing.T, handler http.HandlerFunc) *authRecorder {
+	t.Helper()
 	rec := &authRecorder{}
 	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.headers = append(rec.headers, r.Header.Clone())
 		rec.hosts = append(rec.hosts, r.Host)
-		_, _ = io.WriteString(w, "ok")
+		handler(w, r)
 	}))
 	t.Cleanup(rec.srv.Close)
 	return rec
@@ -129,24 +138,16 @@ func clientThroughProxy(t *testing.T, proxyURL *url.URL, ca *CA) *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-func get(t *testing.T, client *http.Client, rawURL string) string {
-	t.Helper()
-	resp, err := client.Get(rawURL)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	return string(body)
-}
-
-// getWithHeader issues a GET through the proxy with one header set, returning
-// the upstream's response body.
-func getWithHeader(t *testing.T, client *http.Client, rawURL, name, value string) string {
+// get issues a GET through the proxy, optionally setting one header (given as
+// a name, value pair), and returns the upstream's response body.
+func get(t *testing.T, client *http.Client, rawURL string, header ...string) string {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	require.NoError(t, err)
-	req.Header.Set(name, value)
+	if len(header) > 0 {
+		require.Len(t, header, 2, "header must be a name, value pair")
+		req.Header.Set(header[0], header[1])
+	}
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
@@ -168,23 +169,6 @@ func TestCA_CertificatesSupportLongSessions(t *testing.T) {
 	require.NotNil(t, leaf.Leaf)
 	assert.Greater(t, leaf.Leaf.NotAfter.Sub(now), 7*24*time.Hour)
 	assert.False(t, leaf.Leaf.NotAfter.After(ca.cert.NotAfter), "leaf must not outlive the CA")
-}
-
-func TestCA_LeafForRenewsExpiringCachedLeaf(t *testing.T) {
-	ca, err := NewCA()
-	require.NoError(t, err)
-
-	first, err := ca.leafFor("api.github.com")
-	require.NoError(t, err)
-	require.NotNil(t, first.Leaf)
-
-	first.Leaf.NotAfter = time.Now().Add(leafRenewBefore / 2)
-	renewed, err := ca.leafFor("api.github.com")
-	require.NoError(t, err)
-
-	assert.NotSame(t, first, renewed)
-	assert.NotEqual(t, first.Certificate[0], renewed.Certificate[0])
-	assert.Greater(t, time.Until(renewed.Leaf.NotAfter), leafRenewBefore)
 }
 
 // TestInjector_BindingNormalizesHost confirms bindings match CONNECT targets
@@ -225,12 +209,6 @@ func TestInjector_SetsHostHeader(t *testing.T) {
 	assert.Equal(t, "api.github.com", gh.hosts[0])
 }
 
-func TestInjectedAuthorityBracketsDefaultPortIPv6(t *testing.T) {
-	assert.Equal(t, "[2001:db8::1]", injectedAuthority("2001:db8::1", "443"))
-	assert.Equal(t, "[2001:db8::1]:8443", injectedAuthority("2001:db8::1", "8443"))
-	assert.Equal(t, "api.github.com", injectedAuthority("api.github.com", "443"))
-}
-
 // TestInjector_ReplacesPlaceholder verifies the placeholder the sandbox sends is
 // replaced with the real credential, wherever the client placed it.
 func TestInjector_ReplacesPlaceholder(t *testing.T) {
@@ -244,7 +222,7 @@ func TestInjector_ReplacesPlaceholder(t *testing.T) {
 	)
 	client := clientThroughProxy(t, proxyURL, ca)
 
-	body := getWithHeader(t, client, "https://api.github.com/user", "Authorization", "Bearer GH_PH")
+	body := get(t, client, "https://api.github.com/user", "Authorization", "Bearer GH_PH")
 	assert.Equal(t, "ok", body)
 	require.Equal(t, 1, gh.count())
 	assert.Equal(t, "Bearer ghs_realtoken", gh.got("Authorization")[0])
@@ -268,7 +246,7 @@ func TestInjector_HeaderAgnostic(t *testing.T) {
 		)
 		client := clientThroughProxy(t, proxyURL, ca)
 
-		getWithHeader(t, client, "https://api.anthropic.com/v1/models", tc.header, tc.value)
+		get(t, client, "https://api.anthropic.com/v1/models", tc.header, tc.value)
 		require.Equal(t, 1, up.count())
 		assert.Equal(t, tc.want, up.got(tc.header)[0], "header %s", tc.header)
 	}
@@ -296,8 +274,8 @@ func TestInjector_BindsCredentialToDestination(t *testing.T) {
 	client := clientThroughProxy(t, proxyURL, ca)
 
 	// Send github's placeholder to both hosts: only github substitutes it.
-	getWithHeader(t, client, "https://api.github.com/user", "Authorization", "Bearer GH_PH")
-	getWithHeader(t, client, "https://api.example.com/data", "Authorization", "Bearer GH_PH")
+	get(t, client, "https://api.github.com/user", "Authorization", "Bearer GH_PH")
+	get(t, client, "https://api.example.com/data", "Authorization", "Bearer GH_PH")
 
 	require.Equal(t, 1, gh.count())
 	require.Equal(t, 1, other.count())
@@ -450,10 +428,7 @@ func TestInjector_UpgradeWebSocket(t *testing.T) {
 	ca, err := NewCA()
 	require.NoError(t, err)
 
-	rec := &authRecorder{}
-	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec.headers = append(rec.headers, r.Header.Clone())
-		rec.hosts = append(rec.hosts, r.Host)
+	rec := newAuthRecorderWith(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") != "websocket" {
 			http.Error(w, "expected upgrade", http.StatusBadRequest)
 			return
@@ -471,8 +446,7 @@ func TestInjector_UpgradeWebSocket(t *testing.T) {
 		}
 		_, _ = brw.WriteString("echo:" + line)
 		_ = brw.Flush()
-	}))
-	t.Cleanup(rec.srv.Close)
+	})
 
 	proxyURL := injectTestProxy(t, ca,
 		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
@@ -503,18 +477,14 @@ func TestInjector_KeepAliveAfterUnreadBody(t *testing.T) {
 	ca, err := NewCA()
 	require.NoError(t, err)
 
-	rec := &authRecorder{}
-	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec.headers = append(rec.headers, r.Header.Clone())
-		rec.hosts = append(rec.hosts, r.Host)
+	rec := newAuthRecorderWith(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			// Reply without reading the body.
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
 		_, _ = io.WriteString(w, "ok")
-	}))
-	t.Cleanup(rec.srv.Close)
+	})
 
 	proxyURL := injectTestProxy(t, ca,
 		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
@@ -552,14 +522,10 @@ func TestInjector_ExpectContinue(t *testing.T) {
 	ca, err := NewCA()
 	require.NoError(t, err)
 
-	rec := &authRecorder{}
-	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec.headers = append(rec.headers, r.Header.Clone())
-		rec.hosts = append(rec.hosts, r.Host)
+	rec := newAuthRecorderWith(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_, _ = w.Write(body) // echo, so the test confirms the body arrived
-	}))
-	t.Cleanup(rec.srv.Close)
+	})
 
 	proxyURL := injectTestProxy(t, ca,
 		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
@@ -611,7 +577,7 @@ func TestInjector_LeavesOtherHeadersUntouched(t *testing.T) {
 	client := clientThroughProxy(t, proxyURL, ca)
 
 	// No placeholder present: nothing is substituted, and the value is intact.
-	getWithHeader(t, client, "https://api.github.com/user", "X-Custom", "untouched-value")
+	get(t, client, "https://api.github.com/user", "X-Custom", "untouched-value")
 	require.Equal(t, 1, gh.count())
 	assert.Equal(t, "untouched-value", gh.got("X-Custom")[0])
 	assert.Empty(t, gh.got("Authorization")[0])

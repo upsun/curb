@@ -116,6 +116,19 @@ func TestFromFlags_WildcardEnvKeepsExplicitNames(t *testing.T) {
 	assert.Equal(t, []string{"BAR=baz"}, cfg.EnvSet)
 }
 
+func TestEnvExplicitlyProvided(t *testing.T) {
+	cfg := &Config{
+		EnvPassthrough: []string{"FOO", "GLOB_*", "!EXCLUDED"},
+		EnvSet:         []string{"BAR=baz", "EMPTY="},
+	}
+	assert.True(t, cfg.EnvExplicitlyProvided("FOO"), "exact passthrough")
+	assert.True(t, cfg.EnvExplicitlyProvided("BAR"), "explicit value")
+	assert.True(t, cfg.EnvExplicitlyProvided("EMPTY"), "explicit empty value")
+	assert.False(t, cfg.EnvExplicitlyProvided("GLOB_MATCH"), "glob passthrough is not explicit")
+	assert.False(t, cfg.EnvExplicitlyProvided("EXCLUDED"), "exclusion is not explicit")
+	assert.False(t, cfg.EnvExplicitlyProvided("OTHER"))
+}
+
 func TestFromFlags_WildcardRead(t *testing.T) {
 	cmd := newTestCmd([]string{"--read", "*"})
 	cfg, err := FromFlags(cmd)

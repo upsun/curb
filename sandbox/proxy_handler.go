@@ -23,7 +23,8 @@ func buildFilterBase(plan *SandboxPlan) proxy.FilterBase {
 // bindings are configured. It is shared by the HTTP and SOCKS5 proxies so both
 // egress paths inject for bound hosts.
 func buildInjector(plan *SandboxPlan) *proxy.Injector {
-	if plan.CA == nil || len(plan.InjectBindings) == 0 {
+	// resolveInject sets CA and InjectBindings together, or neither.
+	if plan.CA == nil {
 		return nil
 	}
 	inj := proxy.NewInjector(plan.CA)

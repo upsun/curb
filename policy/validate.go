@@ -80,6 +80,19 @@ type InjectTarget struct {
 	Port string // numeric port, "443" by default
 }
 
+// String formats the target for display and as an HTTP authority, dropping
+// the default :443 so the common case reads as a bare host. A bare IPv6 host
+// is bracketed so the result is a valid authority.
+func (t InjectTarget) String() string {
+	if t.Port != "443" {
+		return net.JoinHostPort(t.Host, t.Port)
+	}
+	if ip, err := netip.ParseAddr(t.Host); err == nil && ip.Is6() {
+		return "[" + t.Host + "]"
+	}
+	return t.Host
+}
+
 // ParseInjectHeader parses one credential-injection binding
 // "ENV_VAR:TARGET[,TARGET...]", where each TARGET is HOST[:PORT] and HOST is a
 // hostname or IP literal (PORT defaults to 443). The binding is var-first

@@ -14,6 +14,7 @@ go test ./sandbox/ -run TestCurb_FS_ -v  # run a subset
 
 - `config/` — Config struct (FromFlags, MergeEnv), defaults (platform-split: `defaults_linux.go`, `defaults_darwin.go`), exclusion helpers, config file loading, profiles
 - `sandbox/plan.go` — SandboxPlan, PlanBuilder interface, shared resolve* helpers, FSEnforcer interface
+- `sandbox/inject.go` — credential injection planning (resolveInject, target authorization, CA bundle delivery)
 - `sandbox/plan_linux.go` — linuxPlanBuilder (namespace + Landlock enforcement selection)
 - `sandbox/plan_darwin.go` — darwinPlanBuilder (Seatbelt enforcement, path canonicalization)
 - `sandbox/plan_other.go` — degradedPlanBuilder (env-only fallback)

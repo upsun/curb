@@ -20,6 +20,30 @@ type Handler struct {
 	Injector *Injector
 }
 
+// connEstablished is the response accepting a CONNECT request, written raw on
+// the hijacked connection.
+const connEstablished = "HTTP/1.1 200 Connection Established\r\n\r\n"
+
+// hijack takes over the client connection from the ResponseWriter, reporting
+// failures under the given log event. The bufio.ReadWriter from Hijack is
+// safely ignored on every proxy path: in the CONNECT flow no client data is
+// buffered before the 200 response, and in the plain-HTTP flow the single
+// request has already been fully read by net/http (pipelining through a
+// forward proxy is not a real-world concern).
+func (h *Handler) hijack(w http.ResponseWriter, event, target string) (net.Conn, bool) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
+		return nil, false
+	}
+	conn, _, err := hijacker.Hijack()
+	if err != nil {
+		h.logEvent(event, target, "error", err.Error())
+		return nil, false
+	}
+	return conn, true
+}
+
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
@@ -52,17 +76,8 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hijack the client connection.
-	hijacker, ok := w.(http.Hijacker)
+	clientConn, ok := h.hijack(w, "proxy_connect", r.Host)
 	if !ok {
-		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
-		return
-	}
-	// The bufio.ReadWriter from Hijack is safely ignored: no client data
-	// is buffered before the 200 response in the CONNECT flow.
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
-		h.logEvent("proxy_connect", r.Host, "error", err.Error())
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
@@ -76,7 +91,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+	if _, err := clientConn.Write([]byte(connEstablished)); err != nil {
 		return
 	}
 
@@ -130,16 +145,8 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hijack and relay the response.
-	hijacker, ok := w.(http.Hijacker)
+	clientConn, ok := h.hijack(w, "proxy_http", r.Host)
 	if !ok {
-		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
-		return
-	}
-	// The bufio.ReadWriter from Hijack is safely ignored: the single
-	// request has already been fully read by net/http, and HTTP pipelining
-	// through a forward proxy is not a real-world concern.
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
