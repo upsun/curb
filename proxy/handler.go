@@ -119,7 +119,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// the real credential. Other ports of the same host are relayed unchanged,
 	// per the port-exact binding contract.
 	if _, bound := h.Injector.binding(host, port); bound {
-		http.Error(w, "curb: credential injection requires HTTPS for "+host, http.StatusBadGateway)
+		http.Error(w, "curb: credential injection requires HTTPS for "+net.JoinHostPort(host, port), http.StatusBadGateway)
 		h.logEvent("proxy_http", r.Host, "blocked", "inject-requires-https")
 		return
 	}

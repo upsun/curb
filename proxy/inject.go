@@ -97,9 +97,15 @@ func (ca *CA) signLeaf(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A random 128-bit serial per CA/B baseline rules; a time-derived serial
+	// could collide across leaves signed in the same instant.
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
+		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     ca.cert.NotAfter,
@@ -217,9 +223,14 @@ func (in *Injector) Serve(client net.Conn, host, port string, injs []Injection) 
 		Certificates: []tls.Certificate{*leaf},
 		MinVersion:   tls.VersionTLS12,
 	})
+	// Bound the handshake as upstream dials are (dialTimeout), so a client that
+	// stalls mid-handshake cannot hang this goroutine; served requests
+	// afterwards have no deadline, matching the passthrough relay.
+	_ = client.SetDeadline(time.Now().Add(dialTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		return fmt.Errorf("tls handshake: %w", err)
 	}
+	_ = client.SetDeadline(time.Time{})
 	defer func() { _ = tlsConn.Close() }()
 
 	in.serveInjected(tlsConn, host, port, injs)

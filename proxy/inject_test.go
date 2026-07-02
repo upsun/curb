@@ -169,6 +169,11 @@ func TestCA_CertificatesSupportLongSessions(t *testing.T) {
 	require.NotNil(t, leaf.Leaf)
 	assert.Greater(t, leaf.Leaf.NotAfter.Sub(now), 7*24*time.Hour)
 	assert.False(t, leaf.Leaf.NotAfter.After(ca.cert.NotAfter), "leaf must not outlive the CA")
+
+	// Serials are random, not time-derived: two leaves must not collide.
+	other, err := ca.leafFor("api.example.com")
+	require.NoError(t, err)
+	assert.NotEqual(t, leaf.Leaf.SerialNumber, other.Leaf.SerialNumber)
 }
 
 // TestInjector_BindingNormalizesHost confirms bindings match CONNECT targets
@@ -320,7 +325,8 @@ func TestInjector_RefusesPlainHTTP(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
-	assert.Contains(t, string(body), "requires HTTPS")
+	// The refusal names the exact bound destination: bindings are host:port.
+	assert.Contains(t, string(body), fmt.Sprintf("requires HTTPS for localhost:%d", closedPort))
 
 	// Plain HTTP to the same host on an unbound port is relayed (and fails only
 	// at dial time, since nothing is listening).
