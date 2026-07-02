@@ -114,16 +114,19 @@ func injectTestProxy(t *testing.T, ca *CA, bindings map[string][]Injection, upst
 }
 
 // clientThroughProxy builds an HTTP client that routes through the curb proxy
-// and trusts the per-run CA for the terminated TLS.
-func clientThroughProxy(proxyURL *url.URL, ca *CA) *http.Client {
+// and trusts the per-run CA for the terminated TLS. Idle connections are closed
+// on cleanup so hijacked CONNECT tunnels (and their per-connection injection
+// servers) do not linger across tests.
+func clientThroughProxy(t *testing.T, proxyURL *url.URL, ca *CA) *http.Client {
+	t.Helper()
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(ca.CertPEM())
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy:           http.ProxyURL(proxyURL),
-			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
-		},
+	transport := &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport}
 }
 
 func get(t *testing.T, client *http.Client, rawURL string) string {
@@ -215,7 +218,7 @@ func TestInjector_SetsHostHeader(t *testing.T) {
 		map[string][]Injection{"api.github.com": {{Placeholder: "GH_PH", Value: "ghs_realtoken"}}},
 		map[string]*authRecorder{"api.github.com": gh},
 	)
-	client := clientThroughProxy(proxyURL, ca)
+	client := clientThroughProxy(t, proxyURL, ca)
 
 	get(t, client, "https://api.github.com/user")
 	require.Equal(t, 1, len(gh.hosts))
@@ -239,7 +242,7 @@ func TestInjector_ReplacesPlaceholder(t *testing.T) {
 		map[string][]Injection{"api.github.com": {{Placeholder: "GH_PH", Value: "ghs_realtoken"}}},
 		map[string]*authRecorder{"api.github.com": gh},
 	)
-	client := clientThroughProxy(proxyURL, ca)
+	client := clientThroughProxy(t, proxyURL, ca)
 
 	body := getWithHeader(t, client, "https://api.github.com/user", "Authorization", "Bearer GH_PH")
 	assert.Equal(t, "ok", body)
@@ -263,7 +266,7 @@ func TestInjector_HeaderAgnostic(t *testing.T) {
 			map[string][]Injection{"api.anthropic.com": {{Placeholder: "ANT_PH", Value: "sk-ant-real"}}},
 			map[string]*authRecorder{"api.anthropic.com": up},
 		)
-		client := clientThroughProxy(proxyURL, ca)
+		client := clientThroughProxy(t, proxyURL, ca)
 
 		getWithHeader(t, client, "https://api.anthropic.com/v1/models", tc.header, tc.value)
 		require.Equal(t, 1, up.count())
@@ -290,7 +293,7 @@ func TestInjector_BindsCredentialToDestination(t *testing.T) {
 			"api.example.com": other,
 		},
 	)
-	client := clientThroughProxy(proxyURL, ca)
+	client := clientThroughProxy(t, proxyURL, ca)
 
 	// Send github's placeholder to both hosts: only github substitutes it.
 	getWithHeader(t, client, "https://api.github.com/user", "Authorization", "Bearer GH_PH")
@@ -541,33 +544,57 @@ func TestInjector_KeepAliveAfterUnreadBody(t *testing.T) {
 }
 
 // TestInjector_ExpectContinue confirms a client using Expect: 100-continue
-// receives an interim 100 response instead of stalling until timeout.
+// receives an interim 100 response instead of stalling until timeout. The
+// upstream reads the full body before replying, so the body must cross the
+// wire — which cannot happen until the proxy sends the client its 100, making
+// the interim response deterministic rather than racing the final one.
 func TestInjector_ExpectContinue(t *testing.T) {
 	ca, err := NewCA()
 	require.NoError(t, err)
 
-	rec := newAuthRecorder(t)
+	rec := &authRecorder{}
+	rec.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.headers = append(rec.headers, r.Header.Clone())
+		rec.hosts = append(rec.hosts, r.Host)
+		body, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(body) // echo, so the test confirms the body arrived
+	}))
+	t.Cleanup(rec.srv.Close)
+
 	proxyURL := injectTestProxy(t, ca,
 		map[string][]Injection{"api.example.com": {{Placeholder: "EX_PH", Value: "real_token"}}},
 		map[string]*authRecorder{"api.example.com": rec},
 	)
 	tc, br := dialInjectTLS(t, proxyURL, ca, "api.example.com")
 
+	// Send headers only; withhold the body until an interim 100 arrives.
 	_, err = io.WriteString(tc, "POST /upload HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n")
 	require.NoError(t, err)
-	require.NoError(t, tc.SetReadDeadline(time.Now().Add(5*time.Second)))
-	resp, err := http.ReadResponse(br, nil)
-	require.NoError(t, err, "expected an interim 100 Continue")
-	require.Equal(t, http.StatusContinue, resp.StatusCode)
 
-	_, err = io.WriteString(tc, "hello")
-	require.NoError(t, err)
-	resp, err = http.ReadResponse(br, nil)
-	require.NoError(t, err)
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, 1, rec.count())
+	// Read like a real client: consume interim 1xx responses, send the body on
+	// the first 100, and stop at the final response. Tolerates more than one
+	// interim response but requires that a 100 preceded the body.
+	require.NoError(t, tc.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var saw100 bool
+	for {
+		resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodPost})
+		require.NoError(t, err, "expected an interim 100 Continue before the final response")
+		if resp.StatusCode == http.StatusContinue {
+			if !saw100 {
+				saw100 = true
+				_, err = io.WriteString(tc, "hello")
+				require.NoError(t, err)
+			}
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "hello", string(body), "body should reach the upstream after 100")
+		break
+	}
+	require.True(t, saw100, "client should receive an interim 100 Continue")
 }
 
 // TestInjector_LeavesOtherHeadersUntouched confirms only the placeholder is
@@ -581,7 +608,7 @@ func TestInjector_LeavesOtherHeadersUntouched(t *testing.T) {
 		map[string][]Injection{"api.github.com": {{Placeholder: "GH_PH", Value: "ghs_realtoken"}}},
 		map[string]*authRecorder{"api.github.com": gh},
 	)
-	client := clientThroughProxy(proxyURL, ca)
+	client := clientThroughProxy(t, proxyURL, ca)
 
 	// No placeholder present: nothing is substituted, and the value is intact.
 	getWithHeader(t, client, "https://api.github.com/user", "X-Custom", "untouched-value")
