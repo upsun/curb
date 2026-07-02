@@ -127,8 +127,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Separate --allow-env values into passthrough names and explicit name=value pairs.
-	passNames, setPairs := classifyEnvArgs(env)
 
 	cfg := &Config{
 		AllowedDomains:   allow,
@@ -138,8 +136,6 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		ROPaths:          ro,
 		RWPaths:          rw,
 		ExecAllow:        execAllow,
-		EnvPassthrough:   passNames,
-		EnvSet:           setPairs,
 		AllowUnixSockets: allowUnixSockets,
 		HostLoopback:     hostLoopback,
 		LogFile:          logFile,
@@ -160,15 +156,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		cfg.NoFSRestrict = true
 		cfg.RWPaths = nil
 	}
-	if containsStar(passNames) {
-		cfg.EnvPassthroughAll = true
-		// Keep explicit names: --env NAME alongside '*' is still a per-variable
-		// trust decision (it opts NAME out of credential injection).
-		cfg.EnvPassthrough = removeStar(passNames)
-	}
 	if containsStar(cfg.ROPaths) {
 		cfg.ROPaths = []string{"/"}
 	}
+	cfg.applyEnvArgs(env)
 
 	return cfg, nil
 }
@@ -207,15 +198,9 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 		cfg.ExecAllow = append(cfg.ExecAllow, execEnv...)
 	}
 
-	// --env via CURB_ENV: split and classify like FromFlags.
+	// --env via CURB_ENV: same handling as the flag.
 	if val, ok := os.LookupEnv("CURB_ENV"); ok {
-		envPass, envSet := classifyEnvArgs(SplitComma(val))
-		if containsStar(envPass) {
-			cfg.EnvPassthroughAll = true
-			envPass = removeStar(envPass)
-		}
-		cfg.EnvPassthrough = append(cfg.EnvPassthrough, envPass...)
-		cfg.EnvSet = append(cfg.EnvSet, envSet...)
+		cfg.applyEnvArgs(SplitComma(val))
 	}
 
 	// String values: env only if flag not explicitly set.
@@ -248,14 +233,25 @@ func classifyEnvArgs(args []string) (passNames, setPairs []string) {
 	return
 }
 
+// applyEnvArgs merges --env-style values (from the flag or CURB_ENV) into cfg.
+// A literal "*" enables passthrough-all; explicit names are kept even then —
+// --env NAME alongside '*' is still a per-variable trust decision (it opts
+// NAME out of credential injection).
+func (cfg *Config) applyEnvArgs(args []string) {
+	passNames, setPairs := classifyEnvArgs(args)
+	for _, name := range passNames {
+		if name == "*" {
+			cfg.EnvPassthroughAll = true
+			continue
+		}
+		cfg.EnvPassthrough = append(cfg.EnvPassthrough, name)
+	}
+	cfg.EnvSet = append(cfg.EnvSet, setPairs...)
+}
+
 // containsStar reports whether the slice contains a literal "*" element.
 func containsStar(ss []string) bool {
 	return slices.Contains(ss, "*")
-}
-
-// removeStar returns ss without its literal "*" elements.
-func removeStar(ss []string) []string {
-	return slices.DeleteFunc(slices.Clone(ss), func(s string) bool { return s == "*" })
 }
 
 func appendEnvList(existing []string, envKey string) []string {
