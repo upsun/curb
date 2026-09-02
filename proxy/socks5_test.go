@@ -32,12 +32,12 @@ func TestSOCKS5Server_ConnectDomain(t *testing.T) {
 
 	_, echoPort, _ := net.SplitHostPort(echoLn.Addr().String())
 
-	srv := &SOCKS5Server{FilterBase: FilterBase{
+	srv := &SOCKS5Server{
 		DomainCheck: func(domain string) bool {
 			return domain == "localhost"
 		},
 		Dialer: &net.Dialer{Timeout: 2 * time.Second},
-	}}
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -82,11 +82,11 @@ func TestSOCKS5Server_ConnectDomain(t *testing.T) {
 }
 
 func TestSOCKS5Server_BlockedDomain(t *testing.T) {
-	srv := &SOCKS5Server{FilterBase: FilterBase{
+	srv := &SOCKS5Server{
 		DomainCheck: func(domain string) bool {
 			return false // Block everything.
 		},
-	}}
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -138,12 +138,12 @@ func TestSOCKS5Server_ConnectIPv4(t *testing.T) {
 	}()
 	_, echoPort, _ := net.SplitHostPort(echoLn.Addr().String())
 
-	srv := &SOCKS5Server{FilterBase: FilterBase{
+	srv := &SOCKS5Server{
 		IPCheck: func(addr netip.Addr) bool {
 			return addr.IsLoopback()
 		},
 		Dialer: &net.Dialer{Timeout: 2 * time.Second},
-	}}
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -182,9 +182,9 @@ func TestSOCKS5Server_ConnectIPv4(t *testing.T) {
 }
 
 func TestSOCKS5Server_UnsupportedCommand(t *testing.T) {
-	srv := &SOCKS5Server{FilterBase: FilterBase{
+	srv := &SOCKS5Server{
 		DomainCheck: func(string) bool { return true },
-	}}
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -233,10 +233,10 @@ func TestSOCKS5Server_ConcurrentConnections(t *testing.T) {
 	}()
 	_, echoPort, _ := net.SplitHostPort(echoLn.Addr().String())
 
-	srv := &SOCKS5Server{FilterBase: FilterBase{
+	srv := &SOCKS5Server{
 		DomainCheck: func(string) bool { return true },
 		Dialer:      &net.Dialer{Timeout: 2 * time.Second},
-	}}
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
