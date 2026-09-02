@@ -15,6 +15,33 @@ import (
 // encrypted stream without terminating TLS.
 type Handler struct {
 	FilterBase
+	// Injector, when set, terminates TLS and injects a bound credential for
+	// hosts it has a binding for. Hosts without a binding stay passthrough.
+	Injector *Injector
+}
+
+// connEstablished is the response accepting a CONNECT request, written raw on
+// the hijacked connection.
+const connEstablished = "HTTP/1.1 200 Connection Established\r\n\r\n"
+
+// hijack takes over the client connection from the ResponseWriter, reporting
+// failures under the given log event. The bufio.ReadWriter from Hijack is
+// safely ignored on every proxy path: in the CONNECT flow no client data is
+// buffered before the 200 response, and in the plain-HTTP flow the single
+// request has already been fully read by net/http (pipelining through a
+// forward proxy is not a real-world concern).
+func (h *Handler) hijack(w http.ResponseWriter, event, target string) (net.Conn, bool) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
+		return nil, false
+	}
+	conn, _, err := hijacker.Hijack()
+	if err != nil {
+		h.logEvent(event, target, "error", err.Error())
+		return nil, false
+	}
+	return conn, true
 }
 
 // ServeHTTP implements http.Handler.
@@ -42,17 +69,15 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hijack the client connection.
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
+	// A bound host is TLS-terminated so the credential can be injected;
+	// everything else keeps the passthrough relay below.
+	if injs, ok := h.Injector.binding(host, port); ok {
+		h.injectCONNECT(w, host, port, injs)
 		return
 	}
-	// The bufio.ReadWriter from Hijack is safely ignored: no client data
-	// is buffered before the 200 response in the CONNECT flow.
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
-		h.logEvent("proxy_connect", r.Host, "error", err.Error())
+
+	clientConn, ok := h.hijack(w, "proxy_connect", r.Host)
+	if !ok {
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
@@ -66,7 +91,7 @@ func (h *Handler) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+	if _, err := clientConn.Write([]byte(connEstablished)); err != nil {
 		return
 	}
 
@@ -89,6 +114,16 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A credential is bound to this exact host:port but the request is plain
+	// HTTP. Refuse rather than forward: injecting over cleartext would expose
+	// the real credential. Other ports of the same host are relayed unchanged,
+	// per the port-exact binding contract.
+	if _, bound := h.Injector.binding(host, port); bound {
+		http.Error(w, "curb: credential injection requires HTTPS for "+net.JoinHostPort(host, port), http.StatusBadGateway)
+		h.logEvent("proxy_http", r.Host, "blocked", "inject-requires-https")
+		return
+	}
+
 	// Dial the upstream (using request context for cancellation on client disconnect).
 	target := net.JoinHostPort(host, port)
 	upstream, err := h.getDialer().DialContext(r.Context(), "tcp", target)
@@ -99,20 +134,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = upstream.Close() }()
 
-	// Strip hop-by-hop headers before forwarding (RFC 7230 §6.1).
-	// Parse Connection header for additional hop-by-hop headers to remove.
-	for _, connHdr := range r.Header.Values("Connection") {
-		for part := range strings.SplitSeq(connHdr, ",") {
-			r.Header.Del(strings.TrimSpace(part))
-		}
-	}
-	r.Header.Del("Connection")
-	r.Header.Del("Keep-Alive")
-	r.Header.Del("Proxy-Connection")
-	r.Header.Del("Proxy-Authorization")
-	r.Header.Del("TE")
-	r.Header.Del("Trailer")
-	r.Header.Del("Upgrade")
+	stripHopByHop(r.Header)
 	r.Header.Set("Connection", "close")
 
 	// Write the request to the upstream.
@@ -123,16 +145,8 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hijack and relay the response.
-	hijacker, ok := w.(http.Hijacker)
+	clientConn, ok := h.hijack(w, "proxy_http", r.Host)
 	if !ok {
-		http.Error(w, "curb: hijack unsupported", http.StatusInternalServerError)
-		return
-	}
-	// The bufio.ReadWriter from Hijack is safely ignored: the single
-	// request has already been fully read by net/http, and HTTP pipelining
-	// through a forward proxy is not a real-world concern.
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
@@ -140,6 +154,24 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	h.logEvent("proxy_http", r.Host, "allowed", "")
 
 	relay(upstream, clientConn)
+}
+
+// stripHopByHop removes hop-by-hop headers (RFC 7230 §6.1) before forwarding a
+// request upstream, including any named in the Connection header. This keeps
+// proxy-specific headers such as Proxy-Authorization from leaking to the origin.
+func stripHopByHop(h http.Header) {
+	for _, connHdr := range h.Values("Connection") {
+		for part := range strings.SplitSeq(connHdr, ",") {
+			h.Del(strings.TrimSpace(part))
+		}
+	}
+	h.Del("Connection")
+	h.Del("Keep-Alive")
+	h.Del("Proxy-Connection")
+	h.Del("Proxy-Authorization")
+	h.Del("TE")
+	h.Del("Trailer")
+	h.Del("Upgrade")
 }
 
 // splitHostPort splits host:port, using defaultPort if no port is present.

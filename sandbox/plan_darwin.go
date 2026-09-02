@@ -46,8 +46,7 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 	}
 	warnHostHomePathMismatch(cfg, sandboxHome, hostHome)
 
-	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0) && !cfg.UnrestrictedNet
-	plan.ProxyEnabled = hasFiltering
+	plan.ProxyEnabled = proxyFilteringEnabled(cfg)
 
 	// Seatbelt enforcement.
 	plan.UseSeatbelt = true
@@ -64,6 +63,9 @@ func (darwinPlanBuilder) BuildPlan(cfg *config.Config, caps *Capabilities, logge
 		return nil, err
 	}
 	if err := resolveEnv(plan, cfg); err != nil {
+		return nil, err
+	}
+	if err := resolveInject(plan, cfg); err != nil {
 		return nil, err
 	}
 	resolveDenials(plan, &removals)

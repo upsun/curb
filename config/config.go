@@ -21,6 +21,7 @@ type Config struct {
 	EnvSet            []string
 	EnvPassthroughAll bool
 	AllowedIPs        []string
+	InjectHeader      []string
 	UnrestrictedNet   bool
 	NoFSRestrict      bool
 	NoExecRestrict    bool
@@ -68,6 +69,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	injectHeader, err := flags.GetStringArray("inject-header")
+	if err != nil {
+		return nil, err
+	}
 	if len(allow) > 0 {
 		if err := policy.ValidateDomains(allow); err != nil {
 			return nil, err
@@ -76,6 +81,11 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if len(ips) > 0 {
 		if err := policy.ValidateIPs(ips); err != nil {
 			return nil, err
+		}
+	}
+	for _, e := range injectHeader {
+		if _, _, err := policy.ParseInjectHeader(e); err != nil {
+			return nil, fmt.Errorf("--inject-header %w", err)
 		}
 	}
 	hostLoopback, err := flags.GetBool("host-loopback")
@@ -117,18 +127,15 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Separate --allow-env values into passthrough names and explicit name=value pairs.
-	passNames, setPairs := classifyEnvArgs(env)
 
 	cfg := &Config{
 		AllowedDomains:   allow,
 		AllowedIPs:       ips,
+		InjectHeader:     injectHeader,
 		UnrestrictedNet:  unrestrictedNet,
 		ROPaths:          ro,
 		RWPaths:          rw,
 		ExecAllow:        execAllow,
-		EnvPassthrough:   passNames,
-		EnvSet:           setPairs,
 		AllowUnixSockets: allowUnixSockets,
 		HostLoopback:     hostLoopback,
 		LogFile:          logFile,
@@ -149,13 +156,10 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		cfg.NoFSRestrict = true
 		cfg.RWPaths = nil
 	}
-	if containsStar(passNames) {
-		cfg.EnvPassthroughAll = true
-		cfg.EnvPassthrough = nil
-	}
 	if containsStar(cfg.ROPaths) {
 		cfg.ROPaths = []string{"/"}
 	}
+	cfg.applyEnvArgs(env)
 
 	return cfg, nil
 }
@@ -169,6 +173,7 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 	// List values: always additive, with wildcard detection.
 	cfg.AllowedDomains = appendEnvList(cfg.AllowedDomains, "CURB_DOMAINS")
 	cfg.AllowedIPs = appendEnvList(cfg.AllowedIPs, "CURB_IPS")
+	cfg.InjectHeader = appendEnvValue(cfg.InjectHeader, "CURB_INJECT_HEADER")
 
 	roEnv := appendEnvList(nil, "CURB_READ")
 	if containsStar(roEnv) {
@@ -193,16 +198,9 @@ func MergeEnv(cfg *Config, cmd *cobra.Command) {
 		cfg.ExecAllow = append(cfg.ExecAllow, execEnv...)
 	}
 
-	// --env via CURB_ENV: split and classify like FromFlags.
+	// --env via CURB_ENV: same handling as the flag.
 	if val, ok := os.LookupEnv("CURB_ENV"); ok {
-		envPass, envSet := classifyEnvArgs(SplitComma(val))
-		if containsStar(envPass) {
-			cfg.EnvPassthroughAll = true
-			cfg.EnvPassthrough = nil
-		} else {
-			cfg.EnvPassthrough = append(cfg.EnvPassthrough, envPass...)
-			cfg.EnvSet = append(cfg.EnvSet, envSet...)
-		}
+		cfg.applyEnvArgs(SplitComma(val))
 	}
 
 	// String values: env only if flag not explicitly set.
@@ -235,6 +233,38 @@ func classifyEnvArgs(args []string) (passNames, setPairs []string) {
 	return
 }
 
+// applyEnvArgs merges --env-style values (from the flag or CURB_ENV) into cfg.
+// A literal "*" enables passthrough-all; explicit names are kept even then —
+// --env NAME alongside '*' is still a per-variable trust decision (it opts
+// NAME out of credential injection).
+func (cfg *Config) applyEnvArgs(args []string) {
+	passNames, setPairs := classifyEnvArgs(args)
+	for _, name := range passNames {
+		if name == "*" {
+			cfg.EnvPassthroughAll = true
+			continue
+		}
+		cfg.EnvPassthrough = append(cfg.EnvPassthrough, name)
+	}
+	cfg.EnvSet = append(cfg.EnvSet, setPairs...)
+}
+
+// EnvExplicitlyProvided reports whether the user named the variable in an
+// --env argument — exact passthrough (--env NAME) or an explicit value (--env
+// NAME=value). Either is a per-variable trust decision (it opts NAME out of
+// credential injection); wildcard or glob passthrough is not. Explicit names
+// are kept even alongside '*' (see applyEnvArgs), so the wildcard does not
+// mask them.
+func (cfg *Config) EnvExplicitlyProvided(name string) bool {
+	for _, pair := range cfg.EnvSet {
+		if k, _, _ := strings.Cut(pair, "="); k == name {
+			return true
+		}
+	}
+	adds, _, _ := ParseExclusions(cfg.EnvPassthrough)
+	return slices.Contains(adds, name)
+}
+
 // containsStar reports whether the slice contains a literal "*" element.
 func containsStar(ss []string) bool {
 	return slices.Contains(ss, "*")
@@ -246,6 +276,14 @@ func appendEnvList(existing []string, envKey string) []string {
 		return existing
 	}
 	return append(existing, SplitComma(val)...)
+}
+
+func appendEnvValue(existing []string, envKey string) []string {
+	val, ok := os.LookupEnv(envKey)
+	if !ok || val == "" {
+		return existing
+	}
+	return append(existing, val)
 }
 
 // SplitComma splits a comma-separated string, trimming whitespace and dropping empties.

@@ -76,9 +76,11 @@ for HTTPS in standard mode. There is no SOCKS5 proxy -- non-HTTP TCP
 (SSH, git protocol, database connections) is blocked entirely when
 network filtering is active.
 
-**curb** runs both an HTTP proxy and a SOCKS5 proxy. HTTPS always uses
-CONNECT passthrough: the proxy checks the hostname from the CONNECT
-request, then tunnels the encrypted stream without terminating TLS.
+**curb** runs both an HTTP proxy and a SOCKS5 proxy. HTTPS uses CONNECT
+passthrough by default: the proxy checks the hostname from the CONNECT
+request, then tunnels the encrypted stream without terminating TLS. The
+opt-in `--inject-header` (see below) terminates TLS for a
+named host only, to inject a credential; every other host stays passthrough.
 The SOCKS5 proxy handles non-HTTP TCP (e.g. SSH via `ProxyCommand`).
 Both filter on the CONNECT hostname or SOCKS5 destination, not on TLS
 SNI, so neither is affected by Encrypted Client Hello (ECH). curb
@@ -88,7 +90,9 @@ forwarding localhost traffic to the host via `--host-loopback`.
 The MITM requirement for zerobox's secret injection is a significant
 tradeoff: it breaks certificate pinning, requires injecting a custom CA
 into every TLS-using tool, and means the proxy can see all HTTPS
-content. curb avoids TLS termination entirely.
+content. curb avoids TLS termination by default, and confines it to the
+specific hosts named in `--inject-header` when injection is used — every
+other host still tunnels untouched.
 
 The lack of SOCKS5 in zerobox means non-HTTP TCP protocols (SSH, git://,
 database connections) cannot be domain-filtered -- they are either fully
@@ -104,19 +108,46 @@ the sandbox. The sandboxed process sees a random placeholder
 (`ZEROBOX_SECRET_<64 hex chars>`) in the environment variable, not the
 real value. `--secret-host OPENAI_API_KEY=api.openai.com` restricts the
 secret to a specific domain. The MITM proxy intercepts HTTPS requests,
-scans HTTP headers for placeholder tokens, and substitutes the real
-secret value only for approved hosts. The placeholder is 32 random bytes,
-not derived from the secret, preventing brute-force recovery.
+scans them for placeholder tokens, and substitutes the real secret value
+only for approved hosts. The placeholder is 32 random bytes so it is long
+and unique enough not to collide with legitimate request content during
+that scan.
 
-**curb** has no secret injection. Secrets are either passed via `--env`
-(the process sees the real value) or not passed at all. Network domain
-filtering (`--domains`) controls where the process can connect, but does
-not inspect or modify request content.
+**curb** has opt-in credential injection via `--inject-header ENV_VAR:HOST`.
+The two tools' mechanisms have converged: the sandbox sees only a
+placeholder in `ENV_VAR`, never the real value; the proxy terminates TLS for
+`HOST` (presenting a per-run CA the sandbox trusts) and substitutes the
+placeholder with the real value wherever the client put it among the request
+headers. `HOST` must also be explicitly allowed by the network policy. Like
+zerobox, it is header-agnostic — `Authorization: Bearer`,
+`x-api-key`, or any other header all work, with no auth-scheme knowledge
+configured. Without the flag, curb performs no injection and no TLS termination;
+secrets otherwise reach the process only via `--env`.
 
-zerobox's approach prevents a compromised or malicious process from
-reading the actual secret from its environment and exfiltrating it to an
-unauthorized domain. The cost is mandatory TLS termination and CA
-injection for all HTTPS traffic.
+The substantive difference is blast radius. zerobox flips its proxy into MITM
+mode for *all* allowed HTTPS once any secret is configured (`config.network.mitm`
+is global); curb terminates TLS only for the hosts named in `--inject-header` and
+leaves every other host on untouched passthrough. The two designs are otherwise
+close: both are header-only (zerobox's `substitute_headers` and curb's
+`replaceInHeaders` both scan header values, not request bodies), both bind a
+secret to approved hosts, and both let the program choose which header carries
+the marker.
+
+Two smaller differences. First, zerobox's placeholder is 32 random bytes (unique
+per run) to avoid colliding with real content during the scan; curb uses a
+stable, distinctive per-variable sentinel, which keeps it collision-safe while
+letting a tool that approves a custom credential (e.g. Claude Code) approve it
+once rather than every run. Both placeholders carry no secret weight — neither is
+the credential. Second, zerobox couples the secret to an env var name
+(`--secret KEY=VALUE`) and the host separately (`--secret-host KEY=hosts`); curb's
+single `ENV_VAR:HOST` does both — the env var both reads the real value on the
+host and carries the placeholder in the sandbox.
+Both put the variable first; curb's right side is a comma-separated list of
+`HOST[:PORT]` destinations, so one credential can name several hosts.
+
+Both approaches prevent a compromised or malicious process from reading the
+real secret and exfiltrating it. The shared cost is TLS termination and CA
+trust — for curb, only on the injected hosts.
 
 ## Process isolation
 
@@ -220,8 +251,8 @@ Linux. curb has no external runtime dependencies.
 | Default FS write | Blocked | Blocked |
 | Default network | Blocked | Blocked |
 | FS enforcement | bwrap (mount NS) + Landlock fallback | pivot_root (mount NS) + Landlock layered |
-| Network filtering | HTTP proxy (MITM when secrets active) | HTTP + SOCKS5 proxy (CONNECT passthrough) |
-| Secret injection | Yes (MITM proxy, placeholder substitution) | No |
+| Network filtering | HTTP proxy (MITM when secrets active) | HTTP + SOCKS5 proxy (CONNECT passthrough; per-host TLS termination only with `--inject-header`) |
+| Secret injection | Yes (MITM all HTTPS, placeholder substitution) | Yes (`--inject-header`, placeholder substitution, TLS terminated per explicitly allowed host) |
 | Snapshot/restore | Yes (BLAKE3 + Merkle tree) | No (stateless) |
 | IP/CIDR filtering | No | Yes (`--ips`) |
 | SOCKS5 (non-HTTP TCP) | No | Yes |
@@ -247,21 +278,18 @@ process from ever seeing real credentials. This is valuable for AI agent
 use cases where the agent needs to call authenticated APIs but should not
 be able to read or exfiltrate the actual tokens.
 
-Implementing this in curb would require TLS termination (MITM) in the
-proxy, which conflicts with curb's current CONNECT passthrough design.
-An alternative approach: inject secrets only into specific HTTP headers
-at the proxy level without full TLS termination, using CONNECT to
-establish the tunnel and then a protocol-aware layer for header
-injection. This is not straightforward and may not be feasible without
-MITM. The security tradeoffs (breaking certificate pinning, CA
-injection, proxy sees all HTTPS content) should be weighed against the
-credential isolation benefit.
+curb now implements the same model: `--inject-header ENV_VAR:HOST` sets the
+sandbox's copy of the variable to a placeholder and has the proxy substitute the
+real value in request headers, header-agnostically. Unlike zerobox, TLS
+termination is confined to the named hosts rather than applied to all allowed
+HTTPS while secrets are active. Possible future work: reading the token from an
+inherited fd so it touches neither argv nor the environment.
 
-A lighter-weight option: support secret-aware environment variables that
-are populated only at exec time and excluded from `/proc/<pid>/environ`
-(e.g. via a helper that reads from a pipe). This would prevent
-environment enumeration but not prevent the process from reading its own
-memory.
+A lighter-weight, complementary option: support secret-aware environment
+variables that are populated only at exec time and excluded from
+`/proc/<pid>/environ` (e.g. via a helper that reads from a pipe). This
+would prevent environment enumeration but not prevent the process from
+reading its own memory.
 
 ### Filesystem snapshots
 

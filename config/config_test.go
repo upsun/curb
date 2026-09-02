@@ -22,6 +22,7 @@ func newTestCmd(args []string) *cobra.Command {
 	f.StringSlice("exec", nil, "")
 	f.StringSlice("env", nil, "")
 	f.StringSlice("ips", nil, "")
+	f.StringArray("inject-header", nil, "")
 	f.Bool("unrestricted-net", false, "")
 	f.Bool("allow-unix-sockets", false, "")
 	f.Bool("host-loopback", false, "")
@@ -106,6 +107,28 @@ func TestFromFlags_WildcardEnv(t *testing.T) {
 	assert.Empty(t, cfg.EnvPassthrough)
 }
 
+func TestFromFlags_WildcardEnvKeepsExplicitNames(t *testing.T) {
+	cmd := newTestCmd([]string{"--env", "FOO", "--env", "*", "--env", "BAR=baz"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+	assert.True(t, cfg.EnvPassthroughAll)
+	assert.Equal(t, []string{"FOO"}, cfg.EnvPassthrough)
+	assert.Equal(t, []string{"BAR=baz"}, cfg.EnvSet)
+}
+
+func TestEnvExplicitlyProvided(t *testing.T) {
+	cfg := &Config{
+		EnvPassthrough: []string{"FOO", "GLOB_*", "!EXCLUDED"},
+		EnvSet:         []string{"BAR=baz", "EMPTY="},
+	}
+	assert.True(t, cfg.EnvExplicitlyProvided("FOO"), "exact passthrough")
+	assert.True(t, cfg.EnvExplicitlyProvided("BAR"), "explicit value")
+	assert.True(t, cfg.EnvExplicitlyProvided("EMPTY"), "explicit empty value")
+	assert.False(t, cfg.EnvExplicitlyProvided("GLOB_MATCH"), "glob passthrough is not explicit")
+	assert.False(t, cfg.EnvExplicitlyProvided("EXCLUDED"), "exclusion is not explicit")
+	assert.False(t, cfg.EnvExplicitlyProvided("OTHER"))
+}
+
 func TestFromFlags_WildcardRead(t *testing.T) {
 	cmd := newTestCmd([]string{"--read", "*"})
 	cfg, err := FromFlags(cmd)
@@ -122,6 +145,25 @@ func TestMergeEnv_ListsAdditive(t *testing.T) {
 	MergeEnv(cfg, cmd)
 
 	assert.Equal(t, []string{"b.com", "a.com"}, cfg.AllowedDomains)
+}
+
+func TestMergeEnv_InjectHeaderAdditive(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-header", "B:b.com"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_INJECT_HEADER", "A:a.com,c.com")
+	MergeEnv(cfg, cmd)
+
+	assert.Equal(t, []string{"B:b.com", "A:a.com,c.com"}, cfg.InjectHeader)
+}
+
+func TestFromFlags_InjectHeaderPreservesTargetCommaList(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-header", "TOK:a.com,b.com"})
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"TOK:a.com,b.com"}, cfg.InjectHeader)
 }
 
 func TestMergeEnv_CommaSeparatedList(t *testing.T) {
@@ -203,6 +245,19 @@ func TestMergeEnv_WildcardEnv(t *testing.T) {
 
 	assert.True(t, cfg.EnvPassthroughAll)
 	assert.Empty(t, cfg.EnvPassthrough)
+}
+
+func TestMergeEnv_WildcardEnvKeepsExplicitEntries(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	t.Setenv("CURB_ENV", "FOO,*,BAR=baz")
+	MergeEnv(cfg, cmd)
+
+	assert.True(t, cfg.EnvPassthroughAll)
+	assert.Equal(t, []string{"FOO"}, cfg.EnvPassthrough)
+	assert.Equal(t, []string{"BAR=baz"}, cfg.EnvSet)
 }
 
 func TestMergeEnv_WildcardEnvValueNotPassthrough(t *testing.T) {
@@ -330,6 +385,14 @@ func TestFromFlags_DomainIsIP(t *testing.T) {
 	_, err := FromFlags(cmd)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "use --ips instead")
+}
+
+func TestFromFlags_InvalidInjectHeader(t *testing.T) {
+	cmd := newTestCmd([]string{"--inject-header", "TOK:*.example.com"})
+	_, err := FromFlags(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inject-header")
+	assert.Contains(t, err.Error(), "exact hostname")
 }
 
 func TestMergeEnv_IPsAdditive(t *testing.T) {

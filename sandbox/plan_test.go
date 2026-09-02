@@ -170,6 +170,32 @@ func TestBuildDegradedPlan_NoISandboxEnv(t *testing.T) {
 	assert.False(t, ok, "IS_SANDBOX should not be set for non-isolated platforms")
 }
 
+func TestBuildDegradedPlan_InactiveInjectHeaderAllowed(t *testing.T) {
+	t.Setenv("INACTIVE_TOKEN", "")
+	cfg := &config.Config{
+		InjectHeader:   []string{"INACTIVE_TOKEN:api.example.com"},
+		NoFSRestrict:   true,
+		NoExecRestrict: true,
+	}
+	plan, err := buildDegradedPlan(cfg, minCaps())
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Empty(t, plan.InjectBindings)
+}
+
+func TestBuildDegradedPlan_ActiveInjectHeaderUnsupported(t *testing.T) {
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	cfg := &config.Config{
+		InjectHeader:   []string{"ACTIVE_TOKEN:api.example.com"},
+		NoFSRestrict:   true,
+		NoExecRestrict: true,
+	}
+	_, err := buildDegradedPlan(cfg, minCaps())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credential injection (--inject-header) is only supported")
+}
+
 // --- BuildPlan ---
 
 func TestBuildPlan_NoLandlock_WithMountNS(t *testing.T) {
@@ -187,6 +213,44 @@ func TestBuildPlan_NoLandlock_NoFSRestrict(t *testing.T) {
 	plan, err := BuildPlan(cfg, caps, nil)
 	require.NoError(t, err)
 	defer plan.Cleanup()
+}
+
+func TestBuildPlan_AllProxyDefaultAndOverride(t *testing.T) {
+	// By default the SOCKS env is advertised via ALL_PROXY.
+	cfg := &config.Config{AllowedDomains: []string{"example.com"}}
+	plan, err := BuildPlan(cfg, minCaps(), nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	require.True(t, plan.ProxyEnabled)
+	require.Positive(t, plan.SOCKSPort)
+	assert.True(t, strings.HasPrefix(plan.EnvSet["ALL_PROXY"], "socks5h://127.0.0.1:"),
+		"ALL_PROXY defaults to the SOCKS proxy, got %q", plan.EnvSet["ALL_PROXY"])
+
+	// A user-provided value wins (mirrors NO_PROXY): empty suppresses the SOCKS
+	// env for HTTP-only workloads (e.g. httpx without the socks extra), without
+	// disturbing curb's own SOCKS address var.
+	cfg = &config.Config{
+		AllowedDomains: []string{"example.com"},
+		EnvSet:         []string{"ALL_PROXY=", "all_proxy="},
+	}
+	plan, err = BuildPlan(cfg, minCaps(), nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	allProxy, ok := plan.EnvSet["ALL_PROXY"]
+	require.True(t, ok, "ALL_PROXY must remain set (empty), not be dropped")
+	assert.Empty(t, allProxy, "user-provided empty ALL_PROXY must be preserved")
+	assert.Empty(t, plan.EnvSet["all_proxy"])
+	assert.NotEmpty(t, plan.EnvSet[SOCKSAddrEnvKey], "curb's SOCKS address var is unaffected")
+
+	cfg = &config.Config{
+		AllowedDomains: []string{"example.com"},
+		EnvSet:         []string{"ALL_PROXY="},
+	}
+	plan, err = BuildPlan(cfg, minCaps(), nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+	assert.Empty(t, plan.EnvSet["ALL_PROXY"], "user-provided ALL_PROXY must be preserved")
+	assert.Empty(t, plan.EnvSet["all_proxy"], "ALL_PROXY suppression must apply to both casings")
 }
 
 func TestBuildPlan_NoExecRestrict(t *testing.T) {

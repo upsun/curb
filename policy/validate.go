@@ -2,7 +2,9 @@ package policy
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -19,44 +21,208 @@ func ValidateDomains(domains []string) error {
 }
 
 func validateDomain(d string) error {
+	return validateDomainPattern(d, "--domains")
+}
+
+// validateDomainPattern checks that d is a plausible domain pattern, attributing
+// any error to subject (a flag or context name) so the message matches how the
+// value was supplied — `--domains` for the flag, `injection host` for a
+// credential-injection target.
+func validateDomainPattern(d, subject string) error {
 	if d == "*" || d == "localhost" {
 		return nil
 	}
 
 	lower := strings.ToLower(d)
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return fmt.Errorf("--domains %q looks like a URL; use the bare domain instead (e.g. %q)", d, stripScheme(d))
+		return fmt.Errorf("%s %q looks like a URL; use the bare domain instead (e.g. %q)", subject, d, stripScheme(d))
 	}
 
 	if _, err := netip.ParseAddr(d); err == nil {
-		return fmt.Errorf("--domains %q is an IP address; use --ips instead", d)
+		return fmt.Errorf("%s %q is an IP address; use --ips instead", subject, d)
 	}
 	if _, err := netip.ParsePrefix(d); err == nil {
-		return fmt.Errorf("--domains %q is a CIDR range; use --ips instead", d)
+		return fmt.Errorf("%s %q is a CIDR range; use --ips instead", subject, d)
 	}
 
 	for _, r := range d {
 		if unicode.IsControl(r) || unicode.IsSpace(r) {
-			return fmt.Errorf("--domains %q contains invalid character (whitespace or control)", d)
+			return fmt.Errorf("%s %q contains invalid character (whitespace or control)", subject, d)
 		}
 		switch r {
-		case '/', '\\', ':', '@', '#', '?':
-			return fmt.Errorf("--domains %q contains invalid character %q", d, string(r))
+		case '/', '\\', ':', '@', '#', '?', '=', '[', ']':
+			return fmt.Errorf("%s %q contains invalid character %q", subject, d, string(r))
 		}
 	}
 
 	// Wildcard validation: only "*" (handled above) or "*.suffix".
 	if strings.Contains(d, "*") {
 		if !strings.HasPrefix(d, "*.") {
-			return fmt.Errorf("--domains %q: wildcards must be * (match-all) or *.suffix", d)
+			return fmt.Errorf("%s %q: wildcards must be * (match-all) or *.suffix", subject, d)
 		}
 		suffix := d[2:]
 		if suffix == "" {
-			return fmt.Errorf("--domains %q: wildcard suffix must not be empty", d)
+			return fmt.Errorf("%s %q: wildcard suffix must not be empty", subject, d)
 		}
 	}
 
 	return nil
+}
+
+// InjectTarget is one destination a credential is bound to: a hostname or IP
+// literal plus the TLS port (default 443). The proxy injects the credential
+// only for a connection matching both Host and Port, so the credential's
+// destination is exact. Whether Host is an IP literal (authorized via --ips,
+// not --domains) is unambiguous from its canonical form: a hostname can never
+// parse as an IP.
+type InjectTarget struct {
+	Host string // canonical host (CanonicalHost form)
+	Port string // numeric port, "443" by default
+}
+
+// String formats the target for display and as an HTTP authority, dropping
+// the default :443 so the common case reads as a bare host. A bare IPv6 host
+// is bracketed so the result is a valid authority.
+func (t InjectTarget) String() string {
+	if t.Port != "443" {
+		return net.JoinHostPort(t.Host, t.Port)
+	}
+	if ip, err := netip.ParseAddr(t.Host); err == nil && ip.Is6() {
+		return "[" + t.Host + "]"
+	}
+	return t.Host
+}
+
+// ParseInjectHeader parses one credential-injection binding
+// "ENV_VAR:TARGET[,TARGET...]", where each TARGET is HOST[:PORT] and HOST is a
+// hostname or IP literal (PORT defaults to 443). The binding is var-first
+// because a credential belongs to its variable and may be valid for more than
+// one destination. Splitting on the first ":" is unambiguous because an env var
+// name can never contain one. Callers wrap the error with their own prefix.
+func ParseInjectHeader(entry string) (envVar string, targets []InjectTarget, err error) {
+	envVar, rest, ok := strings.Cut(entry, ":")
+	if !ok || envVar == "" || rest == "" {
+		return "", nil, fmt.Errorf("must be ENV_VAR:HOST[,HOST...], got %q", entry)
+	}
+	if !validEnvName(envVar) {
+		return "", nil, fmt.Errorf("%q is not a valid environment variable name", envVar)
+	}
+	for item := range strings.SplitSeq(rest, ",") {
+		t, err := ParseInjectTarget(item)
+		if err != nil {
+			return "", nil, err
+		}
+		targets = append(targets, t)
+	}
+	return envVar, targets, nil
+}
+
+// ParseInjectTarget parses one HOST[:PORT] target. HOST is a hostname or IP
+// literal; PORT defaults to 443. An IPv6 literal must be bracketed when a port
+// is present (net.SplitHostPort semantics); a bare IPv6 literal needs no
+// brackets. Unlike a --domains pattern, an injection host must be exact: a
+// wildcard cannot identify the single destination a credential belongs to.
+//
+// It is exported so that a destination discovered elsewhere (an endpoint
+// variable in the sandbox environment, say) is turned into a target by the
+// same rules as a binding's own, and never disagrees with one.
+func ParseInjectTarget(item string) (InjectTarget, error) {
+	if item == "" {
+		return InjectTarget{}, fmt.Errorf("empty injection target")
+	}
+	// A bare IP literal (no port): ParseAddr accepts an unbracketed IPv6
+	// address, which SplitHostPort below would reject. Brackets without a
+	// port ("[2001:db8::1]") are legal address syntax too.
+	if _, err := netip.ParseAddr(item); err == nil {
+		return InjectTarget{Host: CanonicalHost(item), Port: "443"}, nil
+	}
+	if inner, ok := strings.CutPrefix(item, "["); ok {
+		if inner, ok := strings.CutSuffix(inner, "]"); ok {
+			if _, err := netip.ParseAddr(inner); err == nil {
+				return InjectTarget{Host: CanonicalHost(inner), Port: "443"}, nil
+			}
+		}
+	}
+	host, port := item, "443"
+	if h, p, ok := splitInjectPort(item); ok {
+		canonical, err := canonicalPort(p)
+		if err != nil {
+			return InjectTarget{}, fmt.Errorf("injection target %q: %w", item, err)
+		}
+		host, port = h, canonical
+	}
+	if _, err := netip.ParseAddr(host); err != nil {
+		if strings.Contains(host, "*") {
+			return InjectTarget{}, fmt.Errorf("injection host %q must be an exact hostname (no wildcards)", host)
+		}
+		if err := validateDomainPattern(host, "injection host"); err != nil {
+			return InjectTarget{}, err
+		}
+	}
+	return InjectTarget{Host: CanonicalHost(host), Port: port}, nil
+}
+
+// splitInjectPort separates a custom port from a target, returning ok=false
+// when none is present so the default applies. A bracketed IPv6 literal uses
+// net.SplitHostPort; otherwise a port is the run of digits after a final colon,
+// so "https://x" or "host:bad" fall through to host validation (which gives a
+// clearer error than a bogus port would).
+func splitInjectPort(item string) (host, port string, ok bool) {
+	if strings.HasPrefix(item, "[") {
+		h, p, err := net.SplitHostPort(item)
+		if err != nil {
+			return "", "", false
+		}
+		return h, p, true
+	}
+	i := strings.LastIndexByte(item, ':')
+	if i < 0 || !isAllDigits(item[i+1:]) {
+		return "", "", false
+	}
+	return item[:i], item[i+1:], true
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalPort checks that p is a numeric TCP port in 1..65535 and returns
+// its canonical decimal form. Binding keys are built from it, so a
+// non-canonical spelling ("0443") must not produce a key that never matches a
+// real connection's port.
+func canonicalPort(p string) (string, error) {
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 1 || n > 65535 {
+		return "", fmt.Errorf("invalid port %q (want 1-65535)", p)
+	}
+	return strconv.Itoa(n), nil
+}
+
+// validEnvName reports whether name is a valid environment variable name (a C
+// identifier: a letter or underscore, then letters, digits, or underscores).
+// Credential-injection sources name the carrier var this way, so a typo is
+// caught at parse time instead of silently matching nothing.
+func validEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // stripScheme removes http:// or https:// and any trailing path from a URL-like string.

@@ -123,6 +123,24 @@ func TestMergeProfiles(t *testing.T) {
 	assert.Contains(t, cfg.EnvPassthrough, "SSH_AUTH_SOCK")
 }
 
+func TestMergeProfiles_ClaudeInjectsApiKey(t *testing.T) {
+	cmd := newTestCmd(nil)
+	cfg, err := FromFlags(cmd)
+	require.NoError(t, err)
+
+	_, err = MergeProfiles(cfg, []string{"claude"}, cmd.Flags())
+	require.NoError(t, err)
+
+	assert.Contains(t, cfg.AllowedDomains, "api.anthropic.com")
+
+	// The key is injected to api.anthropic.com from the host env var; the
+	// sandbox's ANTHROPIC_API_KEY becomes a placeholder, and injection is
+	// skipped when the host var is unset (OAuth).
+	assert.Contains(t, cfg.InjectHeader, "ANTHROPIC_API_KEY:api.anthropic.com")
+	// The real key is not passed through (it would defeat the injection).
+	assert.NotContains(t, cfg.EnvPassthrough, "ANTHROPIC_API_KEY")
+}
+
 func TestMergeProfiles_Dedup(t *testing.T) {
 	cmd := newTestCmd(nil)
 	cfg, err := FromFlags(cmd)

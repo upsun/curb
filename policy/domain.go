@@ -1,6 +1,9 @@
 package policy
 
-import "strings"
+import (
+	"net/netip"
+	"strings"
+)
 
 // DomainMatcher checks domain names against an allowlist with exact and
 // wildcard matching support.
@@ -21,7 +24,7 @@ func NewDomainMatcher(domains []string) *DomainMatcher {
 		exactDomains: make(map[string]bool),
 	}
 	for _, d := range domains {
-		d = normalizeDomain(d)
+		d = NormalizeHost(d)
 		if d == "*" {
 			m.matchAll = true
 			return m
@@ -41,7 +44,7 @@ func (m *DomainMatcher) Match(domain string) bool {
 	if m.matchAll {
 		return true
 	}
-	domain = normalizeDomain(domain)
+	domain = NormalizeHost(domain)
 	if domain == "" {
 		return false
 	}
@@ -62,6 +65,23 @@ func (m *DomainMatcher) Match(domain string) bool {
 	return false
 }
 
-func normalizeDomain(s string) string {
+// NormalizeHost lowercases a host and trims surrounding whitespace and a
+// trailing root-label dot, so api.example.com, API.EXAMPLE.COM, and
+// api.example.com. all compare equal. Shared by the domain matcher, the
+// injection-host validator, and the proxy's binding lookup so they agree on
+// what counts as the same host.
+func NormalizeHost(s string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
+}
+
+// CanonicalHost returns the canonical binding form of a host: an IP literal in
+// its canonical textual form, otherwise the normalized hostname. The
+// injection-target parser and the proxy's binding lookup share it, so a
+// binding key built at parse time always matches one built from a live
+// connection's target.
+func CanonicalHost(host string) string {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.String()
+	}
+	return NormalizeHost(host)
 }

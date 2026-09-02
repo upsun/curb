@@ -35,7 +35,8 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 		}
 		defer ln.Close()
 
-		handler := buildProxyHandler(plan)
+		injector := buildInjector(plan)
+		handler := buildProxyHandler(plan, injector)
 		proxySrv = &http.Server{Handler: handler}
 		go func() { _ = proxySrv.Serve(ln) }()
 		defer proxySrv.Close()
@@ -47,7 +48,7 @@ func StartSandbox(plan *SandboxPlan) (int, error) {
 				return -1, fmt.Errorf("socks5 listener: %w", socksErr)
 			}
 			defer socksLn.Close()
-			socksSrv := buildSOCKS5Server(plan)
+			socksSrv := buildSOCKS5Server(plan, injector)
 			go func() { _ = socksSrv.Serve(socksLn) }()
 		}
 	}

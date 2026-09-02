@@ -44,11 +44,18 @@ exec:
   - /bin
   - /usr/local/bin
   - /opt/homebrew/bin
+# Keep ANTHROPIC_API_KEY out of the sandbox: the proxy injects it into requests
+# to api.anthropic.com. Skipped when the host key is unset (OAuth users).
+# A custom ANTHROPIC_BASE_URL gateway is not covered by this binding; curb
+# warns at plan time when it sees one. Bind the key to the gateway host too, or
+# pass it through with --env ANTHROPIC_API_KEY.
+# See docs/configuration.md ("Credential injection").
+inject-header:
+  - ANTHROPIC_API_KEY:api.anthropic.com
 env:
   - HOME
   - SHELL
   - CLAUDE_CODE_TMPDIR=$TMPDIR
-  - ANTHROPIC_API_KEY
   - ANTHROPIC_BASE_URL
   - CLAUDE_CODE_MAX_TOKENS
   - GIT_AUTHOR_NAME

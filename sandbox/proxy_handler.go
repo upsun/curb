@@ -19,16 +19,34 @@ func buildFilterBase(plan *SandboxPlan) proxy.FilterBase {
 	return fb
 }
 
-// buildProxyHandler creates the HTTP proxy handler from the sandbox plan.
-func buildProxyHandler(plan *SandboxPlan) *proxy.Handler {
-	return &proxy.Handler{
-		FilterBase: buildFilterBase(plan),
+// buildInjector creates the credential injector from the plan, or nil when no
+// bindings are configured. It is shared by the HTTP and SOCKS5 proxies so both
+// egress paths inject for bound hosts.
+func buildInjector(plan *SandboxPlan) *proxy.Injector {
+	// resolveInject sets CA and InjectBindings together, or neither.
+	if plan.CA == nil {
+		return nil
 	}
+	inj := proxy.NewInjector(plan.CA)
+	for target, injections := range plan.InjectBindings {
+		for _, injection := range injections {
+			inj.Bind(target.Host, target.Port, injection)
+		}
+	}
+	return inj
+}
+
+// buildProxyHandler creates the HTTP proxy handler from the sandbox plan. The
+// injector is shared with the SOCKS5 server so both egress paths use one
+// upstream transport (one connection pool).
+func buildProxyHandler(plan *SandboxPlan, injector *proxy.Injector) *proxy.Handler {
+	return &proxy.Handler{FilterBase: buildFilterBase(plan), Injector: injector}
 }
 
 // buildSOCKS5Server creates the SOCKS5 proxy server from the sandbox plan.
-func buildSOCKS5Server(plan *SandboxPlan) *proxy.SOCKS5Server {
+func buildSOCKS5Server(plan *SandboxPlan, injector *proxy.Injector) *proxy.SOCKS5Server {
 	return &proxy.SOCKS5Server{
 		FilterBase: buildFilterBase(plan),
+		Injector:   injector,
 	}
 }

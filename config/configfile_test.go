@@ -152,6 +152,60 @@ func TestLoadConfigFile_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLoadConfigFile_InjectHeader(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-header:
+  - ANTHROPIC_API_KEY:api.anthropic.com
+`), 0o644))
+
+	cf, err := LoadConfigFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ANTHROPIC_API_KEY:api.anthropic.com"}, cf.InjectHeader)
+}
+
+func TestLoadConfigFile_InjectHeaderMissingHost(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-header:
+  - ANTHROPIC_API_KEY
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inject-header")
+}
+
+func TestLoadConfigFile_InjectHeaderWildcard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-header:
+  - "GH_TOKEN:*.github.com"
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inject-header")
+	assert.Contains(t, err.Error(), "exact hostname")
+}
+
+func TestLoadConfigFile_InjectHeaderInvalidName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".curb.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+inject-header:
+  - "bad-var:api.example.com"
+`), 0o644))
+
+	_, err := LoadConfigFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inject-header")
+	assert.Contains(t, err.Error(), "not a valid environment variable name")
+}
+
 func TestFindConfigFile_InCWD(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".curb.yaml")
@@ -199,22 +253,24 @@ func TestFindConfigFile_NotFound(t *testing.T) {
 }
 
 func TestMergeConfigFile_ListsPrepend(t *testing.T) {
-	cmd := newTestCmd([]string{"--domains", "cli.com"})
+	cmd := newTestCmd([]string{"--domains", "cli.com", "--inject-header", "H:cli.com"})
 	cfg, err := FromFlags(cmd)
 	require.NoError(t, err)
 
 	cf := &ConfigFile{
-		Domains: []string{"file.com"},
-		IPs:     []string{"10.0.0.1"},
-		Read:    []string{"/opt"},
-		Write:   []string{"/data"},
-		Exec:    []string{"python3"},
-		Env:     []string{"GOPATH", "FOO=bar"},
+		Domains:      []string{"file.com"},
+		IPs:          []string{"10.0.0.1"},
+		InjectHeader: []string{"K:file.com"},
+		Read:         []string{"/opt"},
+		Write:        []string{"/data"},
+		Exec:         []string{"python3"},
+		Env:          []string{"GOPATH", "FOO=bar"},
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())
 
 	assert.Equal(t, []string{"file.com", "cli.com"}, cfg.AllowedDomains)
 	assert.Equal(t, []string{"10.0.0.1"}, cfg.AllowedIPs)
+	assert.Equal(t, []string{"K:file.com", "H:cli.com"}, cfg.InjectHeader)
 	assert.Equal(t, []string{"/opt"}, cfg.ROPaths)
 	assert.Equal(t, []string{"/data"}, cfg.RWPaths)
 	assert.Equal(t, []string{"python3"}, cfg.ExecAllow)

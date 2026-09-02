@@ -16,6 +16,7 @@ import (
 	"github.com/upsun/curb/clog"
 	"github.com/upsun/curb/config"
 	"github.com/upsun/curb/policy"
+	"github.com/upsun/curb/proxy"
 )
 
 const (
@@ -106,6 +107,12 @@ type SandboxPlan struct {
 	Command          []string
 	Caps             *Capabilities
 	Logger           *clog.Logger
+
+	// Credential injection (parent-only; never serialized to the child).
+	// CA mints leaf certs for injected destinations; InjectBindings maps a
+	// destination to the credential headers the proxy attaches to it.
+	CA             *proxy.CA
+	InjectBindings map[policy.InjectTarget][]proxy.Injection
 }
 
 // LandlockPaths returns the path sets for Landlock rule construction.
@@ -183,9 +190,15 @@ func BuildPlan(cfg *config.Config, caps *Capabilities, logger *clog.Logger) (*Sa
 	return newPlanBuilder().BuildPlan(cfg, caps, logger)
 }
 
+// proxyFilteringEnabled reports whether the run filters network egress through
+// the proxy. Shared by resolveCapabilities and the darwin plan builder.
+func proxyFilteringEnabled(cfg *config.Config) bool {
+	return (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0 || cfg.HostLoopback) && !cfg.UnrestrictedNet
+}
+
 // resolveCapabilities validates system capabilities and selects enforcement layers.
 func resolveCapabilities(plan *SandboxPlan, cfg *config.Config, caps *Capabilities) error {
-	hasFiltering := (len(cfg.AllowedDomains) > 0 || len(cfg.AllowedIPs) > 0 || cfg.HostLoopback) && !cfg.UnrestrictedNet
+	hasFiltering := proxyFilteringEnabled(cfg)
 
 	if caps.UserNS != nil {
 		aaHint := ""
@@ -572,6 +585,25 @@ func appendUniq(s []string, v string) []string {
 	return s
 }
 
+// envPassesThrough reports whether the passthrough policy admits name. The
+// single matching rule (internal-var guard, '*' sentinel, glob patterns) is
+// shared by ResolveEnv, the dry-run output, and the CA-bundle base lookup so
+// they cannot drift.
+func (p *SandboxPlan) envPassesThrough(name string) bool {
+	if isInternalEnvVar(name) {
+		return false
+	}
+	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
+		return true
+	}
+	for _, pat := range p.EnvPassthrough {
+		if matched, _ := filepath.Match(pat, name); matched {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveEnv applies environment policy, sets up shell init files, and writes
 // an SSH config for ProxyCommand routing through the SOCKS5 proxy.
 func resolveEnv(plan *SandboxPlan, cfg *config.Config) error {
@@ -644,35 +676,18 @@ func isInternalEnvVar(name string) bool {
 	return strings.HasPrefix(name, "_CURB_")
 }
 
-// ResolveEnv resolves the final environment from EnvSet and EnvPassthrough.
-func (p *SandboxPlan) ResolveEnv() []string {
+// resolvedEnvMap resolves the final environment from EnvSet and
+// EnvPassthrough, keyed by variable name.
+func (p *SandboxPlan) resolvedEnvMap() map[string]string {
 	env := make(map[string]string, len(p.EnvSet))
 	maps.Copy(env, p.EnvSet)
-	if len(p.EnvPassthrough) > 0 && p.EnvPassthrough[0] == envPassthroughAll {
-		for _, e := range os.Environ() {
-			k, v, _ := strings.Cut(e, "=")
-			if isInternalEnvVar(k) {
-				continue
-			}
-			if _, ok := env[k]; !ok {
-				env[k] = v
-			}
+	for _, e := range os.Environ() {
+		k, v, _ := strings.Cut(e, "=")
+		if _, set := env[k]; set {
+			continue
 		}
-	} else {
-		for _, e := range os.Environ() {
-			k, v, _ := strings.Cut(e, "=")
-			if isInternalEnvVar(k) {
-				continue
-			}
-			if _, set := env[k]; set {
-				continue
-			}
-			for _, pat := range p.EnvPassthrough {
-				if matched, _ := filepath.Match(pat, k); matched {
-					env[k] = v
-					break
-				}
-			}
+		if p.envPassesThrough(k) {
+			env[k] = v
 		}
 	}
 	// HOME fallback: use the pre-resolved SandboxHome so tilde expansion
@@ -680,6 +695,12 @@ func (p *SandboxPlan) ResolveEnv() []string {
 	if _, ok := env["HOME"]; !ok && p.SandboxHome != "" {
 		env["HOME"] = p.SandboxHome
 	}
+	return env
+}
+
+// ResolveEnv resolves the final environment as sorted KEY=VALUE entries.
+func (p *SandboxPlan) ResolveEnv() []string {
+	env := p.resolvedEnvMap()
 	result := make([]string, 0, len(env))
 	for k, v := range env {
 		result = append(result, k+"="+v)
@@ -774,6 +795,13 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 			ln("    localhost:  sandbox-internal (NO_PROXY)")
 		}
 		ln("    blocked:    everything else")
+		if len(p.InjectBindings) > 0 {
+			ln("    inject:     TLS terminated; the proxy replaces a placeholder with the real credential in request headers (the real token never enters the sandbox)")
+			for _, d := range p.injectDestinations() {
+				pr("      %s\n", d)
+			}
+			pr("    ca-trust:   per-run CA bundle in env (%s)\n", strings.Join(caBundleEnvKeys, ", "))
+		}
 	}
 
 	// Environment.
@@ -794,11 +822,8 @@ func (p *SandboxPlan) PrintDryRun(w io.Writer) {
 		var resolved []string
 		for _, e := range os.Environ() {
 			k, _, _ := strings.Cut(e, "=")
-			for _, pat := range p.EnvPassthrough {
-				if matched, _ := filepath.Match(pat, k); matched {
-					resolved = append(resolved, k)
-					break
-				}
+			if p.envPassesThrough(k) {
+				resolved = append(resolved, k)
 			}
 		}
 		sort.Strings(resolved)
@@ -896,11 +921,26 @@ func applyEnvPolicy(plan *SandboxPlan, cfg *config.Config, tmpDir string) {
 		// SOCKS5 proxy env vars. Most HTTP clients prefer HTTP_PROXY/HTTPS_PROXY
 		// over ALL_PROXY, so HTTP/HTTPS still goes through the HTTP proxy.
 		// ALL_PROXY covers non-HTTP tools (curl --socks5, cargo, etc.).
+		//
+		// Respect a user-provided value (as NO_PROXY does below): set ALL_PROXY
+		// empty to suppress the SOCKS env for HTTP-only workloads. httpx eagerly
+		// builds a transport for ALL_PROXY at client construction and needs the
+		// socks extra otherwise; ssh routing does not use it (setupSSHConfig).
 		if plan.SOCKSPort > 0 {
 			socksAddr := fmt.Sprintf("127.0.0.1:%d", plan.SOCKSPort)
 			socksURL := fmt.Sprintf("socks5h://%s", socksAddr)
-			plan.EnvSet["ALL_PROXY"] = socksURL
-			plan.EnvSet["all_proxy"] = socksURL
+			allProxy, allProxySet := plan.EnvSet["ALL_PROXY"]
+			lowerAllProxy, lowerAllProxySet := plan.EnvSet["all_proxy"]
+			switch {
+			case allProxySet && lowerAllProxySet:
+			case allProxySet:
+				plan.EnvSet["all_proxy"] = allProxy
+			case lowerAllProxySet:
+				plan.EnvSet["ALL_PROXY"] = lowerAllProxy
+			default:
+				plan.EnvSet["ALL_PROXY"] = socksURL
+				plan.EnvSet["all_proxy"] = socksURL
+			}
 			plan.EnvSet[SOCKSAddrEnvKey] = socksAddr
 		}
 	}
@@ -1215,6 +1255,14 @@ func resolveSymlinks(paths []string) []string {
 // sanitization is available. Used by degradedPlanBuilder and tests.
 func buildDegradedPlan(cfg *config.Config, caps *Capabilities) (*SandboxPlan, error) {
 	plan := &SandboxPlan{Caps: caps}
+
+	injects, err := parseInjectHeader(cfg.InjectHeader)
+	if err != nil {
+		return nil, err
+	}
+	if active := activeInjectSpecs(injects, cfg); len(active) > 0 {
+		return nil, fmt.Errorf("credential injection (--inject-header) is only supported on Linux and macOS"+injectEnvHint, injectEnvFlags(active))
+	}
 
 	if len(cfg.AllowedDomains) > 0 {
 		plan.DegradedLayers = append(plan.DegradedLayers, DegradedLayer{

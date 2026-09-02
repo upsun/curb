@@ -19,6 +19,7 @@ type ConfigFile struct {
 	Profiles         []string `yaml:"profiles"`
 	Domains          []string `yaml:"domains"`
 	IPs              []string `yaml:"ips"`
+	InjectHeader     []string `yaml:"inject-header"`
 	Read             pathList `yaml:"read"`
 	Write            pathList `yaml:"write"`
 	Exec             pathList `yaml:"exec"`
@@ -109,6 +110,11 @@ func (cf *ConfigFile) validate() error {
 			return err
 		}
 	}
+	for i, e := range cf.InjectHeader {
+		if _, _, err := policy.ParseInjectHeader(e); err != nil {
+			return fmt.Errorf("inject-header[%d]: %w", i, err)
+		}
+	}
 	for _, pair := range [...]struct {
 		field string
 		list  pathList
@@ -152,6 +158,7 @@ func FindConfigFile() string {
 func mergeConfigLists(cfg *Config, cf *ConfigFile) {
 	cfg.AllowedDomains = append(cf.Domains, cfg.AllowedDomains...)
 	cfg.AllowedIPs = append(cf.IPs, cfg.AllowedIPs...)
+	cfg.InjectHeader = append(cf.InjectHeader, cfg.InjectHeader...)
 	cfg.ROPaths = append(expandEnvPaths([]string(cf.Read), "read"), cfg.ROPaths...)
 	cfg.RWPaths = append(expandEnvPaths([]string(cf.Write), "write"), cfg.RWPaths...)
 	cfg.ExecAllow = append(expandEnvPaths([]string(cf.Exec), "exec"), cfg.ExecAllow...)

@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/upsun/curb/config"
+	"github.com/upsun/curb/policy"
 )
 
 func TestIsCoveredBySubpath(t *testing.T) {
@@ -81,4 +83,52 @@ func TestAddTerminfo_AlreadyCovered(t *testing.T) {
 	addTerminfo(plan)
 
 	assert.Equal(t, []string{parent}, plan.ROPaths)
+}
+
+func TestDarwinBuildPlan_InjectHeaderInactive(t *testing.T) {
+	t.Setenv("DARWIN_INJECT_TOKEN", "")
+	cfg := &config.Config{
+		InjectHeader: []string{"DARWIN_INJECT_TOKEN:api.example.com"},
+	}
+
+	plan, err := BuildPlan(cfg, &Capabilities{}, nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.Empty(t, plan.InjectBindings)
+	assert.Nil(t, plan.CA)
+	assert.False(t, plan.ProxyEnabled)
+}
+
+func TestDarwinBuildPlan_InjectHeaderActiveRequiresAllowedDomain(t *testing.T) {
+	t.Setenv("DARWIN_INJECT_TOKEN", "secret")
+	cfg := &config.Config{
+		InjectHeader: []string{"DARWIN_INJECT_TOKEN:api.example.com"},
+	}
+
+	plan, err := BuildPlan(cfg, &Capabilities{}, nil)
+	require.Error(t, err)
+	assert.Nil(t, plan)
+	assert.Contains(t, err.Error(), `credential injection host "api.example.com" is not allowed`)
+}
+
+func TestDarwinBuildPlan_InjectHeaderActive(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("DARWIN_INJECT_TOKEN", "secret")
+	cfg := &config.Config{
+		AllowedDomains: []string{"api.example.com"},
+		InjectHeader:   []string{"DARWIN_INJECT_TOKEN:api.example.com"},
+	}
+
+	plan, err := BuildPlan(cfg, &Capabilities{}, nil)
+	require.NoError(t, err)
+	defer plan.Cleanup()
+
+	assert.True(t, plan.UseSeatbelt)
+	assert.True(t, plan.ProxyEnabled)
+	assert.NotNil(t, plan.CA)
+	assert.Contains(t, plan.InjectBindings, policy.InjectTarget{Host: "api.example.com", Port: "443"})
+	assert.Equal(t, injectPlaceholder("DARWIN_INJECT_TOKEN"), plan.EnvSet["DARWIN_INJECT_TOKEN"])
 }
