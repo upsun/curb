@@ -111,8 +111,8 @@ func injectTestProxy(t *testing.T, ca *CA, bindings map[string][]Injection, upst
 
 	injector, allowed := newTestInjector(ca, bindings, upstreams)
 	handler := &Handler{
-		FilterBase: FilterBase{DomainCheck: func(h string) bool { return allowed[h] }},
-		Injector:   injector,
+		DomainCheck: func(h string) bool { return allowed[h] },
+		Injector:    injector,
 	}
 	proxySrv := httptest.NewServer(handler)
 	t.Cleanup(proxySrv.Close)
@@ -309,8 +309,8 @@ func TestInjector_RefusesPlainHTTP(t *testing.T) {
 	injector := NewInjector(ca)
 	injector.Bind("localhost", strconv.Itoa(closedPort), Injection{Placeholder: "PH", Value: "real"})
 	handler := &Handler{
-		FilterBase: FilterBase{DomainCheck: func(h string) bool { return h == "localhost" }},
-		Injector:   injector,
+		DomainCheck: func(h string) bool { return h == "localhost" },
+		Injector:    injector,
 	}
 	proxySrv := httptest.NewServer(handler)
 	t.Cleanup(proxySrv.Close)
@@ -351,8 +351,8 @@ func TestSOCKS5Server_Injects(t *testing.T) {
 		map[string]*authRecorder{"api.github.com": gh},
 	)
 	srv := &SOCKS5Server{
-		FilterBase: FilterBase{DomainCheck: func(h string) bool { return allowed[h] }},
-		Injector:   injector,
+		DomainCheck: func(h string) bool { return allowed[h] },
+		Injector:    injector,
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
