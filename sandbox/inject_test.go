@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -390,4 +391,237 @@ func TestWriteCABundle_ExtendsUserBase(t *testing.T) {
 	// A user-provided base is extended, not discarded.
 	assert.Contains(t, string(data), "CUSTOMROOT")
 	assert.Contains(t, string(data), "PERRUNCA")
+}
+
+// TestCABundleBaseMissingFileFallsBack confirms a stale CA env var pointing at
+// a path that no longer exists does not abort the run: like the directory case,
+// the system bundle is used as the base instead. Such a value is inherited from
+// the host, not chosen by curb, so it must not be able to fail planning.
+func TestCABundleBaseMissingFileFallsBack(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	t.Setenv("NODE_EXTRA_CA_CERTS", filepath.Join(t.TempDir(), "gone.pem"))
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{envPassthroughAll},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
+	}
+
+	require.NoError(t, resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com")))
+	data, err := os.ReadFile(plan.EnvSet["NODE_EXTRA_CA_CERTS"])
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "CERTIFICATE")
+}
+
+// TestCABundleBaseUnreadableFileFallsBack covers a base that exists but cannot
+// be read: same host-inherited value, same fallback.
+func TestCABundleBaseUnreadableFileFallsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
+	base := filepath.Join(t.TempDir(), "roots.pem")
+	require.NoError(t, os.WriteFile(base, []byte("-----BEGIN CERTIFICATE-----\n"), 0o000))
+	t.Setenv("CURL_CA_BUNDLE", base)
+	plan := &SandboxPlan{
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{"CURL_CA_BUNDLE"},
+	}
+	assert.Empty(t, plan.caBundleBase("CURL_CA_BUNDLE"))
+}
+
+// --- unbound endpoint warnings ---
+
+// captureStderr redirects os.Stderr for the duration of fn and returns what
+// was written. clog.Warnf resolves os.Stderr per call, so this captures it.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	saved := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = saved }()
+
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	require.NoError(t, w.Close())
+	out := <-done
+	require.NoError(t, r.Close())
+	return out
+}
+
+func TestUnboundEndpointWarnings(t *testing.T) {
+	specs := func(entry string) []injectSpec {
+		parsed, err := parseInjectHeader([]string{entry})
+		require.NoError(t, err)
+		return parsed
+	}
+	tests := []struct {
+		name    string
+		specs   []injectSpec
+		env     map[string]string
+		want    string // substring the single warning must contain, "" for none
+		wantAll []string
+	}{
+		{
+			name:  "endpoint on the bound host is silent",
+			specs: specs("ANTHROPIC_API_KEY:api.anthropic.com"),
+			env:   map[string]string{"ANTHROPIC_BASE_URL": "https://api.anthropic.com"},
+		},
+		{
+			name:  "host normalization applies",
+			specs: specs("ANTHROPIC_API_KEY:api.anthropic.com"),
+			env:   map[string]string{"ANTHROPIC_BASE_URL": "https://API.Anthropic.com./v1"},
+		},
+		{
+			name:    "gateway host is not covered",
+			specs:   specs("ANTHROPIC_API_KEY:api.anthropic.com"),
+			env:     map[string]string{"ANTHROPIC_BASE_URL": "https://gw.example.com/v1"},
+			wantAll: []string{"ANTHROPIC_BASE_URL points at gw.example.com", "--inject-header ANTHROPIC_API_KEY:gw.example.com", "--env ANTHROPIC_API_KEY"},
+		},
+		{
+			name:  "bindings are port-exact",
+			specs: specs("ANTHROPIC_API_KEY:api.anthropic.com"),
+			env:   map[string]string{"ANTHROPIC_BASE_URL": "https://api.anthropic.com:8443"},
+			want:  "--inject-header ANTHROPIC_API_KEY:api.anthropic.com:8443",
+		},
+		{
+			name:  "custom port matches its binding",
+			specs: specs("ANTHROPIC_API_KEY:api.anthropic.com:8443"),
+			env:   map[string]string{"ANTHROPIC_BASE_URL": "https://api.anthropic.com:8443"},
+		},
+		{
+			name:  "cleartext endpoint cannot carry a credential",
+			specs: specs("ANTHROPIC_API_KEY:api.anthropic.com"),
+			env:   map[string]string{"ANTHROPIC_BASE_URL": "http://gw.example.com"},
+			want:  "plain-HTTP gw.example.com:80",
+		},
+		{
+			name:  "cleartext is reported even on a bound destination",
+			specs: specs("ANTHROPIC_API_KEY:gw.example.com:80"),
+			env:   map[string]string{"ANTHROPIC_BASE_URL": "http://gw.example.com"},
+			want:  "plain-HTTP gw.example.com:80",
+		},
+		{
+			name:  "a bare host is an endpoint too",
+			specs: specs("FOO_TOKEN:api.example.com"),
+			env:   map[string]string{"FOO_ENDPOINT": "gw.example.com"},
+			want:  "FOO_ENDPOINT points at gw.example.com",
+		},
+		{
+			name:  "an IPv6 endpoint is bracketed for the suggestion",
+			specs: specs("FOO_TOKEN:api.example.com"),
+			env:   map[string]string{"FOO_URL": "https://[2001:db8::1]:8443"},
+			want:  "--inject-header FOO_TOKEN:[2001:db8::1]:8443",
+		},
+		{
+			name:  "an unrelated variable is not this credential's endpoint",
+			specs: specs("ANTHROPIC_API_KEY:api.anthropic.com"),
+			env:   map[string]string{"OPENAI_BASE_URL": "https://gw.example.com"},
+		},
+		{
+			name:  "_HOST is not treated as an endpoint",
+			specs: specs("GH_TOKEN:api.github.com"),
+			env:   map[string]string{"GH_HOST": "github.com"},
+		},
+		{
+			name:  "a value that names no host is ignored",
+			specs: specs("FOO_TOKEN:api.example.com"),
+			env:   map[string]string{"FOO_URL": "", "FOO_ENDPOINT": "unix:///var/run/x.sock"},
+		},
+		{
+			name:  "an unparsable destination is ignored",
+			specs: specs("FOO_TOKEN:api.example.com"),
+			env: map[string]string{
+				"FOO_URL":      "https://gw.example.com:notaport",
+				"FOO_ENDPOINT": "https://*.example.com",
+				"FOO_API_BASE": "https://gw example com/",
+			},
+		},
+		{
+			name:    "a query string is not part of the host",
+			specs:   specs("FOO_TOKEN:api.example.com"),
+			env:     map[string]string{"FOO_URL": "https://gw.example.com?v=1"},
+			wantAll: []string{"points at gw.example.com,", "--inject-header FOO_TOKEN:gw.example.com "},
+		},
+		{
+			name:  "the credential's own variable is not an endpoint",
+			specs: specs("FOO_URL:api.example.com"),
+			env:   map[string]string{"FOO_URL": injectPlaceholder("FOO_URL")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgs := unboundEndpointWarnings(tt.specs, tt.env)
+			if tt.want == "" && len(tt.wantAll) == 0 {
+				assert.Empty(t, msgs)
+				return
+			}
+			require.Len(t, msgs, 1)
+			for _, want := range append(tt.wantAll, tt.want) {
+				if want != "" {
+					assert.Contains(t, msgs[0], want)
+				}
+			}
+		})
+	}
+}
+
+// TestUnboundEndpointWarningsStripUserinfo confirms the destination is the
+// URL's host alone: userinfo in an endpoint value is not part of the
+// destination, and must not be echoed into a warning.
+func TestUnboundEndpointWarningsStripUserinfo(t *testing.T) {
+	specs, err := parseInjectHeader([]string{"FOO_TOKEN:api.example.com"})
+	require.NoError(t, err)
+	msgs := unboundEndpointWarnings(specs, map[string]string{"FOO_BASE_URL": "https://user:hunter2@gw.example.com/v1"})
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0], "--inject-header FOO_TOKEN:gw.example.com ")
+	assert.NotContains(t, msgs[0], "hunter2")
+}
+
+// TestUnboundEndpointWarningsMultipleBindings confirms each credential is
+// checked against its own destinations, and the bound list is reported.
+func TestUnboundEndpointWarningsMultipleBindings(t *testing.T) {
+	specs, err := parseInjectHeader([]string{"A_KEY:a.example.com,alt.example.com", "B_KEY:b.example.com"})
+	require.NoError(t, err)
+	msgs := unboundEndpointWarnings(specs, map[string]string{
+		"A_BASE_URL": "https://alt.example.com",
+		"B_BASE_URL": "https://gw.example.com",
+	})
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0], "B_BASE_URL points at gw.example.com")
+	assert.Contains(t, msgs[0], "(b.example.com)")
+}
+
+// TestResolveInjectWarnsUnboundEndpoint covers the wiring: the endpoint check
+// runs on the resolved sandbox environment, so a passed-through endpoint
+// variable reaches it.
+func TestResolveInjectWarnsUnboundEndpoint(t *testing.T) {
+	if systemCABundle() == "" {
+		t.Skip("system CA bundle unavailable")
+	}
+	t.Setenv("ACTIVE_TOKEN", "secret")
+	t.Setenv("ACTIVE_BASE_URL", "https://gw.example.com")
+	plan := &SandboxPlan{
+		TempDir:        t.TempDir(),
+		EnvSet:         map[string]string{},
+		EnvPassthrough: []string{"ACTIVE_BASE_URL"},
+		AllowedDomains: []string{"api.example.com"},
+		ProxyEnabled:   true,
+	}
+
+	stderr := captureStderr(t, func() {
+		require.NoError(t, resolveInject(plan, injectCfg("ACTIVE_TOKEN:api.example.com")))
+	})
+	assert.Contains(t, stderr, "ACTIVE_BASE_URL points at gw.example.com")
+	// The warning must never carry the credential itself.
+	assert.NotContains(t, stderr, "secret")
 }

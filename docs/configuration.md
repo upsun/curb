@@ -270,7 +270,20 @@ placeholder as a custom key.
 
 The profile binding targets `api.anthropic.com`, so a custom `ANTHROPIC_BASE_URL`
 (an internal gateway) is not covered: the gateway would receive the placeholder
-and auth would fail. For a gateway, either bind the key to its host as well —
+and auth would fail. curb warns at plan time when it sees this — an endpoint
+variable named after the credential (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`,
+or any `<PREFIX>_BASE_URL`, `_API_BASE`, `_URL`, `_ENDPOINT`) that points
+somewhere the credential is not bound:
+
+```
+curb: warning: ANTHROPIC_BASE_URL points at gateway.example.com, which
+ANTHROPIC_API_KEY is not bound to (api.anthropic.com): requests there would
+carry the placeholder instead of the credential; bind it with --inject-header
+ANTHROPIC_API_KEY:gateway.example.com (allowing the host with --domains), or
+pass the credential in with --env ANTHROPIC_API_KEY
+```
+
+For a gateway, either bind the key to its host as well —
 `--inject-header ANTHROPIC_API_KEY:gateway.example.com` (bindings accumulate, so
 both hosts inject) — or, if the gateway is trusted, pass the key through with an
 exact `--env ANTHROPIC_API_KEY`. Exact passthrough (`--env ENV_VAR`) and an
@@ -284,9 +297,21 @@ extends each existing CA bundle from the standard CA environment variables
 `NODE_EXTRA_CA_CERTS`) with the per-run CA and points that variable at the
 extended bundle. If a variable is unset, curb uses the system roots as its base.
 This lets common tools trust the terminated connection while preserving custom
-trust for other hosts. A variable pointing at a *directory* of certificates
-cannot be extended by concatenation; curb warns and uses the system roots as
-that variable's base instead.
+trust for other hosts. A variable curb cannot extend — one pointing at a
+*directory* of certificates (which cannot be extended by concatenation), or a
+stale one pointing at a file that is missing or unreadable — does not fail the
+run: curb warns and uses the system roots as that variable's base instead. Only
+a missing system CA bundle is fatal, since then there is no trust store to hand
+to the sandbox at all.
+
+On **macOS**, tools built with Go 1.26 or earlier do not honor `SSL_CERT_FILE`:
+Go's `crypto/x509` used the system keychain there and ignored those variables
+until Go 1.27. Such a CLI (`gh`, `terraform`, `kubectl`, ... depending on the
+Go version it was built with) will therefore reject the per-run CA and fail TLS
+against a host with an injection binding, and curb has no way to deliver the CA
+to it. Tools that read a CA bundle from the environment — curl, git, Python,
+Node — are unaffected, as are Go tools built with Go 1.27 or later. On Linux all
+of them honor `SSL_CERT_FILE`.
 
 After terminating TLS, curb serves the decrypted stream as HTTP/1.1 — including
 `Upgrade` flows such as WebSocket and `Expect: 100-continue` — and does not

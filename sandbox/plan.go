@@ -676,8 +676,9 @@ func isInternalEnvVar(name string) bool {
 	return strings.HasPrefix(name, "_CURB_")
 }
 
-// ResolveEnv resolves the final environment from EnvSet and EnvPassthrough.
-func (p *SandboxPlan) ResolveEnv() []string {
+// resolvedEnvMap resolves the final environment from EnvSet and
+// EnvPassthrough, keyed by variable name.
+func (p *SandboxPlan) resolvedEnvMap() map[string]string {
 	env := make(map[string]string, len(p.EnvSet))
 	maps.Copy(env, p.EnvSet)
 	for _, e := range os.Environ() {
@@ -694,6 +695,12 @@ func (p *SandboxPlan) ResolveEnv() []string {
 	if _, ok := env["HOME"]; !ok && p.SandboxHome != "" {
 		env["HOME"] = p.SandboxHome
 	}
+	return env
+}
+
+// ResolveEnv resolves the final environment as sorted KEY=VALUE entries.
+func (p *SandboxPlan) ResolveEnv() []string {
+	env := p.resolvedEnvMap()
 	result := make([]string, 0, len(env))
 	for k, v := range env {
 		result = append(result, k+"="+v)

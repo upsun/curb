@@ -108,7 +108,7 @@ func ParseInjectHeader(entry string) (envVar string, targets []InjectTarget, err
 		return "", nil, fmt.Errorf("%q is not a valid environment variable name", envVar)
 	}
 	for item := range strings.SplitSeq(rest, ",") {
-		t, err := parseInjectTarget(item)
+		t, err := ParseInjectTarget(item)
 		if err != nil {
 			return "", nil, err
 		}
@@ -117,12 +117,16 @@ func ParseInjectHeader(entry string) (envVar string, targets []InjectTarget, err
 	return envVar, targets, nil
 }
 
-// parseInjectTarget parses one HOST[:PORT] target. HOST is a hostname or IP
+// ParseInjectTarget parses one HOST[:PORT] target. HOST is a hostname or IP
 // literal; PORT defaults to 443. An IPv6 literal must be bracketed when a port
 // is present (net.SplitHostPort semantics); a bare IPv6 literal needs no
 // brackets. Unlike a --domains pattern, an injection host must be exact: a
 // wildcard cannot identify the single destination a credential belongs to.
-func parseInjectTarget(item string) (InjectTarget, error) {
+//
+// It is exported so that a destination discovered elsewhere (an endpoint
+// variable in the sandbox environment, say) is turned into a target by the
+// same rules as a binding's own, and never disagrees with one.
+func ParseInjectTarget(item string) (InjectTarget, error) {
 	if item == "" {
 		return InjectTarget{}, fmt.Errorf("empty injection target")
 	}

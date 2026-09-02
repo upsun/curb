@@ -1,10 +1,15 @@
 package sandbox
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -110,6 +115,120 @@ func injectPlaceholder(envVar string) string {
 	return "curb-inject-" + envVar + "-placeholder"
 }
 
+// endpointEnvSuffixes name the conventional environment variables through
+// which a tool is redirected at a different host than its default API
+// (ANTHROPIC_BASE_URL, OPENAI_API_BASE, ...). "_HOST" is deliberately absent:
+// such a variable often names a web host whose API host is derived from it
+// (GH_HOST=github.com implies api.github.com), so it would warn spuriously.
+var endpointEnvSuffixes = []string{"_BASE_URL", "_API_BASE", "_URL", "_ENDPOINT"}
+
+// warnUnboundEndpoints warns when the sandbox environment redirects a tool at a
+// destination its credential's bindings do not cover.
+func warnUnboundEndpoints(specs []injectSpec, env map[string]string) {
+	for _, msg := range unboundEndpointWarnings(specs, env) {
+		clog.Warnf("%s", msg)
+	}
+}
+
+// unboundEndpointWarnings returns one warning per endpoint variable that
+// redirects a credential's tool somewhere the credential cannot follow. The
+// request then carries the placeholder instead of the credential and the
+// endpoint answers 401, with nothing to connect the failure to the binding. A
+// variable counts as a credential's endpoint when it shares the credential's
+// leading name component (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL) and ends in
+// one of the conventional suffixes above.
+//
+// env is the resolved sandbox environment: a variable the sandbox never sees
+// cannot redirect anything.
+func unboundEndpointWarnings(specs []injectSpec, env map[string]string) []string {
+	var msgs []string
+	for _, s := range specs {
+		prefix, _, _ := strings.Cut(s.envVar, "_")
+		prefix += "_"
+		names := make([]string, 0, len(env))
+		for k := range env {
+			if k != s.envVar && strings.HasPrefix(k, prefix) && hasSuffixAny(k, endpointEnvSuffixes) {
+				names = append(names, k)
+			}
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			target, plaintext, ok := endpointTarget(env[k])
+			if !ok {
+				continue
+			}
+			// Cleartext is checked before the binding, because a binding does
+			// not help there: injecting over plain HTTP would expose the
+			// credential, so such a request is refused when the destination is
+			// bound and receives the placeholder when it is not.
+			if plaintext {
+				msgs = append(msgs, fmt.Sprintf("%s points at plain-HTTP %s, so requests there cannot carry %s: injecting a credential over cleartext would expose it; use an https endpoint, or pass the credential in with --env %s",
+					k, target, s.envVar, s.envVar))
+				continue
+			}
+			if slices.Contains(s.targets, target) {
+				continue
+			}
+			msgs = append(msgs, fmt.Sprintf("%s points at %s, which %s is not bound to (%s): requests there would carry the placeholder instead of the credential; bind it with --inject-header %s:%s (allowing the host with --domains), or pass the credential in with --env %s",
+				k, target, s.envVar, strings.Join(targetList(s.targets), ", "), s.envVar, target, s.envVar))
+		}
+	}
+	return msgs
+}
+
+func hasSuffixAny(s string, suffixes []string) bool {
+	for _, suf := range suffixes {
+		if strings.HasSuffix(s, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// targetList renders targets in display form, in binding order.
+func targetList(targets []policy.InjectTarget) []string {
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = t.String()
+	}
+	return out
+}
+
+// endpointTarget parses an endpoint variable's value — a URL or a bare
+// host[:port] — into the destination it names, reporting whether that
+// destination is plain HTTP. The authority is handed to the same parser the
+// bindings use, so a suggested --inject-header target is always one curb would
+// accept, and a value naming nothing usable (a non-HTTP scheme, a malformed
+// host, a bad port) is simply ignored rather than warned about.
+func endpointTarget(value string) (target policy.InjectTarget, plaintext bool, ok bool) {
+	authority := strings.TrimSpace(value)
+	if strings.Contains(authority, "://") {
+		u, err := url.Parse(authority)
+		if err != nil {
+			return policy.InjectTarget{}, false, false
+		}
+		switch u.Scheme {
+		case "https":
+		case "http":
+			plaintext = true
+		default:
+			return policy.InjectTarget{}, false, false
+		}
+		// u.Host is host[:port] with any userinfo removed and an IPv6 literal
+		// bracketed — exactly the target syntax. Only the default port differs
+		// by scheme.
+		authority = u.Host
+		if plaintext && u.Port() == "" {
+			authority = net.JoinHostPort(u.Hostname(), "80")
+		}
+	}
+	t, err := policy.ParseInjectTarget(authority)
+	if err != nil {
+		return policy.InjectTarget{}, false, false
+	}
+	return t, plaintext, true
+}
+
 // resolveInject parses the configured bindings, generates the per-run CA,
 // resolves each bound token, and delivers the CA to the sandbox trust store.
 // It runs after proxy and env resolution. The CA key and tokens stay in the
@@ -176,11 +295,14 @@ func resolveInject(plan *SandboxPlan, cfg *config.Config) error {
 		}
 		plan.EnvSet[k] = bundle
 	}
+	warnUnboundEndpoints(specs, plan.resolvedEnvMap())
 	return nil
 }
 
 var caBundleEnvKeys = []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"}
 
+// caBundleBase returns the trust store whose contents the per-run CA bundle
+// for name should extend, or "" to fall back to the system roots.
 func (p *SandboxPlan) caBundleBase(name string) string {
 	// An explicitly set value wins over passthrough, as in ResolveEnv — an
 	// explicit empty (--env SSL_CERT_FILE=) means system roots, not the host
@@ -192,13 +314,39 @@ func (p *SandboxPlan) caBundleBase(name string) string {
 	if base == "" {
 		return ""
 	}
-	// Some vars may legitimately point at a directory of certificates (e.g.
-	// REQUESTS_CA_BUNDLE), which cannot be extended by concatenation.
-	if fi, err := os.Stat(base); err == nil && fi.IsDir() {
-		clog.Warnf("%s points at a directory (%s), which cannot be extended with the per-run CA; using the system CA bundle as its base instead", name, base)
+	// The value comes from the environment, not from curb: it may point at a
+	// directory of certificates (e.g. REQUESTS_CA_BUNDLE), which cannot be
+	// extended by concatenation, or be stale and point at nothing at all.
+	// Neither is worth failing the run over — warn and extend the system roots
+	// instead. Only a missing or unreadable *system* bundle is fatal, in
+	// writeCABundleFile, because then there is no trust store to hand over.
+	if why := unusableCABundleBase(base); why != "" {
+		clog.Warnf("%s (%s) cannot be used as the base for the per-run CA bundle: %s; using the system CA bundle as its base instead", name, base, why)
 		return ""
 	}
 	return base
+}
+
+// unusableCABundleBase reports why path cannot serve as a PEM bundle base, or
+// "" if it is a readable regular file.
+func unusableCABundleBase(path string) string {
+	fi, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "it does not exist"
+	case err != nil:
+		return err.Error()
+	case fi.IsDir():
+		return "it is a directory, which cannot be extended by concatenation"
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "it cannot be opened for reading"
+	}
+	if err := f.Close(); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func caBundleFilename(name string) string {
