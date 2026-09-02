@@ -996,7 +996,7 @@ func TestFormatSkill_NoFSSection(t *testing.T) {
 func TestFormatSkill_ExcludesSelfEnvVar(t *testing.T) {
 	plan := &SandboxPlan{
 		EnvSet: map[string]string{
-			"TMPDIR":              "/tmp/curb-abc",
+			"TMPDIR":       "/tmp/curb-abc",
 			SkillDirEnvKey: "/tmp/curb-abc/.agents/skills/curb",
 		},
 	}

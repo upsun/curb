@@ -1,6 +1,5 @@
 package sandbox
 
-
 // Capabilities holds the results of probing system capabilities.
 type Capabilities struct {
 	UserNS             error  // nil = ok, non-nil = fatal.
@@ -27,4 +26,3 @@ func userNSErrMessage() string {
 func netNSErrMessage() string {
 	return `Network namespaces are required for --domains but are not available.`
 }
-
