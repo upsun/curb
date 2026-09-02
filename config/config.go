@@ -32,7 +32,7 @@ type Config struct {
 	Quiet             bool
 	DryRun            bool
 	Auto              bool
-	ConfigFilePaths []string
+	ConfigFilePaths   []string
 	Command           []string
 }
 
@@ -137,7 +137,7 @@ func FromFlags(cmd *cobra.Command) (*Config, error) {
 		Quiet:            quiet,
 		DryRun:           dryRun,
 		Auto:             auto,
-		Command: cmd.Flags().Args(),
+		Command:          cmd.Flags().Args(),
 	}
 
 	// Wildcard handling: '*' in list flags sets the corresponding escape hatch.
@@ -273,4 +273,3 @@ func EnvBool(key string) bool {
 	val := os.Getenv(key)
 	return val == "1" || strings.EqualFold(val, "true")
 }
-

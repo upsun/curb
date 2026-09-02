@@ -9,7 +9,6 @@ import (
 	"sync"
 )
 
-
 // Handler is an HTTP proxy handler that filters CONNECT (HTTPS) and plain
 // HTTP requests by domain and IP allowlists. HTTPS uses passthrough
 // tunneling: the proxy checks the CONNECT hostname, then relays the

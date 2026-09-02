@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"syscall"
 
 	"github.com/upsun/curb/proxy"
@@ -21,8 +22,8 @@ type resources struct{ closers []func() }
 func (r *resources) push(fn func()) { r.closers = append(r.closers, fn) }
 
 func (r *resources) closeAll() {
-	for i := len(r.closers) - 1; i >= 0; i-- {
-		r.closers[i]()
+	for _, v := range slices.Backward(r.closers) {
+		v()
 	}
 	r.closers = nil
 }

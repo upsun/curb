@@ -37,10 +37,8 @@ func connectThroughProxy(t *testing.T, proxyAddr, target string) (net.Conn, *buf
 func setupProxy(t *testing.T) *httptest.Server {
 	t.Helper()
 	h := &Handler{
-		FilterBase: FilterBase{
-			DomainCheck: func(d string) bool { return d == "allowed.example.com" },
-			IPCheck:     func(a netip.Addr) bool { return a == netip.MustParseAddr("93.184.215.14") },
-		},
+		DomainCheck: func(d string) bool { return d == "allowed.example.com" },
+		IPCheck:     func(a netip.Addr) bool { return a == netip.MustParseAddr("93.184.215.14") },
 	}
 	proxyServer := httptest.NewServer(h)
 	t.Cleanup(proxyServer.Close)
@@ -57,9 +55,7 @@ func TestHandler_CONNECT_Allowed(t *testing.T) {
 	upstreamAddr := upstreamURL.Host // 127.0.0.1:<port>
 
 	h := &Handler{
-		FilterBase: FilterBase{
-			IPCheck: func(a netip.Addr) bool { return a.IsLoopback() },
-		},
+		IPCheck: func(a netip.Addr) bool { return a.IsLoopback() },
 	}
 	proxyServer := httptest.NewServer(h)
 	defer proxyServer.Close()
@@ -105,9 +101,7 @@ func TestHandler_CONNECT_IPAllowed(t *testing.T) {
 	upstreamAddr := upstreamURL.Host // 127.0.0.1:<port>
 
 	h := &Handler{
-		FilterBase: FilterBase{
-			IPCheck: func(a netip.Addr) bool { return a.IsLoopback() },
-		},
+		IPCheck: func(a netip.Addr) bool { return a.IsLoopback() },
 	}
 	proxyServer := httptest.NewServer(h)
 	defer proxyServer.Close()
@@ -152,10 +146,8 @@ func TestHandler_HTTP_Allowed(t *testing.T) {
 	upstreamHost := upstreamURL.Host
 
 	h := &Handler{
-		FilterBase: FilterBase{
-			DomainCheck: func(d string) bool { return true },
-			IPCheck:     func(a netip.Addr) bool { return true },
-		},
+		DomainCheck: func(d string) bool { return true },
+		IPCheck:     func(a netip.Addr) bool { return true },
 	}
 	proxyServer := httptest.NewServer(h)
 	defer proxyServer.Close()

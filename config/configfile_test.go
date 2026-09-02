@@ -363,12 +363,12 @@ func TestMergeConfigFile_ExpandEnvDollarEscape(t *testing.T) {
 
 	cf := &ConfigFile{
 		Read: []string{
-			"/foo$$bar",                  // literal $: "/foo$bar"
-			"/foo$$$$bar",                // literal $$: "/foo$$bar"
-			"$$/$CURB_TEST_DIR",          // literal $ then expansion: "$/tmp/curb-expand-test"
-			"$CURB_TEST_DIR$$tail",       // expansion then literal $: "/tmp/curb-expand-test$tail"
-			"$${CURB_TEST_DIR}",          // escape disarms braces: "${CURB_TEST_DIR}"
-			`\!$$bang`,                   // bang-escape + literal $: "\!$bang"
+			"/foo$$bar",            // literal $: "/foo$bar"
+			"/foo$$$$bar",          // literal $$: "/foo$$bar"
+			"$$/$CURB_TEST_DIR",    // literal $ then expansion: "$/tmp/curb-expand-test"
+			"$CURB_TEST_DIR$$tail", // expansion then literal $: "/tmp/curb-expand-test$tail"
+			"$${CURB_TEST_DIR}",    // escape disarms braces: "${CURB_TEST_DIR}"
+			`\!$$bang`,             // bang-escape + literal $: "\!$bang"
 		},
 	}
 	MergeConfigFile(cfg, cf, cmd.Flags())

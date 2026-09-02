@@ -158,4 +158,3 @@ func ExpandHomeRefs(paths []string, home string) []string {
 func PathReferencesHome(p string) bool {
 	return p == "~" || strings.HasPrefix(p, "~/") || strings.Contains(p, homeRefMarker)
 }
-
