@@ -189,7 +189,11 @@ func (in *Injector) binding(host, port string) ([]Injection, bool) {
 // then forwards each decrypted request to the real upstream with the bound
 // credential injected.
 func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs []Injection) {
-	clientConn, ok := h.hijack(w, "proxy_inject", host)
+	// A binding is host:port exact, so the event target names both — as
+	// proxy_connect and socks5_inject do — or two injected ports on one host
+	// would be indistinguishable in the log.
+	target := net.JoinHostPort(host, port)
+	clientConn, ok := h.hijack(w, "proxy_inject", target)
 	if !ok {
 		return
 	}
@@ -199,9 +203,9 @@ func (h *Handler) injectCONNECT(w http.ResponseWriter, host, port string, injs [
 		return
 	}
 
-	h.logEvent("proxy_inject", host, "allowed", "")
+	h.logEvent("proxy_inject", target, "allowed", "")
 	if err := h.Injector.Serve(clientConn, host, port, injs); err != nil {
-		h.logEvent("proxy_inject", host, "error", err.Error())
+		h.logEvent("proxy_inject", target, "error", err.Error())
 	}
 }
 
